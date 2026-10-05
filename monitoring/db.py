@@ -74,6 +74,33 @@ class Lease(Base):
     owner: Mapped[str] = mapped_column(String(80), default="")
 
 
+class SetupState(Base):
+    __tablename__ = "setup_state"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    operation_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
+
+
+class SetupOperation(Base):
+    __tablename__ = "setup_operations"
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    actor_id: Mapped[int]
+    kind: Mapped[str] = mapped_column(String(30))
+    state: Mapped[str] = mapped_column(String(30))
+    details: Mapped[dict] = mapped_column(JSON)
+    result: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[int] = mapped_column(default=now)
+
+
+class Upload(Base):
+    __tablename__ = "staged_uploads"
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    actor_id: Mapped[int]
+    name: Mapped[str] = mapped_column(String(180))
+    size: Mapped[int]
+    offset: Mapped[int] = mapped_column(default=0)
+    consumed: Mapped[bool] = mapped_column(default=False)
+
+
 def database(url: str):
     opts = {"connect_args": {"check_same_thread": False, "timeout": 30}} if url.startswith("sqlite") else {}
     engine = create_engine(url, pool_pre_ping=True, **opts)
@@ -86,3 +113,5 @@ def initialize(engine):
     with factory.begin() as session:
         if not session.get(Lease, "poll"):
             session.add(Lease(name="poll"))
+        if not session.get(SetupState, 1):
+            session.add(SetupState(id=1))

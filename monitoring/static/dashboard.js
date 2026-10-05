@@ -3,7 +3,7 @@ Vue.component('nightjar-dashboard', {
   props: ['view', 'form', 'post'],
   data() {
     return { selectedTeam: null, selectedBatch: null, search: '', attentionOnly: false,
-      entity: null, frame: 0, note: '', decision: 'accepted', busy: false, timer: null };
+      entity: null, frame: 0, note: '', decision: 'accepted', busy: false, timer: null, tab: 'monitoring', setupBusy: false };
   },
   computed: {
     teams() { return this.view.snapshot.teams || []; },
@@ -37,7 +37,7 @@ Vue.component('nightjar-dashboard', {
   },
   mounted() {
     this.send('refresh');
-    this.timer = setInterval(() => { if (!document.hidden && !this.busy) this.send('refresh'); }, 60000);
+    this.timer = setInterval(() => { if (!document.hidden && !this.busy && this.tab === 'monitoring') this.send('refresh'); }, 60000);
   },
   beforeDestroy() { clearInterval(this.timer); },
   template: `
@@ -46,24 +46,30 @@ Vue.component('nightjar-dashboard', {
       <div><div class="nj-eyebrow">TÉCNICO · NIGHTJAR ANNOTATIATHON</div>
       <h1>Annotation monitor</h1><p>Your teams, their progress, and the next decision.</p></div>
       <div class="nj-refresh"><span>Updated {{ time(view.snapshot.refreshed_at) }}</span>
-      <button @click="send('refresh')" :disabled="busy">Refresh dashboard</button></div>
+      <button @click="send('refresh')" :disabled="busy || setupBusy || tab === 'setup'">Refresh dashboard</button></div>
     </header>
-    <section class="nj-metrics">
+    <nav class="nj-tabs" aria-label="App sections"><button :disabled="setupBusy" :class="{selected: tab === 'monitoring'}" @click="tab = 'monitoring'; send('refresh')">Monitoring</button>
+      <button v-if="view.can_setup" :class="{selected: tab === 'setup'}" @click="tab = 'setup'">Event setup</button></nav>
+    <section v-if="tab === 'monitoring'" class="nj-metrics">
       <div><span>Assigned teams</span><strong>{{ totals.teams }}</strong></div>
       <div><span>Need attention</span><strong>{{ totals.attention }}</strong></div>
       <div><span>Approved batches</span><strong>{{ totals.approved }}</strong></div>
       <div><span>Refresh interval</span><strong>60<span class="nj-unit">sec</span></strong></div>
     </section>
     <div v-if="view.message" class="nj-message" :class="{ 'nj-error': view.error }" role="status">{{ view.message }}</div>
-    <section v-if="!teams.length" class="nj-empty"><h2>No teams assigned</h2>
-      <p>Your organiser needs to import the event manifest and assign your Supervisely user ID to participant teams.</p></section>
-    <section v-else class="nj-workspace">
+    <nightjar-setup v-if="tab === 'setup' && view.can_setup" :view="view" :form="form" :post="post" @busy="setupBusy = $event"></nightjar-setup>
+    <section v-if="tab === 'monitoring' && !teams.length" class="nj-empty"><h2>No teams assigned</h2>
+      <p v-if="view.can_setup">Open Event setup to register participant pairs, upload data, distribute batches and assign monitors.</p>
+      <p v-else>Your organiser can assign teams to you in Event setup. Local live testing needs your Supervisely API token and a real monitoring team ID.</p></section>
+    <section v-if="tab === 'monitoring' && teams.length" class="nj-workspace">
       <aside class="nj-sidebar"><h2>Your teams</h2><input v-model="search" placeholder="Find a team" aria-label="Find a team">
         <label class="nj-check"><input type="checkbox" v-model="attentionOnly"> Needs attention</label>
         <button v-for="t in filteredTeams" :key="t.id" class="nj-team" :class="{selected: team && team.id === t.id}"
           @click="chooseTeam(t)"><span>{{ t.name }}</span><small>{{ needsAttention(t) ? 'Needs attention' : 'On track' }}</small></button>
         <p v-if="!filteredTeams.length">No teams match these filters.</p>
       </aside>
+      <div v-if="team && !batch" class="nj-panel"><h2>{{ team.name }}</h2>
+        <p>This team is assigned to you. The organiser can upload and distribute its data in Event setup.</p></div>
       <div v-if="team && batch" class="nj-detail">
         <div class="nj-team-heading"><div><h2>{{ team.name }}</h2><span>Participant IDs {{ team.annotator_ids.join(' · ') }}</span></div>
         <span class="nj-badge">{{ batch.kind === 'video' ? 'Final video' : 'Image batches' }}</span></div>

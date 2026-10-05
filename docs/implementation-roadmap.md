@@ -39,7 +39,7 @@ Sources:
 - Image decisions can be published, but text correction notes are internal. Video frame flags are not whole-video acceptance. Automatic notifications, correction-job creation and in-flight annotation revision checks are not implemented.
 - Batch approval is the monitor's explicit recorded decision. It does not currently finalise the native reviewer job. Native review completion and rejected-job tracking need a tested lifecycle integration.
 - Manual native image status publication is a separate external operation from local review persistence. It is not an atomic dual write; an operator must reconcile conflicting or failed publication, and native status audit/automatic synchronisation is follow-up work.
-- An imported manifest must describe independent prepared copies and existing user accounts. There is no automatic account/team creation or copying yet. Storage deduplication, quota accounting, sharing semantics, licence/team limits and provisioning privileges must be confirmed on the actual instance.
+- Event setup creates or registers participant teams using existing accounts, assigns monitors, uploads raw image/video data, previews allocation and copies independent team-local entities. New user accounts are not created. Interrupted writes require manual resource inspection; automatic resumable provisioning is not implemented. Storage deduplication, quota accounting, licence/team limits and privileges must be confirmed on the actual instance.
 - Schema validation checks assignment structure and frame bounds. It does not inspect every bounding box, bird identity, anatomical node or visibility tag. The final metadata schema needs to be agreed and then validated on annotations.
 - Export covers monitoring records only. Raw annotations, source checksums, job closure, collection retry checkpoints and review bundles are next-phase work.
 - The current schema holds one event per database. Multiple simultaneous monitors are supported by design; unrelated events should use separate databases until explicit event scoping is implemented.
@@ -55,13 +55,13 @@ Sources:
 
 ## Ordered implementation steps
 
-### 1. Technical pilot with prepared teams
+### 1. Real pilot with Event setup
 
-Use a small configurable roster and sample assets. Test two distinct monitors and two browser tabs for the same monitor. Verify isolation, revoked membership, assigned-team access, open-in-tool links, image confirmation counts, video submission, native entity list response shape, concurrent releases and ambiguous-create recovery. Measure API latency, polling-cycle duration and rate limits; increase the stale threshold only from measured results.
+Use [the real pilot walkthrough](real-pilot.md), a configurable roster and your sample assets. Test two distinct monitors and two browser tabs for the same monitor. Verify isolation, revoked membership, assigned-team access, open-in-tool links, image confirmation counts, video submission, native entity list response shape, concurrent releases and ambiguous-create recovery. Measure API latency, polling-cycle duration and rate limits; increase the stale threshold only from measured results.
 
 ### 2. Preparation and distribution
 
-Import participant/monitor CSVs, resolve existing accounts, produce a reviewable provisioning plan, then apply it with an organiser credential. Add durable checkpoints and idempotent resource mapping. Confirm whether copying can share media storage while keeping annotations independent. Provision the annotation schema and event guide consistently. Add full-inventory coverage validation, source mapping reconciliation, balanced monitor loads and monitor reassignment history.
+The setup UI now supports exact registered user logins, team registration, monitor assignment, browser media upload, distribution previews, independent entity copies and durable operation/resource checkpoints. Next add CSV roster import, queued setup operations, crash-safe automatic reconciliation and native reviewer handover after monitor reassignment. Confirm whether copying can share media storage while keeping annotations independent. Provision the annotation schema and event guide consistently. Add full-inventory coverage validation, source mapping reconciliation, balanced monitor loads and monitor reassignment history.
 
 ### 3. Complete review and correction workflow
 
@@ -74,3 +74,12 @@ Validate per-bird boxes, crown/eyes/beak, visibility states and video frame asso
 ### 5. Rehearsal and capacity test
 
 Use the actual planned monitor count, team count, asset inventory and estimated API traffic. Test shared polling under concurrent browsers, database restart, app restart, remote outages, lease expiry, delayed job creation and storage limits. Run usability sessions with people unfamiliar with Supervisely. Use their measured annotation rate to set two-hour image batches and then perform a small end-to-end rehearsal before scaling up.
+
+## Real pilot setup update
+
+- Admin authorization is checked on every setup request using the current user's monitoring-team membership. Manager monitors see only their assigned teams.
+- Live local testing derives the user ID from the configured API token instead of trusting synthetic LOCAL_USER_ID. Routes read incoming request state directly, avoiding a shared form race between tabs for the same user.
+- Distribution previews check the complete selected inventory and metadata again on apply, retain stable source IDs, create distinct destination entities and publish locked batches atomically.
+- Setup operations serialize across organisers; unknown outcomes retain confirmed resource IDs and block new setup/release actions until inspection. Staged upload chunks are bound to their uploader and offset.
+- The dashboard uses the SDK/Element primary blue #20a0ff with its neutral and status colors. Vue templates render in a simulated DOM; a browser screenshot could not be produced because the Chromium download was truncated.
+- Live platform provisioning, job workflows and native simultaneous-user sessions remain checks for the real pilot. Automated remote tests use mocked SDK responses and actual SDK signature/metadata validation.

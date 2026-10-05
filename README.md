@@ -1,6 +1,6 @@
 # Supervisely Monitoring App
 
-A shared Supervisely web app for the monitoring team to oversee independent participant pairs. This is the first implementation of the Nightjar operational plan, ready for a technical pilot, with live Supervisely integration still to be tested against your instance.
+A shared Supervisely web app for the monitoring team to oversee independent participant pairs. It includes a real pilot setup flow for registered users, source uploads, independent team copies and monitor assignment. Live API behavior must still be validated against your instance.
 
 **Event sizes come from your inputs.** No team, image or video count is hard-coded. Three independent teams per source is the plan's minimum replication rule, configurable upward in the allocation planner. Batch workload must be supplied explicitly from a pilot estimate; the app does not assume how many images take two hours.
 
@@ -13,7 +13,10 @@ A shared Supervisely web app for the monitoring team to oversee independent part
 - Image and explicit video-frame review records; native image acceptance/rejection can be published separately.
 - Sample approval and sequential release gates. Future jobs are created only on release, so a pending job cannot accidentally reveal a future batch.
 - Optimistic concurrency checks for workflow changes and release reconciliation after ambiguous API results. Uncertain creates are never blindly retried.
-- Input-driven allocation, validated import of already prepared teams/datasets, and monitoring-record export.
+- Admin-only Event setup: create or register participant pairs with existing user logins, assign monitors and provision their participant-team permissions.
+- Browser uploads of image/video files and optional Supervisely annotation metadata; existing monitoring-team datasets can also be selected.
+- Preview and apply input-driven distribution into independent team-local entities, with durable operation checkpoints and source mappings. Small pilots can use reduced replication or images only.
+- Supervisely SDK colors (blue primary, white panels and the platform neutral/status palette), validated manifest import and monitoring-record export.
 
 ## Technical choices
 
@@ -21,7 +24,7 @@ The app runs in the **monitoring Supervisely team**. Each monitor must also have
 
 The SDK supports native multi-user widget sessions. The UI's filters and form state live in each browser, while all decisions live in the database. Do not run a separate app per monitor or use process-global selected-team state.
 
-Independent annotation versions must use **distinct team-local entities** with a stable mapping back to each original source. This implementation validates the mapping and team ownership but does not yet perform the dataset copies or establish how Supervisely charges storage for them.
+Independent annotation versions must use **distinct team-local entities** with a stable mapping back to each original source. Event setup performs the copies and validates team ownership, source inventory and entity mappings. Storage billing and quota behavior remain governed by your Supervisely instance.
 
 Image batches produce non-overlapping jobs for the two participants. A whole video produces **one job for the pair's first listed annotator**, avoiding automatic splitting of the final video. Joint video editing, partner handover and how the second participant contributes must be settled in the Supervisely usability pilot before the event. Do not infer two independent annotation versions within a participant pair.
 
@@ -74,13 +77,25 @@ If the synthetic demo is already loaded, skip the `demo` command. The dependency
 
 Dependency references: [python-magic installation](https://github.com/ahupp/python-magic#installation) and [Windows binary wheels](https://pypi.org/project/python-magic-bin/0.4.14/).
 
-## Prepare a real pilot
+## Prepare a real pilot in the app
 
-1. Make a monitoring team and add the monitors. Prepare participant pairs, their workspaces and independent annotation projects with the agreed annotation metadata and anatomical guide. Give each assigned monitor the required permissions in their participant teams.
-2. Start persistent PostgreSQL. For a local database, set `POSTGRES_PASSWORD` and run `docker compose up -d database`. Configure `DATABASE_URL` with the database address reachable by the Supervisely agent. The example Compose port is loopback-only; it is not directly reachable from a remote Supervisely agent.
-3. Copy `.env.example` to a private `.env`; set the monitoring team ID and credentials. Keep `LOCAL_DEVELOPMENT=false` in a hosted session. Use server-side secrets rather than committing tokens. Supervisely normally supplies the app session's `SERVER_ADDRESS` and `API_TOKEN`.
-4. Build a private manifest in the format of `examples/manifest.json`, replacing every sample ID with actual IDs. The example intentionally contains one pair and is under-replicated. Dataset IDs are team-local; `source_id` identifies the same original across independent versions. Video `frames` must match the full video.
-5. Run the commands below with an organiser credential authorised to inspect every configured team and dataset. Import performs read-only remote preflight and an atomic database import; it creates no remote labeling jobs.
+See [the real pilot walkthrough](docs/real-pilot.md) for exact Windows commands and the hosted multi-monitor configuration.
+
+Use a fresh `pilot.db` with your real monitoring-team ID and private `API_TOKEN`. Local live mode uses the token owner's identity. Open **Event setup** as an Admin of that monitoring team:
+
+1. Create or register participant pairs using existing Supervisely logins, then assign their monitors.
+2. Upload your image/video files, or select source datasets already in the monitoring team. Optional `meta.json` preserves your annotation schema; raw uploads otherwise use an editable bird-head pilot template.
+3. Select actual teams/datasets, enter replication and workload estimates, and preview the allocation. Enable **Small pilot** for reduced replication or images-only work.
+4. Apply the preview to create separate team-local annotation entities and locked batches.
+5. Assigned monitors release real jobs, inspect submitted annotations, record reviews and advance through batches.
+
+The local server is loopback-only and represents one token owner. For simultaneous real monitors, launch one shared Supervisely session with `LOCAL_DEVELOPMENT=false` and persistent PostgreSQL. Configure a separate `SYNC_API_TOKEN` for background polling, or refresh selected batches manually.
+
+Setup operations have durable resource checkpoints and a database lock. Uncertain writes require inspection before new setup actions or releases; see the walkthrough's recovery procedure. Monitor reassignment is supported before job release; existing native reviewer jobs require a separate handover. The new setup tables are initialized automatically without deleting your existing demo or review records.
+
+### Advanced: import already prepared datasets
+
+The previous manifest workflow is still available if you already prepared independent participant-team projects. Build a private file using `examples/manifest.json`, replacing every sample ID, then run:
 
 ```bash
 python -m monitoring.cli init-db
@@ -88,12 +103,7 @@ python -m monitoring.cli validate local-manifest.json
 python -m monitoring.cli import local-manifest.json --pilot
 ```
 
-For the actual event, omit `--pilot`: every source in the manifest must appear in at least three distinct participant teams. Also compare manifest coverage with the complete source inventory, so a source omitted entirely cannot escape validation. Imports refuse to overwrite an existing event database.
-
-6. Install this repository as a private Supervisely app in the monitoring team, following the [official private-app guide](https://developer.supervisely.com/app-development/basics/add-private-app). Configure its agent environment with the database connection and `SYNC_API_TOKEN`. The minimum native multi-user instance version is 6.15.2; the SDK is pinned in `requirements.txt`.
-7. Launch one app session. Monitors open that shared session, inspect annotations through its Supervisely job links, record sample reviews, approve submitted batches and release the next task. Review notes are internal; image decision publication sends only native acceptance/rejection status.
-
-Without `SYNC_API_TOKEN`, the UI still works, but Supervisely progress updates require manual refresh. Polling errors retain the last successful progress values and block approval; activity failures leave an old activity timestamp visible.
+This performs read-only remote preflight and an atomic initial database import. Omit `--pilot` for the full event: each source needs at least three independent teams and each team needs a final complete video. Imports refuse to overwrite an existing event database. Do not mix manifest import with an in-progress Event setup operation.
 
 ## Plan allocation from your actual inventory
 
@@ -132,10 +142,11 @@ Create the output directory first. This exports source mappings, decisions and a
 ```bash
 python -m pytest -q
 node --check monitoring/static/dashboard.js
+node --check monitoring/static/setup.js
 ```
 
 Set `TEST_DATABASE_URL` to a **disposable** PostgreSQL database to run the same workflow/concurrency tests there; tests drop their schema. GitHub Actions provisions its own PostgreSQL service. SDK signature tests check the installed pinned package, while gateway tests mock remote responses. Live API access, native two-user sessions, job links, cross-team permissions, correction workflows and account limits remain pilot checks. Concurrent-user capacity has not been load-tested.
 
 ## Next implementation work
 
-See [the implementation roadmap](docs/implementation-roadmap.md) for account provisioning, storage-aware distribution, participant correction alerts, video collaboration, annotation validation, final collection and the event-scale pilot.
+See [the implementation roadmap](docs/implementation-roadmap.md) for resumable setup recovery, participant correction alerts, video collaboration, annotation validation, final collection and the event-scale rehearsal.

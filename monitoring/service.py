@@ -1,6 +1,6 @@
 from sqlalchemy import select, update
 
-from .db import Audit, Batch, Review, Team, now
+from .db import Audit, Batch, Review, SetupState, Team, now
 
 
 class WorkflowError(ValueError):
@@ -114,6 +114,9 @@ class Service:
 
     def reserve_release(self, user_id, team_id, batch_id, revision):
         with self.sessions.begin() as s:
+            setup = s.get(SetupState, 1)
+            if setup and setup.operation_id:
+                raise WorkflowError('Event setup is running or needs inspection. Release after setup is complete.')
             self._team(s, user_id, team_id, revision)
             b = self._batch(s, team_id, batch_id)
             batches = list(s.scalars(select(Batch).where(Batch.team_id == team_id).order_by(Batch.position)))

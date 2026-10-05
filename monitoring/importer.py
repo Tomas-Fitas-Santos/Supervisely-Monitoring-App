@@ -43,8 +43,9 @@ class TeamSpec(StrictModel):
     def valid_sequence(self):
         if len(set([self.monitor_id, *self.annotator_ids])) != 3:
             raise ValueError('Two distinct annotators and a distinct monitor are required')
-        if [b.kind for b in self.batches].count('video') != 1 or self.batches[-1].kind != 'video':
-            raise ValueError('Exactly one final complete video is required')
+        videos = [b.kind for b in self.batches].count('video')
+        if videos > 1 or (videos and self.batches[-1].kind != 'video'):
+            raise ValueError('At most one complete video is allowed, as the final batch')
         return self
 
 
@@ -82,6 +83,8 @@ class Manifest(StrictModel):
 
 
 def import_manifest(sessions, manifest, gateway=None, monitoring_team_id=None, pilot=False):
+    if not pilot and any(t.batches[-1].kind != 'video' for t in manifest.teams):
+        raise ValueError('Each full-event team requires a final video. Use --pilot for an image-only rehearsal.')
     if manifest.coverage()['under_replicated'] and not pilot:
         raise ValueError('Each source requires at least three teams. Use --pilot for an explicitly reduced rehearsal.')
     if gateway:
