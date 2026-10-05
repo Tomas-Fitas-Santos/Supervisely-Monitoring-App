@@ -43,6 +43,37 @@ python -m monitoring.run
 
 Open `http://127.0.0.1:8000`. The example count is synthetic and can be changed. To reset the demo, delete only its demo database and import again. Live integration buttons need credentials and real mapped entities.
 
+### Windows PowerShell
+
+Supervisely imports `python-magic`, whose normal pip package does not include the native Windows `libmagic` library. Install the Windows binary package **after** the main requirements. Both distributions provide the `magic` module, so the explicit second installation ensures the bundled Windows loader is used. Repeat that step if you reinstall or upgrade `python-magic` later.
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m pip install --force-reinstall --no-deps -r requirements-windows.txt
+```
+
+Create a private `.env` file in the repository root containing:
+
+```dotenv
+LOCAL_DEVELOPMENT=true
+DATABASE_URL=sqlite:///demo.db
+MONITORING_TEAM_ID=1
+LOCAL_USER_ID=900
+```
+
+Then run:
+
+```powershell
+.\.venv\Scripts\python.exe -c "import magic; import supervisely; print('Windows dependencies loaded successfully')"
+.\.venv\Scripts\python.exe -m monitoring.cli demo --teams 3
+.\.venv\Scripts\python.exe -m monitoring.run
+```
+
+If the synthetic demo is already loaded, skip the `demo` command. The dependency fix and subsequent starts preserve the existing database and `.env` file. Open `http://127.0.0.1:8000` after the server starts.
+
+Dependency references: [python-magic installation](https://github.com/ahupp/python-magic#installation) and [Windows binary wheels](https://pypi.org/project/python-magic-bin/0.4.14/).
+
 ## Prepare a real pilot
 
 1. Make a monitoring team and add the monitors. Prepare participant pairs, their workspaces and independent annotation projects with the agreed annotation metadata and anatomical guide. Give each assigned monitor the required permissions in their participant teams.

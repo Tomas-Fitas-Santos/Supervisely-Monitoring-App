@@ -1,0 +1,3 @@
+# Install after requirements.txt with --force-reinstall --no-deps.
+# The wheel supplies the magic module and native Windows libmagic DLL/database.
+python-magic-bin==0.4.14; sys_platform == "win32"
