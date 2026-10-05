@@ -14,6 +14,56 @@ class Gateway:
         if not member or getattr(member, 'disabled', False):
             raise WorkflowError("You must be a member of the monitoring team.")
 
+    def review_preview(self, team, batch, entity_id, frame_index):
+        """Read-only preview of the selected annotation; never accepts an arbitrary entity."""
+        import base64
+        import cv2
+        import supervisely as sly
+        asset = next((a for a in batch.assets if a['entity_id'] == entity_id), None)
+        if not asset:
+            raise WorkflowError('Choose an image or video in this batch.')
+        if ((batch.kind == 'images' and frame_index != -1)
+                or (batch.kind == 'video' and not 0 <= frame_index < asset['frames'])):
+            raise WorkflowError('Choose a valid frame; video frame numbers start at zero.')
+        dataset = self.api.dataset.get_info_by_id(batch.dataset_id)
+        if not dataset:
+            raise WorkflowError('Dataset is unavailable.')
+        project = self.api.project.get_info_by_id(dataset.project_id)
+        workspace = self.api.workspace.get_info_by_id(project.workspace_id)
+        if workspace.team_id != team.id or project.type != ('images' if batch.kind == 'images' else 'videos'):
+            raise WorkflowError('This dataset does not belong to the selected participant team.')
+        media_api = self.api.image if batch.kind == 'images' else self.api.video
+        info = media_api.get_info_by_id(entity_id)
+        if not info or info.dataset_id != batch.dataset_id:
+            raise WorkflowError('The selected media no longer belongs to this batch.')
+        meta = sly.ProjectMeta.from_json(self.api.project.get_meta(project.id))
+        if batch.kind == 'images':
+            image = self.api.image.download_np(entity_id)
+            annotation = sly.Annotation.from_json(self.api.annotation.download_json(entity_id), meta)
+        else:
+            image = self.api.video.frame.download_np(entity_id, frame_index)
+            video = sly.VideoAnnotation.from_json(self.api.video.annotation.download(entity_id), meta)
+            frame = video.frames.get(frame_index)
+            labels = [sly.Label(f.geometry, f.video_object.obj_class) for f in frame.figures] if frame else []
+            annotation = sly.Annotation(image.shape[:2], labels)
+        annotated = image.copy()
+        annotation.draw(annotated, thickness=3, fill_rectangles=False)
+        def encode(bitmap):
+            height, width = bitmap.shape[:2]
+            scale = min(1, 1280 / max(height, width))
+            if scale < 1:
+                bitmap = cv2.resize(bitmap, (max(1, round(width * scale)), max(1, round(height * scale))))
+            ok, encoded = cv2.imencode('.jpg', cv2.cvtColor(bitmap, cv2.COLOR_RGB2BGR),
+                                      [cv2.IMWRITE_JPEG_QUALITY, 88])
+            if not ok:
+                raise WorkflowError('Could not render the selected image or frame.')
+            return 'data:image/jpeg;base64,' + base64.b64encode(encoded).decode()
+        return {'team_id': team.id, 'batch_id': batch.id, 'entity_id': entity_id, 'frame_index': frame_index,
+                'original': encode(image), 'annotated': encode(annotated), 'labels': len(annotation.labels),
+                'classes': [{'name': name, 'color': color} for name, color in
+                    {label.obj_class.name: label.obj_class.color for label in annotation.labels}.items()],
+                'loaded_at': int(datetime.now(timezone.utc).timestamp())}
+
     def validate(self, team, batch):
         dataset = self.api.dataset.get_info_by_id(batch.dataset_id)
         if not dataset:

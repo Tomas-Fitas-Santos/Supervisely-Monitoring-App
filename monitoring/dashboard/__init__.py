@@ -12,6 +12,7 @@ class Dashboard(Widget):
 
     def get_json_data(self):
         return {'snapshot': {'teams': []}, 'message': '', 'error': False, 'links': [],
+                'connected': False, 'directory': {}, 'sources': {}, 'review_preview': None,
                 'can_setup': False, 'setup': {}, 'catalog': {}, 'upload_offset': 0, 'plan_id': None,
                 'preview': None, 'assignment_plan_id': None, 'assignment_preview': [],
                 'connection': {'local': False, 'connected': False, 'groups_ready': False,

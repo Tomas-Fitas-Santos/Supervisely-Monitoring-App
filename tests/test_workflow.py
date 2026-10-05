@@ -153,3 +153,17 @@ def test_incomplete_images_and_unsubmitted_job_block_approval(service):
     service.update_progress('a1', {'status': 'on_review,in_progress', 'completed': 2, 'total': 2})
     with pytest.raises(WorkflowError, match='submitted'):
         service.approve(90, 1, 'a1', revision(service), 'Checked')
+
+
+def test_submitted_batches_require_all_jobs_and_remain_visible(service):
+    submitted(service)
+    batch = service.snapshot(90)['teams'][0]['batches'][0]
+    assert batch['submitted'] is True and batch['state'] == 'active'
+    service.update_progress('a1', {'status': 'on_review,in_progress', 'completed': 1, 'total': 2})
+    assert service.snapshot(90)['teams'][0]['batches'][0]['submitted'] is False
+    service.update_progress('a1', {'status': 'on_review,completed', 'completed': 2, 'total': 2})
+    service.review(90, 1, 'a1', 0, 101, -1, 'accepted', 'Checked')
+    service.approve(90, 1, 'a1', revision(service), 'Submitted batch checked')
+    history = service.snapshot(90)['teams'][0]['batches']
+    assert history[0]['submitted'] is True and history[0]['state'] == 'approved'
+    assert history[1]['submitted'] is False and history[1]['state'] == 'locked'

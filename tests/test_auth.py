@@ -6,7 +6,8 @@ from unittest.mock import Mock
 import pytest
 
 from monitoring.service import WorkflowError
-from monitoring.db import EventConfig, EventMember, database, initialize
+from monitoring.db import EventConfig, EventMember, Team, database, initialize
+from monitoring.service import Service
 from monitoring.setup import Setup
 from monitoring.connection import LocalConnection
 
@@ -21,6 +22,7 @@ def ui(monkeypatch, tmp_path):
     engine, sessions = database(f'sqlite:///{tmp_path}/ui.db')
     initialize(engine)
     monkeypatch.setattr(module, 'sessions', sessions)
+    monkeypatch.setattr(module, 'service', Service(sessions))
     monkeypatch.setattr(module, 'setup', Setup(sessions, 10))
     monkeypatch.setattr(module, 'connection', LocalConnection(sessions, tmp_path))
     monkeypatch.setattr(module, 'settings', replace(module.settings, local=False, home=tmp_path))
@@ -135,6 +137,63 @@ def test_connection_endpoint_is_local_only_and_rejects_foreign_origin(ui, monkey
     import asyncio
     request = NS(client=NS(host='127.0.0.1'), headers={}, base_url='http://127.0.0.1:8000/')
     assert asyncio.run(ui.connect(request)).status_code == 403
+
     monkeypatch.setattr(ui, 'settings', replace(ui.settings, local=True))
     request.headers['origin'] = 'https://foreign.example'
     assert asyncio.run(ui.connect(request)).status_code == 403
+
+
+def test_monitors_can_read_directory_but_not_setup_operations(ui, monkeypatch):
+    import supervisely.app
+    data = {'dashboard': {'review_preview': None}}
+    monkeypatch.setattr(supervisely.app, 'DataJson', lambda: data)
+    monkeypatch.setattr(ui.dashboard, 'display', Mock())
+    with ui.sessions.begin() as s:
+        c = s.get(EventConfig, 1)
+        c.owner_id, c.monitoring_team_id, c.annotator_team_id = 99, 10, 20
+        s.add(EventMember(user_id=90, group='monitors', login='monitor', name='Monitor'))
+        s.add(Team(id=101, name='Other team', monitor_id=91, annotator_ids=[11, 12]))
+    api = Mock()
+    api.user.get_member_info_by_id.return_value = NS(role='manager')
+    api.workspace.get_list.return_value = []
+    monkeypatch.setattr(ui, 'identity', lambda request: (90, NS(api=api)))
+    request = NS(state=NS(state={'dashboard': {'setup_action': 'overview'}}))
+    assert ui.setup_action(request) == {'ok': True}
+    assert data['dashboard']['directory']['teams'][0]['name'] == 'Other team'
+    assert data['dashboard']['can_setup'] is False
+    assert data['dashboard']['setup'] == {} and data['dashboard']['catalog'] == {}
+    assert ui.service.snapshot(90)['teams'] == []
+    request.state.state['dashboard']['setup_action'] = 'unassign'
+    assert ui.setup_action(request) == {'ok': False}
+    with ui.sessions() as s:
+        assert s.get(Team, 101).monitor_id == 91
+
+
+def test_preview_requires_own_assignment_before_remote_download(ui, monkeypatch):
+    import supervisely.app
+    from monitoring.db import Batch
+    data = {'dashboard': {'review_preview': None}}
+    monkeypatch.setattr(supervisely.app, 'DataJson', lambda: data)
+    monkeypatch.setattr(ui.dashboard, 'display', Mock())
+    with ui.sessions.begin() as s:
+        s.add(Team(id=101, name='Other team', monitor_id=91, annotator_ids=[11, 12]))
+        s.flush()
+        s.add(Batch(id='other', team_id=101, position=1, kind='images', dataset_id=50,
+                    assets=[{'entity_id': 501, 'source_id': 'image'}]))
+    gateway = Mock()
+    monkeypatch.setattr(ui, 'identity', lambda request: (90, gateway))
+    ui.action(NS(state=NS(state={'dashboard': {'action': 'preview_media', 'team_id': 101, 'batch_id': 'other',
+                                              'entity_id': 501, 'frame_index': -1}})))
+    gateway.review_preview.assert_not_called()
+
+
+def test_removed_assignment_clears_cached_media(ui, monkeypatch):
+    import supervisely.app
+    data = {'dashboard': {'review_preview': {'team_id': 101, 'annotated': 'private-media'}}}
+    monkeypatch.setattr(supervisely.app, 'DataJson', lambda: data)
+    with ui.sessions.begin() as s:
+        s.add(Team(id=101, name='Now assigned elsewhere', monitor_id=91, annotator_ids=[11, 12]))
+    api = Mock()
+    api.user.get_member_info_by_id.return_value = NS(role='manager')
+    ui.display_access(90, NS(api=api))
+    assert data['dashboard']['review_preview'] is None

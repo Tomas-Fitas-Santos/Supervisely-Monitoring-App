@@ -36,6 +36,20 @@ class SetupGateway(Gateway):
                 'workspaces': [w for w in workspaces if w['team_id'] == monitoring_team_id],
                 'datasets': datasets, 'remote_teams': [{'id': t.id, 'name': t.name} for t in teams]}
 
+    def sources(self, monitoring_team_id):
+        workspaces, datasets = [], []
+        if not monitoring_team_id:
+            return {'workspaces': [], 'datasets': []}
+        for w in self.api.workspace.get_list(monitoring_team_id):
+            workspaces.append({'id': w.id, 'name': w.name})
+            for p in self.api.project.get_list(w.id):
+                if p.type not in ('images', 'videos'):
+                    continue
+                for d in self.api.dataset.get_list(p.id):
+                    datasets.append({'id': d.id, 'name': d.name, 'project': p.name, 'workspace': w.name,
+                        'kind': 'images' if p.type == 'images' else 'video', 'items': d.items_count})
+        return {'workspaces': workspaces, 'datasets': datasets}
+
     def monitor(self, monitoring_team_id, user_id):
         member = self.api.user.get_member_info_by_id(monitoring_team_id, user_id)
         if not member or member.disabled or member.role not in ('admin', 'manager'):

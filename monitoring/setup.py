@@ -96,6 +96,24 @@ class Setup:
                  'preview': o.details.get('preview') if o.kind == 'distribution' else None} for o in ops],
                 'blocked_by': lock.operation_id if lock else None}
 
+    def directory(self):
+        """Event people and assignments only; no review records or operation details."""
+        groups = self.groups()
+        people = {u['id']: u for u in groups['monitors'] + groups['annotators']}
+        teams = self.roster()
+        with self.sessions() as s:
+            for team in teams:
+                team['participants'] = [people.get(uid, {'id': uid, 'login': f'User {uid}', 'name': f'User {uid}'})
+                                        for uid in team['annotator_ids']]
+                team['can_assign'] = not bool(s.scalar(select(Batch.id).where(
+                    Batch.team_id == team['id'], Batch.state != 'locked').limit(1)))
+        monitors = list(groups['monitors'])
+        known = {m['id'] for m in monitors}
+        for uid in sorted({t['monitor_id'] for t in teams if t['monitor_id']} - known):
+            monitors.append({'id': uid, 'login': f'User {uid}', 'name': f'Monitor {uid}'})
+        return {'ready': groups['ready'], 'monitors': monitors, 'teams': teams,
+                'annotators': groups['annotators']}
+
     def authorize(self, gateway, actor):
         if gateway is None:
             raise WorkflowError('Connect your Supervisely account in the app to start setup.')
@@ -349,6 +367,60 @@ class Setup:
                 s.add(Audit(team_id=remote.id, batch_id='', actor_id=actor, action='team_registered',
                     details={'operation_id': key, 'monitor_id': mid, 'annotator_ids': ids}))
         return remote.id
+
+    def register_team(self, gateway, actor, key, name, logins, monitor_id=None, existing_team_id=None):
+        """The Add team form accepts both participants without a separate roster step."""
+        if not KEY.fullmatch(str(key)):
+            raise WorkflowError('Invalid operation ID. Reload and try again.')
+        logins = [str(v).strip() for v in logins]
+        if (not str(name).strip() or len(str(name).strip()) > 180 or len(logins) != 2
+                or any(not v or len(v) > 180 for v in logins) or len({v.casefold() for v in logins}) != 2):
+            raise WorkflowError('Enter a team name and two distinct registered participant logins.')
+        groups = self.groups()
+        if not groups['ready']:
+            raise WorkflowError('Initialize the event before adding teams.')
+        roster = self.roster()
+        if any(t['name'] == str(name).strip() or (existing_team_id and t['id'] == int(existing_team_id)) for t in roster):
+            raise WorkflowError('This team is already registered.')
+        with self.sessions() as s:
+            owner_login = s.get(EventConfig, 1).owner_login or ''
+        forbidden = {u['login'].casefold() for u in groups['monitors']} | {owner_login.casefold()}
+        if forbidden.intersection(v.casefold() for v in logins):
+            raise WorkflowError('Participants must be annotators, separate from the monitoring staff.')
+        participants = {u['login'].casefold(): u for u in groups['annotators']}
+        used = {uid for t in roster for uid in t['annotator_ids']}
+        if any(v.casefold() in participants and participants[v.casefold()]['id'] in used for v in logins):
+            raise WorkflowError('Each participant can belong to only one team.')
+        if monitor_id:
+            monitor = gateway.monitor(self.monitoring_team_id, positive(monitor_id, 'Monitor ID'))
+            if monitor.id not in {u['id'] for u in groups['monitors']}:
+                raise WorkflowError('Choose a registered monitor.')
+        missing = [v for v in logins if v.casefold() not in participants]
+        if missing:
+            self.add_members(gateway, actor, fingerprint([key, 'members'])[:32], 'annotators', missing)
+        return self.create_team(gateway, actor, fingerprint([key, 'team'])[:32], name, logins,
+                                monitor_id, existing_team_id)
+
+    def unassign_monitor(self, actor, key, team_id, revision, expected_monitor_id):
+        team_id = positive(team_id, 'Team ID')
+        with self.sessions() as s:
+            team = s.get(Team, team_id)
+            if not team or not team.monitor_id or team.monitor_id != int(expected_monitor_id):
+                raise WorkflowError('This team is no longer assigned to the selected monitor. Reload the list.')
+            if team.revision != int(revision):
+                raise WorkflowError('Team assignment changed. Reload the list.')
+            if s.scalar(select(Batch.id).where(Batch.team_id == team_id, Batch.state != 'locked').limit(1)):
+                raise WorkflowError('A released team needs a native reviewer handover before its monitor can be removed.')
+        with self.operation(actor, key, 'unassignment', {'team_id': team_id, 'monitor_id': expected_monitor_id}):
+            with self.sessions.begin() as s:
+                if s.scalar(select(Batch.id).where(Batch.team_id == team_id, Batch.state != 'locked').limit(1)):
+                    raise WorkflowError('A job was released while removing the assignment. Inspect the reviewer first.')
+                changed = s.execute(update(Team).where(Team.id == team_id, Team.revision == int(revision),
+                    Team.monitor_id == int(expected_monitor_id)).values(monitor_id=0, revision=Team.revision + 1))
+                if changed.rowcount != 1:
+                    raise WorkflowError('Team assignment changed. Reload the list.')
+                s.add(Audit(team_id=team_id, batch_id='', actor_id=actor, action='monitor_unassigned',
+                    details={'previous_monitor_id': int(expected_monitor_id), 'operation_id': key}))
 
     def assign_monitor(self, gateway, actor, key, team_id, monitor_id, revision):
         monitor = gateway.monitor(self.monitoring_team_id, positive(monitor_id, 'Monitor ID'))

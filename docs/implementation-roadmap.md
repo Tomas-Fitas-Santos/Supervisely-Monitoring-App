@@ -12,7 +12,7 @@ The attached operational plan is the workflow source. Its team and dataset quant
 | Progress | Job info and `get_stats` | Use confirmed images and submitted job states; no synthetic frame completion |
 | Contributions | Filtered team activity | Recent labeling-action counts, clearly separate from quality and throughput |
 | Image review | `set_entity_review_status` | Internal durable decisions and a separate native status publication action |
-| Annotation inspection | Native image/video labeling tools | Open current or historical jobs with the monitor's own permissions |
+| Annotation inspection | Image/frame download and annotation geometry; native labeling tools | Load image/frame overlays on request and open native jobs with the monitor's own permissions |
 
 Sources:
 
@@ -46,16 +46,16 @@ Sources:
 
 ## Verification performed for this initial version
 
-- 82 local Python tests passed using disposable SQLite databases. Coverage includes encrypted local connections, organiser/server pinning, separate event groups, registered people, unassigned pairs, balanced monitor plans, legacy group adoption, access isolation, concurrent workflow changes, releases and interrupted provisioning.
+- 95 local Python tests passed using disposable SQLite databases. Coverage includes encrypted connections, event groups, combined participant/team entry, assignment removal, read-only directory access, submission classification, actual SDK overlay rendering, access isolation, concurrent workflow changes, releases and interrupted provisioning.
 - The pinned SDK imported and the UI rendered its HTML template and served its JavaScript. A local ASGI request to the dashboard refresh endpoint returned HTTP 200.
-- JavaScript syntax checks passed. The dashboard component compiled and rendered in Vue 2 with a simulated DOM; two separate component instances retained independent filters and team selection.
+- JavaScript syntax checks passed. `tests/ui_smoke.cjs` compiles all three tabs in Vue 2 and exercises assignments, participant entry, uploads/distribution, batch sections, image/frame review and independent browser state.
 - No live Supervisely credentials were supplied. GitHub Actions exercises the suite on disposable PostgreSQL and Windows. Native hosted-session behavior still needs the live pilot.
 - Browser screenshot verification could not run because Chromium download failed in this environment. Full browser visual QA remains a pilot check.
 - An earlier local TestClient lifespan shutdown exposed a pinned SDK/dependency incompatibility: its internal `async_asgi_testclient` rejects Starlette's `http.response.debug` message while caching the root template. Root rendering and refresh requests succeeded, but clean shutdown/offline caching must be checked on the actual agent image. Resolve the SDK/dependency combination before event deployment rather than patching installed dependencies ad hoc.
 
 ## Ordered implementation steps
 
-### 1. Real pilot with Event setup
+### 1. Real pilot with the three-tab workflow
 
 Use [the real pilot walkthrough](real-pilot.md), a configurable roster and your sample assets. Test two distinct monitors and two browser tabs for the same monitor. Verify isolation, revoked membership, assigned-team access, open-in-tool links, image confirmation counts, video submission, native entity list response shape, concurrent releases and ambiguous-create recovery. Measure API latency, polling-cycle duration and rate limits; increase the stale threshold only from measured results.
 
@@ -77,7 +77,7 @@ Use the actual planned monitor count, team count, asset inventory and estimated 
 
 ## Real pilot setup update
 
-- Admin authorization is checked on every setup request using the current user's monitoring-team membership. Manager monitors see only their assigned teams.
+- Admin authorization is checked on every setup mutation using the current user's monitoring-team membership. All monitors can view the directory and source counts; Monitoring actions remain limited to assigned teams.
 - Live local testing derives the user ID from the configured API token instead of trusting synthetic LOCAL_USER_ID. Routes read incoming request state directly, avoiding a shared form race between tabs for the same user.
 - Distribution previews check the complete selected inventory and metadata again on apply, retain stable source IDs, create distinct destination entities and publish locked batches atomically.
 - Setup operations serialize across organisers; unknown outcomes retain confirmed resource IDs and block new setup/release actions until inspection. Staged upload chunks are bound to their uploader and offset.
@@ -89,7 +89,7 @@ Use the actual planned monitor count, team count, asset inventory and estimated 
 - Fresh local starts initialize their database without event environment settings. The connection screen authenticates the organiser once and saves an encrypted credential; reconnecting is pinned to the event owner/server. Local background polling uses it. Hosted mode uses the current native user credential and never persists that token.
 - Event setup creates/adopts Monitors and Annotators native groups, remembers their IDs and source workspace, accepts multiple registered logins and enforces separate logical rosters. Native administrative ownership is retained separately. Existing event people are adopted during upgrade.
 - Participant pairs use two selected unpaired annotators and may start unassigned. Manual assignment and balanced allocation previews grant participant-team roles and save monitor ownership. Unassigned pairs cannot receive dataset distribution.
-- Fresh hosted onboarding requires a launch-team Admin. The Monitors group uses that launch team. Group membership and assigned-pair access are checked on each request; non-Admin monitors cannot read setup rosters.
+- Fresh hosted onboarding requires a launch-team Admin. The Monitors group uses that launch team. Group membership and assigned-pair access are checked on each request; non-Admin monitors can view the event directory but cannot access provisioning history or mutation controls.
 - Vue simulated DOM checks covered group entry, deferred pairing, assignment previews, uploads, independent browser state and keeping connection credentials outside widget state. Fresh Uvicorn startup, root/script serving and rejected invalid connection requests were checked over local HTTP.
 
 The monitoring UI is exclusively for monitors and the monitoring organiser. Annotators are provisioned from its roster but use the native Supervisely web app for labeling and submission. Tests explicitly deny monitoring access to event annotators, including those with native monitoring-team Admin membership. The monitoring organiser cannot join the participant pool.

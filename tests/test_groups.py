@@ -178,3 +178,60 @@ def test_existing_event_members_are_adopted_during_group_upgrade(event):
     event.configure_groups(gw, 99, 'upgrade_groups', 'Monitors', 'Annotators', 10)
     assert [u['id'] for u in event.groups()['monitors']] == [90]
     assert [u['id'] for u in event.groups()['annotators']] == [11, 12]
+
+
+def test_add_team_registers_both_participants_in_one_form(event):
+    gw = remote()
+    event.configure_groups(gw, 99, 'create_groups', 'Monitors', 'Annotators')
+    gw.api.team.create.side_effect = None
+    gw.api.team.create.return_value = NS(id=101, name='Pair')
+    event.register_team(gw, 99, 'register_pair', 'Pair', ['alice', 'bob'])
+    assert [u['login'] for u in event.groups()['annotators']] == ['alice', 'bob']
+    assert event.roster()[0]['annotator_ids'] == [11, 12]
+    assert event.roster()[0]['monitor_id'] == 0
+    assert [c.args[0] for c in gw.add_login.call_args_list] == [20, 20, 101, 101]
+    with pytest.raises(WorkflowError, match='already registered'):
+        event.register_team(gw, 99, 'register_again', 'Pair', ['alice', 'bob'])
+
+
+def test_add_team_rejects_monitor_and_existing_participant_before_inviting(event):
+    gw = remote()
+    groups(event, gw)
+    with event.sessions.begin() as s:
+        s.add(Team(id=101, name='A', monitor_id=90, annotator_ids=[11, 12]))
+    before = gw.add_login.call_count
+    with pytest.raises(WorkflowError, match='monitoring staff'):
+        event.register_team(gw, 99, 'bad_monitor', 'B', ['monitor', 'carol'])
+    with pytest.raises(WorkflowError, match='one team'):
+        event.register_team(gw, 99, 'bad_participant', 'B', ['alice', 'carol'])
+    assert gw.add_login.call_count == before
+
+
+def test_unassignment_hides_team_and_cas_prevents_removing_new_owner(event, service):
+    gw = remote()
+    groups(event, gw)
+    with event.sessions.begin() as s:
+        s.add(Team(id=101, name='A', monitor_id=90, annotator_ids=[11, 12]))
+    event.unassign_monitor(99, 'unassign_pair', 101, 0, 90)
+    assert service.snapshot(90)['teams'] == []
+    directory = event.directory()
+    assert directory['teams'][0]['monitor_id'] == 0
+    assert [u['login'] for u in directory['teams'][0]['participants']] == ['alice', 'bob']
+    assert 'reviews' not in str(directory) and 'operations' not in directory
+    event.assign_monitor(gw, 99, 'assign_again', 101, 91, 1)
+    with pytest.raises(WorkflowError, match='no longer assigned'):
+        event.unassign_monitor(99, 'stale_remove', 101, 0, 90)
+    assert service.snapshot(91)['teams'][0]['id'] == 101
+
+
+def test_unassignment_does_not_abandon_released_jobs(event):
+    gw = remote()
+    groups(event, gw)
+    with event.sessions.begin() as s:
+        s.add(Team(id=101, name='A', monitor_id=90, annotator_ids=[11, 12]))
+        s.flush()
+        s.add(Batch(id='released', team_id=101, position=1, kind='images', state='active',
+                    dataset_id=50, assets=[{'entity_id': 501, 'source_id': 'a'}]))
+    with pytest.raises(WorkflowError, match='handover'):
+        event.unassign_monitor(99, 'remove_active', 101, 0, 90)
+    assert event.directory()['teams'][0]['can_assign'] is False

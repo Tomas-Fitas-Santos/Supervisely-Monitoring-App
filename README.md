@@ -9,8 +9,9 @@ A shared Supervisely web app used by monitors and the monitoring organiser to ov
 - One native multi-user app session, personal browser filters and server-enforced assigned-team access.
 - PostgreSQL persistence for assignments, batches, current review decisions and an append-only application audit history.
 - Team dashboard, current and historical batches, confirmed image counts, complete-video submission status, recent participant labeling activity and stale-data warnings.
+- Three main tabs: **Monitors & Teams**, **Dataset**, and **Monitoring**. All monitors can inspect the event directory; organiser Admins manage people, assignments and source data.
 - Shared polling worker with a database lease, rather than one Supervisely polling loop per browser. Dashboard refresh every minute and manual selected-batch Supervisely refresh.
-- Image and explicit video-frame review records; native image acceptance/rejection can be published separately.
+- In-app image and selected video-frame previews with annotation overlays, original-image toggle and class legends. Mark them well annotated or needing correction; native image acceptance/rejection can be published separately.
 - Sample approval and sequential release gates. Future jobs are created only on release, so a pending job cannot accidentally reveal a future batch.
 - Optimistic concurrency checks for workflow changes and release reconciliation after ambiguous API results. Uncertain creates are never blindly retried.
 - In-app Monitors and Annotators groups, bulk registered-login entry, pairs of two, manual or balanced monitor assignment and native team provisioning. Event IDs and rosters are saved automatically.
@@ -84,12 +85,13 @@ See [the real pilot walkthrough](docs/real-pilot.md) for exact Windows commands 
 
 Start with `python -m monitoring.run` and open `http://127.0.0.1:8000`. A fresh local installation needs no `.env`. Connect your Supervisely account in the app; it saves the connection and creates its local event database. Existing demo users can connect from the same screen; a separate live database preserves synthetic data.
 
-1. Create or choose **Monitors** and **Annotators** groups.
-2. Add registered people to their group using the picker or multiple logins.
-3. Create participant teams of two from unpaired Annotators; choose **Assign later** if desired.
-4. Assign pairs manually or preview and apply a balanced allocation to selected monitors.
-5. Upload image/video files or select existing source datasets. Preview and apply independent team copies with your chosen replication and workload estimates.
-6. Assigned monitors release real jobs, inspect submissions and record reviews.
+| Main tab | What you do |
+|---|---|
+| **Monitors & Teams** | Initialize the event groups. Add registered monitors. Add a team by entering its name and both participants' registered logins; they join the Annotators roster automatically. Click a monitor to see, add or remove team assignments. The full team list shows participants and the assigned monitor or **Unassigned**. |
+| **Dataset** | Upload images or videos, inspect actual source counts, select registered teams, preview allocation and apply independent annotation copies. Supply your replication and workload estimates. |
+| **Monitoring** | Select one of your assigned teams. See **Current**, **Submitted** and **Upcoming** batches. Release tasks, refresh native progress, load image/frame annotations, mark quality decisions and approve submitted batches. |
+
+No separate participant-pool form is required when adding a team. Assignments may be changed or removed before jobs are released. All participant annotation and submission happens in Supervisely.
 
 No event team IDs, user IDs or assignments need to be configured in `.env`. Local background polling uses the saved connection. For simultaneous monitors, deploy one shared Supervisely session with persistent PostgreSQL storage; each monitor uses their own platform credentials. The hosted Monitors group uses the launch team. Database access and optional hosted polling credentials remain deployment infrastructure.
 
@@ -146,9 +148,11 @@ python -m pytest -q
 node --check monitoring/static/dashboard.js
 node --check monitoring/static/setup.js
 node --check monitoring/static/connection.js
+npm install --prefix /tmp/monitor-ui --no-audit --no-fund vue@2.7.16 jsdom@26.1.0
+NODE_PATH=/tmp/monitor-ui/node_modules node tests/ui_smoke.cjs
 ```
 
-Set `TEST_DATABASE_URL` to a **disposable** PostgreSQL database to run the same workflow/concurrency tests there; tests drop their schema. GitHub Actions provisions its own PostgreSQL service. SDK signature tests check the installed pinned package, while gateway tests mock remote responses. Live API access, native two-user sessions, job links, cross-team permissions, correction workflows and account limits remain pilot checks. Concurrent-user capacity has not been load-tested.
+The Node commands are development checks, not requirements for running the app. They compile and exercise the three tabs in a simulated Vue DOM, including independent browser state. Set `TEST_DATABASE_URL` to a **disposable** PostgreSQL database to run the workflow/concurrency tests there; tests drop their schema. GitHub Actions provisions its own PostgreSQL service and runs Windows checks. SDK signature and overlay tests use the installed pinned package, while gateway tests mock remote responses. Live API access, native two-user sessions, job links, cross-team permissions, correction workflows and account limits remain pilot checks. Concurrent-user capacity has not been load-tested.
 
 ## Next implementation work
 

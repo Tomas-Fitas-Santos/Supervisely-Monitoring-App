@@ -13,7 +13,7 @@ from sqlalchemy import select, update
 
 from . import controller
 from .dashboard import Dashboard
-from .db import Batch, EventConfig, EventMember, Review, database, initialize
+from .db import Batch, EventConfig, EventMember, Review, Team, database, initialize
 from .gateway import Gateway
 from .service import Service, WorkflowError
 from .settings import Settings
@@ -114,7 +114,13 @@ def display_access(uid, gateway):
         except WorkflowError:
             pass
     data = DataJson()['dashboard']
-    data.update(can_setup=can_setup, connection=connection_view(gateway is not None))
+    data.update(can_setup=can_setup, connected=gateway is not None,
+                directory=setup.directory() if gateway else {}, connection=connection_view(gateway is not None))
+    if data.get('review_preview'):
+        with sessions() as s:
+            preview_team = s.get(Team, data['review_preview']['team_id'])
+            if not preview_team or preview_team.monitor_id != uid:
+                data['review_preview'] = None
     if can_setup:
         data['setup'] = setup.snapshot()
     else:
@@ -127,6 +133,7 @@ def clear_access():
     from supervisely.app import DataJson
     DataJson()['dashboard'].update(setup={}, catalog={}, can_setup=False, plan_id=None, preview=None,
                                    assignment_plan_id=None, assignment_preview=[],
+                                   directory={}, sources={}, connected=False, review_preview=None,
                                    connection=connection_view(False))
 
 
@@ -212,6 +219,12 @@ def action(request: Request):
                 if name == 'sync':
                     controller.sync(service, gateway, team, batch, activity=True)
                     message = 'Progress refresh finished; check the sync status below.'
+                elif name == 'preview_media':
+                    from supervisely.app import DataJson
+                    DataJson()['dashboard']['review_preview'] = None
+                    DataJson()['dashboard']['review_preview'] = gateway.review_preview(
+                        team, batch, int(f['entity_id']), int(f['frame_index']))
+                    message = 'Latest image/frame and saved annotation loaded from Supervisely.'
                 elif name == 'release':
                     controller.release(service, gateway, uid, team_id, batch_id, int(f['revision']))
                     message = 'Task released to the participant team.'
@@ -257,6 +270,14 @@ def setup_action(request: Request):
     try:
         uid, gateway = identity(request)
         gateway = SetupGateway(gateway.api) if gateway else None
+        f = request_form(request) if isinstance(getattr(getattr(request, 'state', None), 'state', None), dict) else {}
+        if f.get('setup_action') == 'overview':
+            if gateway is None:
+                raise WorkflowError('Connect to Supervisely to view event people and datasets.')
+            display_access(uid, gateway)
+            DataJson()['dashboard']['sources'] = gateway.sources(setup.monitoring_team_id)
+            dashboard.display(service.snapshot(uid), 'Event lists reloaded.')
+            return {'ok': True}
         setup.authorize(gateway, uid)
         authorized = True
         f = request_form(request)
@@ -293,9 +314,16 @@ def setup_action(request: Request):
         elif name == 'team':
             tid = setup.create_team(gateway, uid, key, f['name'], f['logins'], f['monitor_id'], f.get('existing_team_id'))
             message = f'Participant pair {tid} registered. Assign a monitor below if you chose Assign later.'
+        elif name == 'register_team':
+            tid = setup.register_team(gateway, uid, key, f['name'], f['logins'], f.get('monitor_id'), f.get('existing_team_id'))
+            data['catalog'] = gateway.catalog(setup.monitoring_team_id)
+            message = f'Team {tid} added with both participants.'
         elif name == 'assign':
             setup.assign_monitor(gateway, uid, key, f['setup_team_id'], f['monitor_id'], f['setup_revision'])
             message = 'Monitor assignment saved. The previous monitor no longer has app access to this team.'
+        elif name == 'unassign':
+            setup.unassign_monitor(uid, key, f['setup_team_id'], f['setup_revision'], f['expected_monitor_id'])
+            message = 'Team removed from this monitor. It is now unassigned.'
         elif name == 'chunk':
             data['upload_offset'] = setup.stage(uid, f['upload_id'], f['filename'], f['size'], f['offset'], f['chunk'])
         elif name == 'upload':
@@ -316,7 +344,10 @@ def setup_action(request: Request):
             message = 'Inspection recorded. Setup is unblocked; this operation will not be retried.'
         elif name != 'refresh':
             raise WorkflowError('Unknown setup action.')
-        data.update(setup=setup.snapshot(), can_setup=True, connection=connection_view(True))
+        data.update(setup=setup.snapshot(), directory=setup.directory(), connected=True,
+                    can_setup=True, connection=connection_view(True))
+        if name in ('groups', 'upload', 'catalog', 'distribute'):
+            data['sources'] = gateway.sources(setup.monitoring_team_id)
         dashboard.display(service.snapshot(uid), message)
         return {'ok': True}
     except WorkflowError as exc:

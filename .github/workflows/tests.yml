@@ -27,6 +27,10 @@ jobs:
       - run: node --check monitoring/static/dashboard.js
       - run: node --check monitoring/static/setup.js
       - run: node --check monitoring/static/connection.js
+      - run: npm install --prefix "${{ runner.temp }}/monitor-ui" --no-audit --no-fund vue@2.7.16 jsdom@26.1.0
+      - run: node tests/ui_smoke.cjs
+        env:
+          NODE_PATH: ${{ runner.temp }}/monitor-ui/node_modules
   windows:
     runs-on: windows-latest
     steps:
@@ -44,3 +48,7 @@ jobs:
       - run: node --check monitoring/static/dashboard.js
       - run: node --check monitoring/static/setup.js
       - run: node --check monitoring/static/connection.js
+      - run: npm install --prefix "${{ runner.temp }}/monitor-ui" --no-audit --no-fund vue@2.7.16 jsdom@26.1.0
+      - run: node tests/ui_smoke.cjs
+        env:
+          NODE_PATH: ${{ runner.temp }}/monitor-ui/node_modules

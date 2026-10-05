@@ -44,10 +44,14 @@ class Service:
                 batches = list(s.scalars(select(Batch).where(Batch.team_id == team.id).order_by(Batch.position)))
                 entries = []
                 for b in batches:
+                    statuses = b.remote_status.split(',')
+                    submitted = (b.state not in ('locked', 'releasing') and bool(statuses)
+                        and all(v in ('on_review', 'completed', 'review_completed') for v in statuses))
                     reviews = list(s.scalars(select(Review).where(Review.batch_id == b.id).order_by(Review.updated_at.desc())))
                     entries.append({
                         'id': b.id, 'position': b.position, 'kind': b.kind, 'state': b.state,
                         'job_ids': b.job_ids, 'remote_status': b.remote_status,
+                        'submitted': submitted,
                         'completed': b.completed, 'total': b.total, 'assets': b.assets,
                         'synced_at': b.synced_at, 'sync_error': b.sync_error,
                         'stale': b.synced_at is None or now() - b.synced_at > self.stale_after,
