@@ -1,0 +1,13 @@
+{
+  "name": "Nightjar Annotation Monitor",
+  "description": "Shared monitoring dashboard for independent participant teams.",
+  "version": "2.0.0",
+  "entrypoint": "python -m monitoring.run",
+  "is_multi_user_app": true,
+  "task_location": "application_sessions",
+  "categories": ["collaboration", "labelling", "images", "videos"],
+  "min_instance_version": "6.15.2",
+  "gpu": "no",
+  "isolate": true,
+  "headless": false
+}
