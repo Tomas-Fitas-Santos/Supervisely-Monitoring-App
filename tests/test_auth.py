@@ -95,14 +95,15 @@ def test_action_payload_is_read_from_current_request_not_shared_tab_state(ui):
         ui.request_form(NS(state=NS(state=None)))
 
 
-def test_native_membership_does_not_bypass_event_monitor_group(ui, monkeypatch):
+@pytest.mark.parametrize('native_role', ['manager', 'annotator'])
+def test_native_membership_does_not_bypass_event_monitor_group(ui, monkeypatch, native_role):
     with ui.sessions.begin() as s:
         c = s.get(EventConfig, 1)
         c.owner_id, c.monitoring_team_id, c.annotator_team_id = 99, 10, 20
         s.add(EventMember(user_id=90, group='annotators', login='alice', name='Alice'))
     api = Mock(server_address=ui.settings.server_address)
     api.user.get_my_info.return_value = NS(id=90)
-    api.user.get_member_info_by_id.return_value = NS(role='manager')
+    api.user.get_member_info_by_id.return_value = NS(role=native_role)
     monkeypatch.setattr(ui.sly.env, 'user_from_multiuser_app', lambda: 90)
     with pytest.raises(WorkflowError, match='Monitors group'):
         ui.identity(NS(state=NS(api=api)))

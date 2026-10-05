@@ -8,6 +8,8 @@ You can now prepare the pilot in **Event setup**. No manifest file is needed. Al
 - Permission and available account quota to create native teams and projects, or Admin access to existing teams selected in the app.
 - For simultaneous monitors, one shared hosted session with persistent PostgreSQL storage. Local testing represents the connected organiser.
 
+**Only monitors and the monitoring organiser use this app.** Participating annotators use the actual Supervisely web app to open labeling jobs, annotate and submit. They do not need to open this monitoring app.
+
 The app has two event rosters: **Monitors** and **Annotators**. It creates or adopts separate Supervisely teams for these groups and saves their IDs automatically. Each participant pair gets its own native team for independent annotations. A person belongs to only one event roster and each annotator belongs to at most one pair. The organiser retains administrative membership in native teams, separately from event roster membership.
 
 Users visible in accessible teams appear as suggestions. You can also paste registered logins, one per line, for users outside those teams. Global user-listing privileges are not required.

@@ -46,7 +46,7 @@ Sources:
 
 ## Verification performed for this initial version
 
-- 79 local Python tests passed using disposable SQLite databases. Coverage includes encrypted local connections, organiser/server pinning, separate event groups, registered people, unassigned pairs, balanced monitor plans, legacy group adoption, access isolation, concurrent workflow changes, releases and interrupted provisioning.
+- 80 local Python tests passed using disposable SQLite databases. Coverage includes encrypted local connections, organiser/server pinning, separate event groups, registered people, unassigned pairs, balanced monitor plans, legacy group adoption, access isolation, concurrent workflow changes, releases and interrupted provisioning.
 - The pinned SDK imported and the UI rendered its HTML template and served its JavaScript. A local ASGI request to the dashboard refresh endpoint returned HTTP 200.
 - JavaScript syntax checks passed. The dashboard component compiled and rendered in Vue 2 with a simulated DOM; two separate component instances retained independent filters and team selection.
 - No live Supervisely credentials were supplied. GitHub Actions exercises the suite on disposable PostgreSQL and Windows. Native hosted-session behavior still needs the live pilot.
@@ -91,3 +91,5 @@ Use the actual planned monitor count, team count, asset inventory and estimated 
 - Participant pairs use two selected unpaired annotators and may start unassigned. Manual assignment and balanced allocation previews grant participant-team roles and save monitor ownership. Unassigned pairs cannot receive dataset distribution.
 - Fresh hosted onboarding requires a launch-team Admin. The Monitors group uses that launch team. Group membership and assigned-pair access are checked on each request; non-Admin monitors cannot read setup rosters.
 - Vue simulated DOM checks covered group entry, deferred pairing, assignment previews, uploads, independent browser state and keeping connection credentials outside widget state. Fresh Uvicorn startup, root/script serving and rejected invalid connection requests were checked over local HTTP.
+
+The monitoring UI is exclusively for monitors and the monitoring organiser. Annotators are provisioned from its roster but use the native Supervisely web app for labeling and submission. Tests explicitly deny monitoring access to event annotators, including those with native monitoring-team membership.

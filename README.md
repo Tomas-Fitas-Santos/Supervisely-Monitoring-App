@@ -1,6 +1,6 @@
 # Supervisely Monitoring App
 
-A shared Supervisely web app for the monitoring team to oversee independent participant pairs. It includes a real pilot setup flow for registered users, source uploads, independent team copies and monitor assignment. Live API behavior must still be validated against your instance.
+A shared Supervisely web app used by monitors and the monitoring organiser to oversee independent participant pairs. Participating annotators work exclusively in the actual Supervisely web app; their roster here is for team and labeling-job provisioning. It includes a real pilot setup flow for registered users, source uploads, independent team copies and monitor assignment. Live API behavior must still be validated against your instance.
 
 **Event sizes come from your inputs.** No team, image or video count is hard-coded. Three independent teams per source is the plan's minimum replication rule, configurable upward in the allocation planner. Batch workload must be supplied explicitly from a pilot estimate; the app does not assume how many images take two hours.
 

@@ -113,7 +113,7 @@ Vue.component('nightjar-setup', {
   mounted() { this.run('catalog'); },
   template: `
   <section class="nj-setup">
-    <div class="nj-section-heading"><div><h2>Event setup</h2><p class="nj-muted">Create a real pilot using registered Supervisely accounts and your own data.</p></div>
+    <div class="nj-section-heading"><div><h2>Event setup</h2><p class="nj-muted">Prepare teams and work for monitors. Annotators use the Supervisely web app for labeling.</p></div>
       <button @click="run('catalog')" :disabled="busy">Reload Supervisely</button></div>
     <div v-if="clientError" class="nj-message nj-error" role="alert">{{ clientError }}</div>
     <div v-if="blocked" class="nj-panel nj-caution">
@@ -141,6 +141,7 @@ Vue.component('nightjar-setup', {
     <div v-if="groups.ready" class="nj-columns">
       <div v-for="group in ['monitors', 'annotators']" :key="group" class="nj-panel">
         <h3>{{ group === 'monitors' ? 'Monitors' : 'Annotators' }} group · {{ groups[group].length }} people</h3>
+        <p class="nj-muted">{{ group === 'monitors' ? 'Monitors use this app to oversee their assigned pairs.' : 'Annotators work in Supervisely labeling jobs. This roster does not give them monitoring-app access.' }}</p>
         <p class="nj-muted">Choose registered users below or enter their exact logins, one per line.</p>
         <select aria-label="Choose a registered user" @change="appendLogin(group, $event.target.value); $event.target.value = ''"><option value="">Choose a registered user</option>
           <option v-for="u in catalog.users || []" :key="u.id" :value="u.login">{{ u.name }} · {{ u.login }}</option></select>
