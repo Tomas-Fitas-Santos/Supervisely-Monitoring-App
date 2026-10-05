@@ -131,11 +131,15 @@ class Setup:
         # Adopt existing event participants without dropping their access during this upgrade.
         legacy_members = {}
         initial_roster = self.roster()
+        with self.sessions() as s:
+            owner_id = s.get(EventConfig, 1).owner_id
         for pair in initial_roster:
             for uid, group, tid in ([(u, 'annotators', pair['id']) for u in pair['annotator_ids']]
                                     + ([(pair['monitor_id'], 'monitors', self.monitoring_team_id)] if pair['monitor_id'] else [])):
                 if uid in legacy_members and legacy_members[uid][0] != group:
                     raise WorkflowError('An existing account has both roles. Resolve this before creating separate groups.')
+                if uid == owner_id and group == 'annotators':
+                    raise WorkflowError('The monitoring organiser cannot be a participating annotator.')
                 person = gateway.api.user.get_member_info_by_id(tid, uid)
                 if not person or person.disabled:
                     raise WorkflowError('Restore active membership for every existing pair before creating groups.')
@@ -185,6 +189,8 @@ class Setup:
         with self.sessions() as s:
             c = s.get(EventConfig, 1)
             tid = c.monitoring_team_id if group == 'monitors' else c.annotator_team_id
+            if group == 'annotators' and c.owner_login and c.owner_login.casefold() in {v.casefold() for v in logins}:
+                raise WorkflowError('The monitoring organiser cannot be a participating annotator.')
             opposite = {m.login.casefold() for m in s.scalars(select(EventMember).where(EventMember.group != group))}
         if opposite.intersection(v.casefold() for v in logins):
             raise WorkflowError('A person can belong to only one event group.')
@@ -196,6 +202,9 @@ class Setup:
                 if login.casefold() in opposite:
                     raise WorkflowError('This person was added to the other event group. Refresh setup.')
                 member = gateway.add_login(tid, login, role)
+                with self.sessions() as s:
+                    if group == 'annotators' and member.id == s.get(EventConfig, 1).owner_id:
+                        raise WorkflowError('The monitoring organiser cannot be a participating annotator.')
                 checkpoint({'group': group, 'user_id': member.id, 'login': member.login})
                 if group == 'monitors' and member.role not in ('admin', 'manager'):
                     gateway.api.user.change_team_role(member.id, tid, role)

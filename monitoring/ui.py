@@ -71,6 +71,8 @@ def identity(request):
         member = api.user.get_member_info_by_id(config.monitoring_team_id, uid)
         with sessions() as s:
             roster_member = s.get(EventMember, uid)
+            if roster_member and roster_member.group == 'annotators':
+                raise WorkflowError("Annotators use the Supervisely web app. Only the Monitors group can use this app.")
             if (uid != config.owner_id and member.role != 'admin'
                     and (not roster_member or roster_member.group != 'monitors')):
                 raise WorkflowError("You are not in this event's Monitors group.")

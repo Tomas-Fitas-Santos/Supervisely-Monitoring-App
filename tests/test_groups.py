@@ -63,6 +63,14 @@ def test_one_person_cannot_be_in_both_event_groups(event):
     assert gw.add_login.call_count == 6
 
 
+def test_organiser_cannot_join_annotator_pool_and_lose_monitoring_access(event):
+    gw = remote()
+    groups(event, gw)
+    with pytest.raises(WorkflowError, match='organiser cannot'):
+        event.add_members(gw, 99, 'owner_annotator', 'annotators', ['organiser'])
+    assert gw.add_login.call_count == 6
+
+
 def test_group_creation_rejects_same_native_team(event):
     gw = remote()
     with pytest.raises(WorkflowError, match='separate'):

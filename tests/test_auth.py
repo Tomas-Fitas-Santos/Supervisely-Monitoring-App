@@ -95,7 +95,7 @@ def test_action_payload_is_read_from_current_request_not_shared_tab_state(ui):
         ui.request_form(NS(state=NS(state=None)))
 
 
-@pytest.mark.parametrize('native_role', ['manager', 'annotator'])
+@pytest.mark.parametrize('native_role', ['manager', 'annotator', 'admin'])
 def test_native_membership_does_not_bypass_event_monitor_group(ui, monkeypatch, native_role):
     with ui.sessions.begin() as s:
         c = s.get(EventConfig, 1)
