@@ -46,12 +46,12 @@ Sources:
 
 ## Verification performed for this initial version
 
-- 29 local Python tests passed using disposable SQLite databases, including concurrent release reservation/confirmation, stale tabs, assignment enforcement, token/context mismatch, missing credentials, monitoring-team membership, sequential gates, correction history, ambiguous creates and worker leases.
+- 79 local Python tests passed using disposable SQLite databases. Coverage includes encrypted local connections, organiser/server pinning, separate event groups, registered people, unassigned pairs, balanced monitor plans, legacy group adoption, access isolation, concurrent workflow changes, releases and interrupted provisioning.
 - The pinned SDK imported and the UI rendered its HTML template and served its JavaScript. A local ASGI request to the dashboard refresh endpoint returned HTTP 200.
 - JavaScript syntax checks passed. The dashboard component compiled and rendered in Vue 2 with a simulated DOM; two separate component instances retained independent filters and team selection.
-- No live Supervisely credentials were supplied. PostgreSQL concurrency and hosted native-session integration are not claimed as locally verified; GitHub Actions is configured to exercise the workflow tests on its disposable PostgreSQL service.
+- No live Supervisely credentials were supplied. GitHub Actions exercises the suite on disposable PostgreSQL and Windows. Native hosted-session behavior still needs the live pilot.
 - Browser screenshot verification could not run because Chromium download failed in this environment. Full browser visual QA remains a pilot check.
-- A local TestClient lifespan shutdown exposed a pinned SDK/dependency incompatibility: its internal `async_asgi_testclient` rejects Starlette's `http.response.debug` message while caching the root template. Root rendering and refresh requests succeeded, but clean shutdown/offline caching must be checked on the actual agent image. Resolve the SDK/dependency combination before event deployment rather than patching installed dependencies ad hoc.
+- An earlier local TestClient lifespan shutdown exposed a pinned SDK/dependency incompatibility: its internal `async_asgi_testclient` rejects Starlette's `http.response.debug` message while caching the root template. Root rendering and refresh requests succeeded, but clean shutdown/offline caching must be checked on the actual agent image. Resolve the SDK/dependency combination before event deployment rather than patching installed dependencies ad hoc.
 
 ## Ordered implementation steps
 
@@ -61,7 +61,7 @@ Use [the real pilot walkthrough](real-pilot.md), a configurable roster and your 
 
 ### 2. Preparation and distribution
 
-The setup UI now supports exact registered user logins, team registration, monitor assignment, browser media upload, distribution previews, independent entity copies and durable operation/resource checkpoints. Next add CSV roster import, queued setup operations, crash-safe automatic reconciliation and native reviewer handover after monitor reassignment. Confirm whether copying can share media storage while keeping annotations independent. Provision the annotation schema and event guide consistently. Add full-inventory coverage validation, source mapping reconciliation, balanced monitor loads and monitor reassignment history.
+The setup UI now supports exact registered user logins, team registration, monitor assignment, browser media upload, distribution previews, independent entity copies and durable operation/resource checkpoints. Next add CSV roster import, queued setup operations, crash-safe automatic reconciliation and native reviewer handover after monitor reassignment. Confirm whether copying can share media storage while keeping annotations independent. Provision the annotation schema and event guide consistently. Extend source mapping reconciliation and allocation quality checks. Balanced pair-to-monitor assignment and monitor reassignment history are implemented.
 
 ### 3. Complete review and correction workflow
 
@@ -83,3 +83,11 @@ Use the actual planned monitor count, team count, asset inventory and estimated 
 - Setup operations serialize across organisers; unknown outcomes retain confirmed resource IDs and block new setup/release actions until inspection. Staged upload chunks are bound to their uploader and offset.
 - The dashboard uses the SDK/Element primary blue #20a0ff with its neutral and status colors. Vue templates render in a simulated DOM; a browser screenshot could not be produced because the Chromium download was truncated.
 - Live platform provisioning, job workflows and native simultaneous-user sessions remain checks for the real pilot. Automated remote tests use mocked SDK responses and actual SDK signature/metadata validation.
+
+## In-app event groups update
+
+- Fresh local starts initialize their database without event environment settings. The connection screen authenticates the organiser once and saves an encrypted credential; reconnecting is pinned to the event owner/server. Local background polling uses it. Hosted mode uses the current native user credential and never persists that token.
+- Event setup creates/adopts Monitors and Annotators native groups, remembers their IDs and source workspace, accepts multiple registered logins and enforces separate logical rosters. Native administrative ownership is retained separately. Existing event people are adopted during upgrade.
+- Participant pairs use two selected unpaired annotators and may start unassigned. Manual assignment and balanced allocation previews grant participant-team roles and save monitor ownership. Unassigned pairs cannot receive dataset distribution.
+- Fresh hosted onboarding requires a launch-team Admin. The Monitors group uses that launch team. Group membership and assigned-pair access are checked on each request; non-Admin monitors cannot read setup rosters.
+- Vue simulated DOM checks covered group entry, deferred pairing, assignment previews, uploads, independent browser state and keeping connection credentials outside widget state. Fresh Uvicorn startup, root/script serving and rejected invalid connection requests were checked over local HTTP.

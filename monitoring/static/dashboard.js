@@ -48,6 +48,7 @@ Vue.component('nightjar-dashboard', {
       <div class="nj-refresh"><span>Updated {{ time(view.snapshot.refreshed_at) }}</span>
       <button @click="send('refresh')" :disabled="busy || setupBusy || tab === 'setup'">Refresh dashboard</button></div>
     </header>
+    <nightjar-connection v-if="view.connection && view.connection.local" :connection="view.connection" @connected="send('refresh').then(() => { if (view.can_setup) tab = 'setup'; })"></nightjar-connection>
     <nav class="nj-tabs" aria-label="App sections"><button :disabled="setupBusy" :class="{selected: tab === 'monitoring'}" @click="tab = 'monitoring'; send('refresh')">Monitoring</button>
       <button v-if="view.can_setup" :class="{selected: tab === 'setup'}" @click="tab = 'setup'">Event setup</button></nav>
     <section v-if="tab === 'monitoring'" class="nj-metrics">
@@ -60,7 +61,7 @@ Vue.component('nightjar-dashboard', {
     <nightjar-setup v-if="tab === 'setup' && view.can_setup" :view="view" :form="form" :post="post" @busy="setupBusy = $event"></nightjar-setup>
     <section v-if="tab === 'monitoring' && !teams.length" class="nj-empty"><h2>No teams assigned</h2>
       <p v-if="view.can_setup">Open Event setup to register participant pairs, upload data, distribute batches and assign monitors.</p>
-      <p v-else>Your organiser can assign teams to you in Event setup. Local live testing needs your Supervisely API token and a real monitoring team ID.</p></section>
+      <p v-else>Your organiser can assign teams to you in Event setup. Connect your account above to create the event groups in this app.</p></section>
     <section v-if="tab === 'monitoring' && teams.length" class="nj-workspace">
       <aside class="nj-sidebar"><h2>Your teams</h2><input v-model="search" placeholder="Find a team" aria-label="Find a team">
         <label class="nj-check"><input type="checkbox" v-model="attentionOnly"> Needs attention</label>

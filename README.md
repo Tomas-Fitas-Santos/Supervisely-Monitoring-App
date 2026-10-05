@@ -13,7 +13,8 @@ A shared Supervisely web app for the monitoring team to oversee independent part
 - Image and explicit video-frame review records; native image acceptance/rejection can be published separately.
 - Sample approval and sequential release gates. Future jobs are created only on release, so a pending job cannot accidentally reveal a future batch.
 - Optimistic concurrency checks for workflow changes and release reconciliation after ambiguous API results. Uncertain creates are never blindly retried.
-- Admin-only Event setup: create or register participant pairs with existing user logins, assign monitors and provision their participant-team permissions.
+- In-app Monitors and Annotators groups, bulk registered-login entry, pairs of two, manual or balanced monitor assignment and native team provisioning. Event IDs and rosters are saved automatically.
+- One-time local connection through the UI with encrypted credential storage; hosted users authenticate through their own Supervisely sessions.
 - Browser uploads of image/video files and optional Supervisely annotation metadata; existing monitoring-team datasets can also be selected.
 - Preview and apply input-driven distribution into independent team-local entities, with durable operation checkpoints and source mappings. Small pilots can use reduced replication or images only.
 - Supervisely SDK colors (blue primary, white panels and the platform neutral/status palette), validated manifest import and monitoring-record export.
@@ -81,15 +82,16 @@ Dependency references: [python-magic installation](https://github.com/ahupp/pyth
 
 See [the real pilot walkthrough](docs/real-pilot.md) for exact Windows commands and the hosted multi-monitor configuration.
 
-Use a fresh `pilot.db` with your real monitoring-team ID and private `API_TOKEN`. Local live mode uses the token owner's identity. Open **Event setup** as an Admin of that monitoring team:
+Start with `python -m monitoring.run` and open `http://127.0.0.1:8000`. A fresh local installation needs no `.env`. Connect your Supervisely account in the app; it saves the connection and creates its local event database. Existing demo users can connect from the same screen; a separate live database preserves synthetic data.
 
-1. Create or register participant pairs using existing Supervisely logins, then assign their monitors.
-2. Upload your image/video files, or select source datasets already in the monitoring team. Optional `meta.json` preserves your annotation schema; raw uploads otherwise use an editable bird-head pilot template.
-3. Select actual teams/datasets, enter replication and workload estimates, and preview the allocation. Enable **Small pilot** for reduced replication or images-only work.
-4. Apply the preview to create separate team-local annotation entities and locked batches.
-5. Assigned monitors release real jobs, inspect submitted annotations, record reviews and advance through batches.
+1. Create or choose **Monitors** and **Annotators** groups.
+2. Add registered people to their group using the picker or multiple logins.
+3. Create participant teams of two from unpaired Annotators; choose **Assign later** if desired.
+4. Assign pairs manually or preview and apply a balanced allocation to selected monitors.
+5. Upload image/video files or select existing source datasets. Preview and apply independent team copies with your chosen replication and workload estimates.
+6. Assigned monitors release real jobs, inspect submissions and record reviews.
 
-The local server is loopback-only and represents one token owner. For simultaneous real monitors, launch one shared Supervisely session with `LOCAL_DEVELOPMENT=false` and persistent PostgreSQL. Configure a separate `SYNC_API_TOKEN` for background polling, or refresh selected batches manually.
+No event team IDs, user IDs or assignments need to be configured in `.env`. Local background polling uses the saved connection. For simultaneous monitors, deploy one shared Supervisely session with persistent PostgreSQL storage; each monitor uses their own platform credentials. The hosted Monitors group uses the launch team. Database access and optional hosted polling credentials remain deployment infrastructure.
 
 Setup operations have durable resource checkpoints and a database lock. Uncertain writes require inspection before new setup actions or releases; see the walkthrough's recovery procedure. Monitor reassignment is supported before job release; existing native reviewer jobs require a separate handover. The new setup tables are initialized automatically without deleting your existing demo or review records.
 
@@ -143,6 +145,7 @@ Create the output directory first. This exports source mappings, decisions and a
 python -m pytest -q
 node --check monitoring/static/dashboard.js
 node --check monitoring/static/setup.js
+node --check monitoring/static/connection.js
 ```
 
 Set `TEST_DATABASE_URL` to a **disposable** PostgreSQL database to run the same workflow/concurrency tests there; tests drop their schema. GitHub Actions provisions its own PostgreSQL service. SDK signature tests check the installed pinned package, while gateway tests mock remote responses. Live API access, native two-user sessions, job links, cross-team permissions, correction workflows and account limits remain pilot checks. Concurrent-user capacity has not been load-tested.

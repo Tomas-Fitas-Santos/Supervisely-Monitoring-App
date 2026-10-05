@@ -6,6 +6,9 @@ from unittest.mock import Mock
 import pytest
 
 from monitoring.service import WorkflowError
+from monitoring.db import EventConfig, EventMember, database, initialize
+from monitoring.setup import Setup
+from monitoring.connection import LocalConnection
 
 
 @pytest.fixture
@@ -13,8 +16,14 @@ def ui(monkeypatch, tmp_path):
     monkeypatch.setenv('LOCAL_DEVELOPMENT', 'true')
     monkeypatch.setenv('DATABASE_URL', f'sqlite:///{tmp_path}/ui.db')
     monkeypatch.setenv('MONITORING_TEAM_ID', '10')
+    monkeypatch.setenv('LOCAL_APP_HOME', str(tmp_path))
     module = importlib.import_module('monitoring.ui')
-    monkeypatch.setattr(module, 'settings', replace(module.settings, local=False))
+    engine, sessions = database(f'sqlite:///{tmp_path}/ui.db')
+    initialize(engine)
+    monkeypatch.setattr(module, 'sessions', sessions)
+    monkeypatch.setattr(module, 'setup', Setup(sessions, 10))
+    monkeypatch.setattr(module, 'connection', LocalConnection(sessions, tmp_path))
+    monkeypatch.setattr(module, 'settings', replace(module.settings, local=False, home=tmp_path))
     return module
 
 
@@ -84,3 +93,47 @@ def test_action_payload_is_read_from_current_request_not_shared_tab_state(ui):
     assert ui.request_form(first)['action'] == 'review'
     with pytest.raises(WorkflowError, match='Missing dashboard'):
         ui.request_form(NS(state=NS(state=None)))
+
+
+def test_native_membership_does_not_bypass_event_monitor_group(ui, monkeypatch):
+    with ui.sessions.begin() as s:
+        c = s.get(EventConfig, 1)
+        c.owner_id, c.monitoring_team_id, c.annotator_team_id = 99, 10, 20
+        s.add(EventMember(user_id=90, group='annotators', login='alice', name='Alice'))
+    api = Mock(server_address=ui.settings.server_address)
+    api.user.get_my_info.return_value = NS(id=90)
+    api.user.get_member_info_by_id.return_value = NS(role='manager')
+    monkeypatch.setattr(ui.sly.env, 'user_from_multiuser_app', lambda: 90)
+    with pytest.raises(WorkflowError, match='Monitors group'):
+        ui.identity(NS(state=NS(api=api)))
+    with ui.sessions.begin() as s:
+        s.get(EventMember, 90).group = 'monitors'
+    assert ui.identity(NS(state=NS(api=api)))[0] == 90
+
+
+def test_fresh_hosted_event_claim_requires_launch_team_admin(ui, monkeypatch):
+    monkeypatch.setattr(ui, 'setup', Setup(ui.sessions, 0))
+    monkeypatch.setattr(ui, 'settings', replace(ui.settings, launch_team_id=10))
+    api = Mock(server_address=ui.settings.server_address)
+    api.user.get_my_info.return_value = NS(id=90, login='organiser')
+    api.user.get_member_info_by_id.return_value = NS(role='manager')
+    monkeypatch.setattr(ui.sly.env, 'user_from_multiuser_app', lambda: 90)
+    with pytest.raises(WorkflowError, match='Admin'):
+        ui.identity(NS(state=NS(api=api)))
+    api.user.get_member_info_by_id.return_value = NS(role='admin')
+    assert ui.identity(NS(state=NS(api=api)))[0] == 90
+    c = ui.event_config()
+    assert c.owner_id == 90 and c.local_token is None
+    api.user.get_my_info.return_value = NS(id=91, login='other')
+    monkeypatch.setattr(ui.sly.env, 'user_from_multiuser_app', lambda: 91)
+    with pytest.raises(WorkflowError, match='Only the organiser'):
+        ui.identity(NS(state=NS(api=api)))
+
+
+def test_connection_endpoint_is_local_only_and_rejects_foreign_origin(ui, monkeypatch):
+    import asyncio
+    request = NS(client=NS(host='127.0.0.1'), headers={}, base_url='http://127.0.0.1:8000/')
+    assert asyncio.run(ui.connect(request)).status_code == 403
+    monkeypatch.setattr(ui, 'settings', replace(ui.settings, local=True))
+    request.headers['origin'] = 'https://foreign.example'
+    assert asyncio.run(ui.connect(request)).status_code == 403

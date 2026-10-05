@@ -10,7 +10,8 @@ class Gateway:
         self.api = api
 
     def member(self, monitoring_team_id, user_id):
-        if not self.api.user.get_member_info_by_id(monitoring_team_id, user_id):
+        member = self.api.user.get_member_info_by_id(monitoring_team_id, user_id)
+        if not member or getattr(member, 'disabled', False):
             raise WorkflowError("You must be a member of the monitoring team.")
 
     def validate(self, team, batch):

@@ -7,3 +7,4 @@ __pycache__/
 exports/
 local-manifest.json
 data/uploads/
+data/

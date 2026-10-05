@@ -6,7 +6,7 @@ from .service import WorkflowError
 class SetupGateway(Gateway):
     def organiser(self, monitoring_team_id, user_id):
         member = self.api.user.get_member_info_by_id(monitoring_team_id, user_id)
-        if not member or member.role != 'admin':
+        if not member or getattr(member, 'disabled', False) or member.role != 'admin':
             raise WorkflowError('Event setup requires the Admin role in the monitoring team.')
 
     @staticmethod
@@ -29,8 +29,9 @@ class SetupGateway(Gateway):
                             for d in self.api.dataset.get_list(p.id):
                                 datasets.append({'id': d.id, 'name': f'{w.name} / {p.name} / {d.name}',
                                                  'kind': 'images' if p.type == 'images' else 'video'})
-        monitors = [self.user_view(u) for u in self.api.user.get_team_members(monitoring_team_id)
+        monitors = ([self.user_view(u) for u in self.api.user.get_team_members(monitoring_team_id)
                     if not u.disabled and u.role in ('admin', 'manager')]
+                    if monitoring_team_id and monitoring_team_id in {t.id for t in teams} else [])
         return {'users': sorted(users.values(), key=lambda u: u['login']), 'monitors': monitors,
                 'workspaces': [w for w in workspaces if w['team_id'] == monitoring_team_id],
                 'datasets': datasets, 'remote_teams': [{'id': t.id, 'name': t.name} for t in teams]}

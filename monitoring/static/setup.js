@@ -5,14 +5,23 @@ Vue.component('nightjar-setup', {
     return { busy: false, clientError: '', teamName: '', login1: '', login2: '', monitorId: null,
       existingTeam: null, assignments: {}, files: [], workspaceId: null, projectName: '', kind: 'images',
       metaText: '', selectedDatasets: [], selectedTeams: [], replicas: 1, batchUnits: '', imageUnits: '',
-      pilot: true, withAnnotations: false, progress: '', inspectionNote: '' };
+      pilot: true, withAnnotations: false, progress: '', inspectionNote: '',
+      monitorGroupName: 'Monitors', annotatorGroupName: 'Annotators', existingMonitorGroup: null, existingAnnotatorGroup: null,
+      monitorLogins: '', annotatorLogins: '', candidateMonitorIds: [] };
   },
   computed: {
     catalog() { return this.view.catalog || {}; },
     setup() { return this.view.setup || {}; },
     roster() { return this.setup.roster || []; },
-    monitors() { return this.catalog.monitors || []; },
-    readyTeams() { return this.roster.filter(t => !t.has_batches); },
+    groups() { return this.setup.groups || {ready: false, monitors: [], annotators: []}; },
+    monitors() { return this.groups.ready ? this.groups.monitors : (this.catalog.monitors || []); },
+    unpairedAnnotators() {
+      const paired = new Set(this.roster.flatMap(t => t.annotator_ids));
+      return (this.groups.annotators || []).filter(u => !paired.has(u.id));
+    },
+    unassignedPairs() { return this.roster.filter(t => !t.monitor_id); },
+    participantTeams() { return (this.catalog.remote_teams || []).filter(t => ![this.groups.monitoring_team_id, this.groups.annotator_team_id].includes(t.id)); },
+    readyTeams() { return this.roster.filter(t => !t.has_batches && t.monitor_id); },
     blocked() { return !!this.setup.blocked_by; },
     preview() { return this.view.preview; },
     accept() { return this.kind === 'images' ? '.jpg,.jpeg,.png,.bmp,.webp,.tif,.tiff' : '.mp4,.avi,.mov,.mkv,.webm'; }
@@ -35,9 +44,27 @@ Vue.component('nightjar-setup', {
       catch (e) { this.clientError = e.message; }
       finally { this.busy = false; }
     },
-    createTeam() {
-      return this.run('team', { operation_id: this.id(), name: this.teamName,
+    createGroups() {
+      return this.run('groups', {operation_id: this.id(), monitor_group_name: this.monitorGroupName,
+        annotator_group_name: this.annotatorGroupName, existing_monitor_group: this.existingMonitorGroup,
+        existing_annotator_group: this.existingAnnotatorGroup});
+    },
+    async addMembers(group) {
+      const text = group === 'monitors' ? this.monitorLogins : this.annotatorLogins;
+      await this.run('members', {operation_id: this.id(), member_group: group,
+        member_logins: text.split(/\r?\n/).map(v => v.trim()).filter(Boolean)});
+      if (!this.clientError) this[group === 'monitors' ? 'monitorLogins' : 'annotatorLogins'] = '';
+    },
+    appendLogin(group, login) {
+      if (!login) return;
+      const key = group === 'monitors' ? 'monitorLogins' : 'annotatorLogins';
+      const list = this[key].split(/\r?\n/).filter(Boolean);
+      if (!list.includes(login)) this[key] = [...list, login].join('\n');
+    },
+    async createTeam() {
+      await this.run('team', { operation_id: this.id(), name: this.teamName,
         logins: [this.login1, this.login2], monitor_id: this.monitorId, existing_team_id: this.existingTeam });
+      if (!this.clientError) { this.teamName = ''; this.login1 = ''; this.login2 = ''; this.monitorId = null; this.existingTeam = null; }
     },
     assign(t) {
       return this.run('assign', { operation_id: this.id(), setup_team_id: t.id,
@@ -97,22 +124,68 @@ Vue.component('nightjar-setup', {
           :disabled="busy || !inspectionNote.trim()">Record inspection and unblock setup</button>
       </template>
     </div>
-    <div class="nj-columns">
-      <div class="nj-panel"><h3>1. Register a participant pair</h3>
-        <p class="nj-muted">Enter exact logins or choose users you can access. New accounts are not created.</p>
+    <div v-if="!groups.ready" class="nj-panel"><h3>1. Create the event groups</h3>
+      <p class="nj-muted">Create one group for monitors and one for annotators. The app keeps their Supervisely IDs for you.</p>
+      <div class="nj-columns"><div>
+        <label class="nj-field">Monitors group name<input v-model="monitorGroupName" maxlength="180"></label>
+        <label v-if="view.connection && view.connection.local" class="nj-field">Supervisely team<select v-model="existingMonitorGroup"><option :value="null">Create a new monitors group</option>
+          <option v-for="t in catalog.remote_teams || []" :key="t.id" :value="t.id">Use {{ t.name }}</option></select></label>
+        <p v-else class="nj-muted">The monitors group uses the team where this shared app session is running.</p>
+      </div><div>
+        <label class="nj-field">Annotators group name<input v-model="annotatorGroupName" maxlength="180"></label>
+        <label class="nj-field">Supervisely team<select v-model="existingAnnotatorGroup"><option :value="null">Create a new annotators group</option>
+          <option v-for="t in catalog.remote_teams || []" :key="t.id" :value="t.id">Use {{ t.name }}</option></select></label>
+      </div></div>
+      <button class="nj-primary" @click="createGroups" :disabled="busy || blocked || !monitorGroupName.trim() || !annotatorGroupName.trim()">Create event groups</button>
+    </div>
+    <div v-if="groups.ready" class="nj-columns">
+      <div v-for="group in ['monitors', 'annotators']" :key="group" class="nj-panel">
+        <h3>{{ group === 'monitors' ? 'Monitors' : 'Annotators' }} group · {{ groups[group].length }} people</h3>
+        <p class="nj-muted">Choose registered users below or enter their exact logins, one per line.</p>
+        <select aria-label="Choose a registered user" @change="appendLogin(group, $event.target.value); $event.target.value = ''"><option value="">Choose a registered user</option>
+          <option v-for="u in catalog.users || []" :key="u.id" :value="u.login">{{ u.name }} · {{ u.login }}</option></select>
+        <label v-if="group === 'monitors'" class="nj-field">Monitor logins<textarea v-model="monitorLogins" rows="3" placeholder="One login per line"></textarea></label>
+        <label v-else class="nj-field">Annotator logins<textarea v-model="annotatorLogins" rows="3" placeholder="One login per line"></textarea></label>
+        <div class="nj-actions"><button @click="addMembers(group)" :disabled="busy || blocked || !(group === 'monitors' ? monitorLogins : annotatorLogins).trim()">Add people to group</button>
+          <button v-if="group === 'monitors' && view.connection.login" @click="appendLogin(group, view.connection.login)">Include my account</button></div>
+        <div class="nj-contribution" v-for="u in groups[group]" :key="u.id"><span>{{ u.name }} · {{ u.login }}</span>
+          <button @click="run('member_remove', {operation_id: id(), member_user_id: u.id})" :disabled="busy || blocked">Remove</button></div>
+      </div>
+    </div>
+    <div v-if="groups.ready">
+      <div class="nj-panel"><h3>2. Create a participant pair</h3>
+        <p class="nj-muted">Choose two unpaired people from the Annotators group. Assign a monitor now or distribute pairs in the next step.</p>
         <label class="nj-field">Team name<input v-model="teamName" maxlength="180" placeholder="Your pilot team name"></label>
         <label class="nj-field">Participant team<select v-model="existingTeam"><option :value="null">Create a new Supervisely team</option>
-          <option v-for="t in catalog.remote_teams || []" :key="t.id" :value="t.id">Use existing: {{ t.name }} · {{ t.id }}</option></select></label>
-        <datalist id="nj-user-logins"><option v-for="u in catalog.users || []" :key="u.id" :value="u.login">{{ u.name }}</option></datalist>
-        <div class="nj-form-row"><label>First annotator login<input list="nj-user-logins" v-model="login1" autocomplete="off"></label>
-          <label>Second annotator login<input list="nj-user-logins" v-model="login2" autocomplete="off"></label></div>
-        <label class="nj-field">Assigned monitor<select v-model="monitorId"><option :value="null">Choose a monitor</option>
+          <option v-for="t in participantTeams" :key="t.id" :value="t.id">Use existing: {{ t.name }} · {{ t.id }}</option></select></label>
+        <div class="nj-form-row"><label>First annotator<select v-model="login1"><option value="">Choose an annotator</option>
+          <option v-for="u in unpairedAnnotators" :key="u.id" :value="u.login" :disabled="u.login === login2">{{ u.name }} · {{ u.login }}</option></select></label>
+          <label>Second annotator<select v-model="login2"><option value="">Choose an annotator</option>
+          <option v-for="u in unpairedAnnotators" :key="u.id" :value="u.login" :disabled="u.login === login1">{{ u.name }} · {{ u.login }}</option></select></label></div>
+        <label class="nj-field">Assigned monitor<select v-model="monitorId"><option :value="null">Assign later</option>
           <option v-for="u in monitors" :key="u.id" :value="u.id">{{ u.login }} · {{ u.id }}</option></select></label>
-        <p class="nj-muted">Monitors must be Admins or Managers in the monitoring team. The selected monitor receives Manager permissions in the participant team.</p>
-        <button class="nj-primary" @click="createTeam" :disabled="busy || blocked || !teamName.trim() || !login1.trim() || !login2.trim() || !monitorId">Register team and assign monitor</button>
+        <p class="nj-muted">The assigned monitor receives reviewer/manager access to this pair. Unassigned pairs stay out of data distribution.</p>
+        <button class="nj-primary" @click="createTeam" :disabled="busy || blocked || !teamName.trim() || !login1.trim() || !login2.trim()">Create participant pair</button>
       </div>
-      <div class="nj-panel"><h3>2. Upload source data</h3>
-        <p class="nj-muted">Upload files here, or use an existing dataset from the monitoring team in step 3. Keep images and videos in separate projects.</p>
+    </div>
+    <div v-if="roster.length" class="nj-panel"><h3>3. Distribute pairs to monitors</h3>
+      <p v-if="unassignedPairs.length">{{ unassignedPairs.length }} pairs need a monitor.</p>
+      <div v-if="unassignedPairs.length" class="nj-allocation">
+        <p class="nj-muted">Select monitors for a balanced proposal, or assign each pair manually below.</p>
+        <label v-for="m in monitors" :key="m.id" class="nj-check"><input type="checkbox" v-model="candidateMonitorIds" :value="m.id">{{ m.name }} · {{ m.login }}</label>
+        <button @click="run('balance_preview', {monitor_ids: candidateMonitorIds})" :disabled="busy || blocked || !candidateMonitorIds.length">Preview balanced assignments</button>
+        <div v-if="view.assignment_plan_id"><p v-for="row in view.assignment_preview" :key="row.team_id">{{ row.team_name }} → {{ monitorName(row.monitor_id) }}</p>
+          <button class="nj-primary" @click="run('balance_apply', {assignment_plan_id: view.assignment_plan_id})" :disabled="busy || blocked">Apply monitor assignments</button></div>
+      </div>
+      <div class="nj-table-scroll"><table class="nj-table"><thead><tr><th>Participant team</th><th>Annotators</th><th>Monitor</th><th></th></tr></thead>
+        <tbody><tr v-for="t in roster" :key="t.id"><td>{{ t.name }} · {{ t.id }}</td><td>{{ t.annotator_ids.join(' / ') }}</td>
+          <td><select :value="assignments[t.id] || t.monitor_id" @change="$set(assignments, t.id, Number($event.target.value))">
+            <option :value="0" disabled>Unassigned</option><option v-for="u in monitors" :key="u.id" :value="u.id">{{ u.login }} · {{ u.id }}</option></select></td>
+          <td><button @click="assign(t)" :disabled="busy || blocked || !(assignments[t.id] || t.monitor_id)">Save assignment</button></td></tr></tbody></table></div>
+      <p class="nj-muted">Assignments control what each monitor can see in this app. Reassign before jobs are released. Existing Supervisely memberships remain unchanged.</p>
+    </div>
+    <div v-if="groups.ready" class="nj-panel"><h3>4. Upload source data</h3>
+        <p class="nj-muted">Upload files here, or use an existing dataset from the monitoring team in step 5. Keep images and videos in separate projects.</p>
         <label class="nj-field">Workspace<select v-model="workspaceId"><option :value="null">Choose a monitoring workspace</option>
           <option v-for="w in catalog.workspaces || []" :key="w.id" :value="w.id">{{ w.name }}</option></select></label>
         <div class="nj-form-row"><label>Source project name<input v-model="projectName" maxlength="180"></label>
@@ -125,16 +198,7 @@ Vue.component('nightjar-setup', {
         <button class="nj-primary" @click="upload" :disabled="busy || blocked || !workspaceId || !projectName.trim() || !files.length">Upload dataset to Supervisely</button>
         <p v-if="progress" role="status">{{ progress }}</p>
       </div>
-    </div>
-    <div v-if="roster.length" class="nj-panel"><h3>Team-to-monitor assignments</h3>
-      <div class="nj-table-scroll"><table class="nj-table"><thead><tr><th>Participant team</th><th>Annotators</th><th>Monitor</th><th></th></tr></thead>
-        <tbody><tr v-for="t in roster" :key="t.id"><td>{{ t.name }} · {{ t.id }}</td><td>{{ t.annotator_ids.join(' / ') }}</td>
-          <td><select :value="assignments[t.id] || t.monitor_id" @change="$set(assignments, t.id, Number($event.target.value))">
-            <option v-for="u in monitors" :key="u.id" :value="u.id">{{ u.login }} · {{ u.id }}</option></select></td>
-          <td><button @click="assign(t)" :disabled="busy || blocked">Save assignment</button></td></tr></tbody></table></div>
-      <p class="nj-muted">Assignments control what each monitor can see in this app. Reassign before jobs are released. Existing Supervisely memberships remain unchanged.</p>
-    </div>
-    <div class="nj-panel"><h3>3. Preview data distribution</h3>
+    <div v-if="groups.ready" class="nj-panel"><h3>5. Preview data distribution</h3>
       <p class="nj-muted">Choose your actual teams and source inventory. A pilot can use fewer than three replicas and can contain images only.</p>
       <div class="nj-columns">
         <div><h4>Source datasets</h4><label v-for="d in catalog.datasets || []" :key="d.id" class="nj-check">

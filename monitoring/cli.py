@@ -41,7 +41,10 @@ def main():
         manifest = Manifest.model_validate_json(Path(args.manifest).read_text())
         print(json.dumps(manifest.coverage(), indent=2))
         return
-    engine, sessions = database(os.environ['DATABASE_URL'])
+    from .settings import Settings
+    settings = Settings.load()
+    url = os.environ['DATABASE_URL'] if args.command == 'demo' else settings.database_url
+    engine, sessions = database(url)
     initialize(engine)
     if args.command == 'import':
         import supervisely as sly

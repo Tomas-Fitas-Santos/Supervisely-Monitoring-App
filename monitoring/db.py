@@ -101,6 +101,27 @@ class Upload(Base):
     consumed: Mapped[bool] = mapped_column(default=False)
 
 
+class EventConfig(Base):
+    __tablename__ = "event_config"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    owner_id: Mapped[int | None] = mapped_column(nullable=True)
+    server_address: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    owner_login: Mapped[str | None] = mapped_column(String(180), nullable=True)
+    monitoring_team_id: Mapped[int | None] = mapped_column(nullable=True)
+    annotator_team_id: Mapped[int | None] = mapped_column(nullable=True)
+    source_workspace_id: Mapped[int | None] = mapped_column(nullable=True)
+    # Only a local organiser credential is persisted. Hosted session tokens are never stored.
+    local_token: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class EventMember(Base):
+    __tablename__ = "event_members"
+    user_id: Mapped[int] = mapped_column(primary_key=True)
+    group: Mapped[str] = mapped_column(String(20), index=True)
+    login: Mapped[str] = mapped_column(String(180), unique=True)
+    name: Mapped[str] = mapped_column(String(180))
+
+
 def database(url: str):
     opts = {"connect_args": {"check_same_thread": False, "timeout": 30}} if url.startswith("sqlite") else {}
     engine = create_engine(url, pool_pre_ping=True, **opts)
@@ -115,3 +136,5 @@ def initialize(engine):
             session.add(Lease(name="poll"))
         if not session.get(SetupState, 1):
             session.add(SetupState(id=1))
+        if not session.get(EventConfig, 1):
+            session.add(EventConfig(id=1))
