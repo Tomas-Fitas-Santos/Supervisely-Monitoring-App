@@ -1,0 +1,1 @@
+No real videos are included in this tiny photo demo. Add authorised source videos here for a live pilot. The image files are real CC0 bird photographs; see ../../image-credits.json. Folder and team counts in this sample are demonstration inputs, not event estimates.

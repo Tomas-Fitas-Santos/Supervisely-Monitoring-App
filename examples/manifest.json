@@ -1,0 +1,27 @@
+{
+  "teams": [
+    {
+      "id": 101,
+      "name": "Example participant pair",
+      "monitor_id": 900,
+      "annotator_ids": [901, 902],
+      "batches": [
+        {
+          "id": "example-pair-batch-1",
+          "kind": "images",
+          "dataset_id": 301,
+          "assets": [
+            {"source_id": "original-image-a", "entity_id": 501},
+            {"source_id": "original-image-b", "entity_id": 502}
+          ]
+        },
+        {
+          "id": "example-pair-final-video",
+          "kind": "video",
+          "dataset_id": 302,
+          "assets": [{"source_id": "original-video-a", "entity_id": 601, "frames": 240}]
+        }
+      ]
+    }
+  ]
+}
