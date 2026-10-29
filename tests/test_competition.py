@@ -170,3 +170,17 @@ def test_additive_schema_upgrade_keeps_legacy_work_and_reviews(service):
         assert s.get(Team,1).name=='Team A'
         assert s.scalar(select(Review)).note=='Legacy evidence'
         assert s.get(CompetitionConfig,1).frozen is False
+
+
+def test_legacy_video_capture_must_be_reindexed_after_freezing_new_frame_rules(service):
+    comp=Competition(service.sessions)
+    reader=Reader();reader.payload={'meta':{},'annotations':{'201':{'size':{'height':100,'width':100},'objects':[],'frames':[],'tags':[]}}}
+    with service.sessions.begin() as s:
+        b=s.get(Batch,'av');b.state='active';b.job_ids=[71]
+    t,b=service.spec(90,1,'av');old=comp.refresh(reader,t,b)
+    assert comp.page(90,'av')['stats']['total']==90
+    cfg=comp.config();comp.save_rules(90,cfg['revision'],{**cfg['rules'],'frame_step':10},True)
+    with pytest.raises(WorkflowError,match='frame rules changed'):
+        comp.assess(90,'av',old,201,0,'unit','whole','good')
+    t,b=service.spec(90,1,'av');new=comp.refresh(reader,t,b)
+    assert new!=old and comp.page(90,'av')['stats']['total']==9

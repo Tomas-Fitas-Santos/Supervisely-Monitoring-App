@@ -139,3 +139,26 @@ def test_demo_reset_is_isolated_backed_up_and_can_rehearse_again(demo):
     assert not Competition(service.sessions).config()['frozen']
     prepare(demo)
     assert len(setup.roster())==3
+
+
+def test_video_handover_is_limited_to_the_pair_and_keeps_one_native_owner(demo):
+    from monitoring.event_actions import video_handover
+    from monitoring.gateway import Gateway
+    comp,t,b,sid=prepare(demo);service,api,gw,setup=demo
+    workspace=api.workspace.get_list(t.id)[0]
+    project=api.project.create(workspace.id,'Video ownership pilot',type='videos')
+    dataset=api.dataset.create(project.id,'Complete video')
+    native=api.store.add('media',{'kind':'video','name':'clip.mp4','dataset_id':dataset.id,'project_id':project.id,'frames_count':3})
+    jobs=api.labeling_job.create(name='video handover fixture',dataset_id=dataset.id,user_ids=[t.annotator_ids[0]],images_ids=[native.id],reviewer_id=900)
+    with service.sessions.begin() as s:
+        s.add(Batch(id='whole_video',team_id=t.id,position=99,kind='video',dataset_id=dataset.id,
+            assets=[{'source_id':'video-fixture','entity_id':native.id,'frames':3,'assignee_id':t.annotator_ids[0]}],
+            state='active',job_ids=[jobs[0].id],remote_status='in_progress'))
+    current,video=service.spec(900,t.id,'whole_video')
+    with pytest.raises(WorkflowError,match='participants'):
+        video_handover(service,setup,gw,900,video.id,current.revision,99999)
+    assert api.labeling_job.get_info_by_id(jobs[0].id).assigned_to_id==t.annotator_ids[0]
+    video_handover(service,setup,gw,900,video.id,current.revision,t.annotator_ids[1])
+    current,video=service.spec(900,t.id,'whole_video')
+    assert api.labeling_job.get_info_by_id(jobs[0].id).assigned_to_id==t.annotator_ids[1]
+    assert Gateway.slices(current,video)==[(t.annotator_ids[1],[native.id])]
