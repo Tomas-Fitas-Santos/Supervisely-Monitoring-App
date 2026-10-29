@@ -51,14 +51,13 @@ def test_pilot_can_use_one_pair_and_images_only():
     result = allocate([101], inventory(), replicas=1, batch_units=2, pilot=True)
     assert len(result[101]['image_batches']) == 2
     assert result[101]['video'] is None
-    with pytest.raises(ValueError):
-        allocate([101], inventory(), replicas=1, batch_units=2)
+    assert allocate([101], inventory(), replicas=1, batch_units=2)[101]['videos'] == []
 
 
 def test_entire_video_is_not_split_in_reduced_pilot():
     assets = inventory() + [{'source_id': 'video:9', 'kind': 'video', 'units': 73}]
     result = allocate([101, 102], assets, replicas=1, batch_units=2, pilot=True)
-    assert all(a['video']['units'] == 73 for a in result.values())
+    assert [v['units'] for a in result.values() for v in a['videos']] == [73]
     assert all(len(a['image_batches']) <= 2 for a in result.values())
 
 
@@ -91,10 +90,10 @@ def test_distribution_creates_independent_entities_and_locked_batches_once(setup
     assert gw.copy_group.call_count == 4
 
 
-def test_full_event_replication_rule_remains_enforced(setup):
+def test_full_event_replication_is_an_input_not_a_fixed_minimum(setup):
     roster(setup)
-    with pytest.raises(WorkflowError, match='three'):
-        setup.preview(gateway(), 90, [50], [101], 1, 2, 1, False, False)
+    _, preview = setup.preview(gateway(), 90, [50], [101], 1, 2, 1, False, False)
+    assert set(preview['coverage'].values()) == {1}
 
 
 def test_changed_source_inventory_invalidates_preview_without_creating_copies(setup):
@@ -177,7 +176,7 @@ def test_monitor_reassignment_changes_visibility_and_records_history(setup, serv
 def test_monitor_reassignment_refuses_active_native_jobs(service):
     setup = Setup(service.sessions, 10)
     service.reserve_release(90, 1, 'a1', 0)
-    with pytest.raises(WorkflowError, match='Reassign before releasing'):
+    with pytest.raises(WorkflowError, match='Reconcile the pending release'):
         setup.assign_monitor(gateway(), 90, 'assign_operation', 1, 91, 1)
 
 
@@ -242,7 +241,7 @@ def test_copy_maps_by_filename_even_if_api_reorders_result():
     api.image.copy_batch.return_value = [NS(id=22, dataset_id=6, name='2.jpg'), NS(id=21, dataset_id=6, name='1.jpg')]
     ds, assets = SetupGateway(api).copy_group(101, 'copy_operation', 1, inventory()[:2], {}, False, Mock())
     assert ds == 6
-    assert assets == [{'source_id': 'images:1', 'entity_id': 21}, {'source_id': 'images:2', 'entity_id': 22}]
+    assert [(a['source_id'], a['entity_id'], a['relative_path']) for a in assets] == [('images:1',21,'1.jpg'),('images:2',22,'2.jpg')]
     api.image.copy_batch.assert_called_once_with(6, [1, 2], with_annotations=False)
 
 

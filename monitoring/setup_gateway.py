@@ -4,6 +4,26 @@ from .service import WorkflowError
 
 
 class SetupGateway(Gateway):
+    def visible_accounts(self):
+        """Use accessible membership data; global listing is an optional capability."""
+        people = {}
+        for team in self.api.team.get_list():
+            for user in self.api.user.get_team_members(team.id):
+                people[user.id] = user
+        try:
+            for user in self.api.user.get_list():
+                people[user.id] = user
+        except Exception:
+            # A normal team Admin may not have instance-wide users.list permission.
+            pass
+        return list(people.values())
+
+    def lookup_login(self, login):
+        try:
+            return self.api.user.get_info_by_login(login)
+        except Exception:
+            return next((u for u in self.visible_accounts() if u.login == login), None)
+
     def organiser(self, monitoring_team_id, user_id):
         member = self.api.user.get_member_info_by_id(monitoring_team_id, user_id)
         if not member or getattr(member, 'disabled', False) or member.role != 'admin':
@@ -26,7 +46,7 @@ class SetupGateway(Gateway):
                 if team.id == monitoring_team_id:
                     for p in self.api.project.get_list(w.id):
                         if p.type in ('images', 'videos'):
-                            for d in self.api.dataset.get_list(p.id):
+                            for d in self.api.dataset.get_list(p.id, recursive=True):
                                 datasets.append({'id': d.id, 'name': f'{w.name} / {p.name} / {d.name}',
                                                  'kind': 'images' if p.type == 'images' else 'video'})
         monitors = ([self.user_view(u) for u in self.api.user.get_team_members(monitoring_team_id)
@@ -45,7 +65,7 @@ class SetupGateway(Gateway):
             for p in self.api.project.get_list(w.id):
                 if p.type not in ('images', 'videos'):
                     continue
-                for d in self.api.dataset.get_list(p.id):
+                for d in self.api.dataset.get_list(p.id, recursive=True):
                     datasets.append({'id': d.id, 'name': d.name, 'project': p.name, 'workspace': w.name,
                         'kind': 'images' if p.type == 'images' else 'video', 'items': d.items_count})
         return {'workspaces': workspaces, 'datasets': datasets}
@@ -72,7 +92,7 @@ class SetupGateway(Gateway):
         self.api.user.add_to_team_by_login(login, team_id, role_id)
         member = self.api.user.get_member_info_by_login(team_id, login)
         if not member or member.disabled:
-            raise WorkflowError(f'Could not verify active membership for {login}.')
+            raise WorkflowError(f'Invitation pending or membership unavailable for {login}. Accept the native team invitation, then inspect and resume setup.')
         return member
 
     def add_monitor(self, team_id, monitor):
@@ -109,25 +129,58 @@ class SetupGateway(Gateway):
                     raise WorkflowError('A video is not ready or has no valid frame count.')
                 assets.append({'source_id': f'{kind}:{entity.id}', 'entity_id': entity.id,
                     'dataset_id': d.id, 'project_id': p.id, 'name': entity.name, 'kind': kind,
-                    'frames': frames, 'units': frames if kind == 'video' else image_units})
+                    'frames': frames, 'units': frames if kind == 'video' else image_units,
+                    'stratum': str(getattr(d, 'parent_id', None) or d.id),
+                    'relative_path': f'{p.name}/{d.name}/{entity.name}'})
+        if self.sessions:
+            from .db import SourceOrigin
+            with self.sessions() as session:
+                for asset in assets:
+                    origin = session.get(SourceOrigin, asset['source_id'])
+                    if origin:
+                        asset.update(relative_path=origin.relative_path, checksum=origin.checksum)
         return assets, metas
 
     def upload(self, monitoring_team_id, workspace_id, name, kind, paths, meta, checkpoint):
+        from pathlib import PurePosixPath
+        import hashlib
         workspace = self.api.workspace.get_info_by_id(workspace_id)
         if not workspace or workspace.team_id != monitoring_team_id:
             raise WorkflowError('Upload destination must be a workspace in the monitoring team.')
-        p = self.api.project.create(workspace_id, name, type='images' if kind == 'images' else 'videos')
-        checkpoint({'project_id': p.id})
-        self.api.project.update_meta(p.id, meta)
-        d = self.api.dataset.create(p.id, 'source')
-        checkpoint({'dataset_id': d.id})
-        api = self.api.image if kind == 'images' else self.api.video
+        from .setup import EXTENSIONS
+        projects, datasets, uploaded = {}, {}, []
         for filename, path in paths:
-            entities = api.upload_paths(d.id, [filename], [str(path)])
+            parts = PurePosixPath(filename).parts
+            media_kind = next((k for k, exts in EXTENSIONS.items() if k != 'mixed' and path.suffix.lower() in exts), None)
+            if media_kind is None or (kind != 'mixed' and media_kind != kind):
+                raise WorkflowError('Unsupported media type in dataset folder.')
+            if media_kind not in projects:
+                project = self.api.project.create(workspace_id, name + (' images' if media_kind == 'images' else ' videos'),
+                                                  type='images' if media_kind == 'images' else 'videos')
+                projects[media_kind] = project
+                checkpoint({'project_id': project.id})
+                self.api.project.update_meta(project.id, meta)
+            project = projects[media_kind]
+            parent = None
+            folders = parts[:-1] or ('source',)
+            for i, folder in enumerate(folders):
+                key = (media_kind, folders[:i+1])
+                if key not in datasets:
+                    ds = self.api.dataset.create(project.id, folder, **({'parent_id': parent} if parent else {}))
+                    datasets[key] = ds
+                    checkpoint({'dataset_id': ds.id})
+                parent = datasets[key].id
+            api = self.api.image if media_kind == 'images' else self.api.video
+            entities = api.upload_paths(parent, [parts[-1]], [str(path)])
             if len(entities) != 1:
-                raise WorkflowError('Unexpected upload response. Inspect the source project before retrying.')
+                raise WorkflowError('Unexpected upload response. Inspect resources before retrying.')
             checkpoint({'uploaded': [entities[0].id]})
-        return {'project_id': p.id, 'dataset_id': d.id, 'name': name}
+            with path.open('rb') as source_file:
+                checksum = hashlib.file_digest(source_file, 'sha256').hexdigest()
+            uploaded.append({'source_id': f'{media_kind}:{entities[0].id}', 'relative_path': filename,
+                             'checksum': checksum})
+        return {'project_id': next(iter(projects.values())).id, 'dataset_id': next(reversed(datasets.values())).id,
+                'project_ids': [p.id for p in projects.values()], 'dataset_ids': [d.id for d in datasets.values()], 'sources': uploaded}
 
     def copy_group(self, team_id, operation_id, index, group, meta, with_annotations, checkpoint):
         # One destination dataset per batch keeps source filenames and metadata unambiguous.
@@ -152,7 +205,7 @@ class SetupGateway(Gateway):
             e = by_name.get(a['name'])
             if not e or e.id == a['entity_id'] or e.dataset_id != d.id:
                 raise WorkflowError('Copied entities could not be mapped to their original sources.')
-            mapped = {'source_id': a['source_id'], 'entity_id': e.id}
+            mapped = {'source_id': a['source_id'], 'entity_id': e.id, 'relative_path': a.get('relative_path', a['name']), 'effort': a['units']}
             if kind == 'video':
                 if e.frames_count != a['frames']:
                     raise WorkflowError('Copied video frame count differs from the original.')

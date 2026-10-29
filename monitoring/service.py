@@ -12,11 +12,14 @@ class Service:
         self.sessions = sessions
         self.stale_after = stale_after
 
-    def _team(self, session, user_id, team_id, revision=None):
+    def _team(self, session, user_id, team_id, revision=None, operation_id=None):
         team = session.get(Team, team_id)
         if team is None or team.monitor_id != user_id:
             raise WorkflowError("This team is not assigned to you.")
         if revision is not None:
+            setup = session.get(SetupState, 1)
+            if setup and setup.operation_id and setup.operation_id != operation_id:
+                raise WorkflowError('Setup or reviewer handover is running or needs inspection.')
             changed = session.execute(update(Team).where(
                 Team.id == team_id, Team.revision == revision
             ).values(revision=Team.revision + 1))
@@ -36,17 +39,21 @@ class Service:
         session.add(Audit(team_id=team_id, batch_id=batch_id, actor_id=user_id,
                           action=action, details=details))
 
-    def snapshot(self, user_id):
+    def snapshot(self, user_id, organiser=False):
         with self.sessions() as s:
-            teams = list(s.scalars(select(Team).where(Team.monitor_id == user_id).order_by(Team.name)))
+            teams = list(s.scalars((select(Team) if organiser else select(Team).where(Team.monitor_id == user_id)).order_by(Team.name)))
             result = []
             for team in teams:
                 batches = list(s.scalars(select(Batch).where(Batch.team_id == team.id).order_by(Batch.position)))
                 entries = []
+                from .db import EventClosure, Submission
+                closed = s.get(EventClosure, 1) is not None
                 for b in batches:
                     statuses = b.remote_status.split(',')
                     submitted = (b.state not in ('locked', 'releasing') and bool(statuses)
                         and all(v in ('on_review', 'completed', 'review_completed') for v in statuses))
+                    if closed and s.scalar(select(Submission.id).where(Submission.batch_id == b.id).limit(1)):
+                        submitted = True
                     reviews = list(s.scalars(select(Review).where(Review.batch_id == b.id).order_by(Review.updated_at.desc())))
                     entries.append({
                         'id': b.id, 'position': b.position, 'kind': b.kind, 'state': b.state,
@@ -60,14 +67,21 @@ class Service:
                                      'decision': r.decision, 'note': r.note, 'monitor_id': r.monitor_id,
                                      'updated_at': r.updated_at} for r in reviews],
                         'open_flags': sum(r.decision == 'correction' for r in reviews),
+                        'jobs': self._jobs(s, b),
                     })
-                result.append({'id': team.id, 'name': team.name, 'revision': team.revision,
+                result.append({'id': team.id, 'name': team.name, 'monitor_id': team.monitor_id, 'revision': team.revision,
                                'annotator_ids': team.annotator_ids, 'batches': entries})
-            return {'teams': result, 'refreshed_at': now(), 'user_id': user_id}
+            return {'teams': result, 'refreshed_at': now(), 'user_id': user_id, 'organiser_view': organiser}
 
-    def spec(self, user_id, team_id, batch_id):
+    @staticmethod
+    def _jobs(session, batch):
+        from .db import TaskProgress
+        return [row.details for row in session.scalars(select(TaskProgress).where(TaskProgress.job_id.in_(batch.job_ids)))]
+
+    def spec(self, user_id, team_id, batch_id, organiser=False):
         with self.sessions() as s:
-            team = self._team(s, user_id, team_id)
+            team = s.get(Team, team_id) if organiser else self._team(s, user_id, team_id)
+            if not team: raise WorkflowError('Team not found.')
             batch = self._batch(s, team_id, batch_id)
             return team, batch
 
@@ -97,11 +111,11 @@ class Service:
             self._audit(s, team_id, batch_id, user_id, 'review', {
                 'entity_id': entity_id, 'frame_index': frame_index, 'decision': decision, 'note': note.strip()})
 
-    def approve(self, user_id, team_id, batch_id, revision, note):
+    def approve(self, user_id, team_id, batch_id, revision, note, operation_id=None):
         if not note.strip() or len(note) > 4000:
             raise WorkflowError("Record what you inspected before approving the batch.")
         with self.sessions.begin() as s:
-            self._team(s, user_id, team_id, revision)
+            self._team(s, user_id, team_id, revision, operation_id)
             b = self._batch(s, team_id, batch_id)
             if b.state != 'active' or b.sync_error or not b.synced_at or now() - b.synced_at > self.stale_after:
                 raise WorkflowError("Approval requires an active batch with fresh successful progress data.")
@@ -111,13 +125,22 @@ class Service:
             if b.kind == 'images' and (b.total != len(b.assets) or b.completed != b.total):
                 raise WorkflowError("Not all assigned images are complete.")
             reviews = list(s.scalars(select(Review).where(Review.batch_id == batch_id)))
-            if not reviews or any(r.decision == 'correction' for r in reviews):
+            from .competition import Competition
+            competition = Competition(self.sessions)
+            if competition.config()['frozen']:
+                competition.ensure_accepted(batch_id)
+            elif not reviews or any(r.decision == 'correction' for r in reviews):
                 raise WorkflowError("Inspect a sample and resolve all correction flags first.")
             b.state = 'approved'
             self._audit(s, team_id, batch_id, user_id, 'approve', {'note': note.strip()})
 
     def reserve_release(self, user_id, team_id, batch_id, revision):
         with self.sessions.begin() as s:
+            from .db import EventClosure
+            from .competition import Competition
+            rules = Competition(self.sessions).config()['rules']
+            if s.get(EventClosure, 1) or (rules['deadline'] and now() >= rules['deadline']):
+                raise WorkflowError('The event is closed or its deadline has passed.')
             setup = s.get(SetupState, 1)
             if setup and setup.operation_id:
                 raise WorkflowError('Event setup is running or needs inspection. Release after setup is complete.')
@@ -127,8 +150,18 @@ class Service:
             next_batch = next((v for v in batches if v.state == 'locked'), None)
             if next_batch is None or next_batch.id != batch_id:
                 raise WorkflowError("Release the next locked batch in sequence.")
-            if any(v.state != 'approved' for v in batches if v.position < b.position):
-                raise WorkflowError("Approve all earlier batches and resolve their corrections first.")
+            from .competition import Competition
+            gate = Competition(self.sessions).config()['rules']['release_gate']
+            def passed(v):
+                states = v.remote_status.split(',')
+                corrections = s.scalar(select(Review.id).where(Review.batch_id == v.id, Review.decision == 'correction').limit(1))
+                if corrections:
+                    return False
+                return v.state == 'approved' or (gate == 'submission' and v.state == 'active'
+                    and not v.sync_error and v.synced_at and now() - v.synced_at <= self.stale_after
+                    and all(status in ('on_review', 'completed', 'review_completed') for status in states))
+            if any(not passed(v) for v in batches if v.position < b.position):
+                raise WorkflowError('Earlier batches must satisfy the event submission/approval release rule.')
             b.state, b.release_key = 'releasing', f'nightjar:{b.id}'
             self._audit(s, team_id, batch_id, user_id, 'release_reserved', {'key': b.release_key})
 
@@ -156,6 +189,9 @@ class Service:
             b.remote_status = data['status']
             b.completed, b.total = data['completed'], data['total']
             b.synced_at, b.sync_error = now(), None
+            from .db import TaskProgress
+            for job in data.get('jobs', []):
+                s.merge(TaskProgress(job_id=job['id'], batch_id=batch_id, details=job))
 
     def sync_failed(self, batch_id):
         with self.sessions.begin() as s:

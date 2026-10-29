@@ -234,4 +234,5 @@ def test_unassignment_does_not_abandon_released_jobs(event):
                     dataset_id=50, assets=[{'entity_id': 501, 'source_id': 'a'}]))
     with pytest.raises(WorkflowError, match='handover'):
         event.unassign_monitor(99, 'remove_active', 101, 0, 90)
-    assert event.directory()['teams'][0]['can_assign'] is False
+    assert event.directory()['teams'][0]['can_assign'] is True
+    assert event.directory()['teams'][0]['can_unassign'] is False

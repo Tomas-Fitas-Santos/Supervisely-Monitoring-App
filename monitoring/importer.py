@@ -13,6 +13,9 @@ class AssetSpec(StrictModel):
     source_id: str = Field(min_length=1, max_length=200)
     entity_id: PositiveInt
     frames: PositiveInt | None = None
+    relative_path: str | None = Field(default=None, max_length=1000)
+    effort: PositiveInt | None = None
+    assignee_id: PositiveInt | None = None
 
 
 class BatchSpec(StrictModel):
@@ -43,9 +46,8 @@ class TeamSpec(StrictModel):
     def valid_sequence(self):
         if len(set([self.monitor_id, *self.annotator_ids])) != 3:
             raise ValueError('Two distinct annotators and a distinct monitor are required')
-        videos = [b.kind for b in self.batches].count('video')
-        if videos > 1 or (videos and self.batches[-1].kind != 'video'):
-            raise ValueError('At most one complete video is allowed, as the final batch')
+        if any(a.assignee_id and a.assignee_id not in self.annotator_ids for b in self.batches for a in b.assets):
+            raise ValueError('Video ownership must stay within the registered participant pair')
         return self
 
 
@@ -77,16 +79,18 @@ class Manifest(StrictModel):
                         raise ValueError('Source type or video length is inconsistent across replicas')
         return self
 
-    def coverage(self):
+    def coverage(self, minimum=1):
         counts = Counter(a.source_id for t in self.teams for b in t.batches for a in b.assets)
-        return {'replicas_by_source': dict(counts), 'under_replicated': [k for k, n in counts.items() if n < 3]}
+        return {'replicas_by_source': dict(counts), 'under_replicated': [k for k, n in counts.items() if n < minimum]}
 
 
-def import_manifest(sessions, manifest, gateway=None, monitoring_team_id=None, pilot=False):
-    if not pilot and any(t.batches[-1].kind != 'video' for t in manifest.teams):
-        raise ValueError('Each full-event team requires a final video. Use --pilot for an image-only rehearsal.')
-    if manifest.coverage()['under_replicated'] and not pilot:
-        raise ValueError('Each source requires at least three teams. Use --pilot for an explicitly reduced rehearsal.')
+def import_manifest(sessions, manifest, gateway=None, monitoring_team_id=None, pilot=False, replicas=1, require_final_video=False):
+    if replicas < 1:
+        raise ValueError('Replication must be positive.')
+    if require_final_video and any(not any(b.kind == 'video' for b in t.batches) for t in manifest.teams):
+        raise ValueError('The chosen event rule requires a complete video for each team.')
+    if manifest.coverage(replicas)['under_replicated']:
+        raise ValueError('Source coverage does not satisfy the requested replication.')
     if gateway:
         for t in manifest.teams:
             gateway.member(monitoring_team_id, t.monitor_id)

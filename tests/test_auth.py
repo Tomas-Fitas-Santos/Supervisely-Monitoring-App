@@ -197,3 +197,15 @@ def test_removed_assignment_clears_cached_media(ui, monkeypatch):
     api.user.get_member_info_by_id.return_value = NS(role='manager')
     ui.display_access(90, NS(api=api))
     assert data['dashboard']['review_preview'] is None
+
+
+def test_manager_cannot_enable_organiser_oversight_and_cached_admin_data_is_cleared(ui,monkeypatch):
+    import supervisely.app
+    data={'dashboard':{'registration_rows':[{'email':'private'}], 'unit_page':{},'review_preview':None}}
+    monkeypatch.setattr(supervisely.app,'DataJson',lambda:data)
+    monkeypatch.setattr(ui.dashboard,'display',Mock())
+    api=Mock();api.user.get_member_info_by_id.return_value=NS(role='manager',disabled=False)
+    monkeypatch.setattr(ui,'identity',lambda req:(90,NS(api=api)))
+    ui.action(NS(state=NS(state={'dashboard':{'action':'refresh','organiser_view':True}})))
+    assert data['dashboard']['can_setup'] is False and data['dashboard']['registration_rows']==[]
+    assert ui.dashboard.display.call_args.args[0]['organiser_view'] is False

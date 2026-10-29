@@ -10,7 +10,7 @@ from uuid import uuid4
 
 from sqlalchemy import select, update
 
-from .db import Audit, Batch, EventConfig, EventMember, SetupOperation, SetupState, Team, Upload
+from .db import Audit, Batch, EventConfig, EventMember, SetupOperation, SetupState, Team, Upload, UploadedPath, SourceOrigin
 from .planner import allocate
 from .service import WorkflowError
 
@@ -18,6 +18,7 @@ from .service import WorkflowError
 KEY = re.compile(r'^[a-zA-Z0-9_-]{8,80}$')
 EXTENSIONS = {'images': {'.jpg', '.jpeg', '.png', '.bmp', '.webp', '.tif', '.tiff'},
               'video': {'.mp4', '.avi', '.mov', '.mkv', '.webm'}}
+EXTENSIONS['mixed'] = EXTENSIONS['images'] | EXTENSIONS['video']
 
 
 def fingerprint(value):
@@ -42,6 +43,7 @@ def pilot_meta():
         + [sly.ObjClass(name, sly.Point, color=color) for name, color in zip(landmarks,
             [[255, 73, 73], [19, 206, 102], [247, 186, 42], [132, 146, 166]])])
     tags = sly.TagMetaCollection([
+        sly.TagMeta('empty', sly.TagValueType.NONE, color=[132, 146, 166], applicable_to='imagesOnly'),
         sly.TagMeta('bird_id', sly.TagValueType.ANY_STRING, color=[132, 146, 166], applicable_to='objectsOnly'),
         sly.TagMeta('visibility', sly.TagValueType.ONEOF_STRING, possible_values=['visible', 'occluded'],
                     color=[247, 186, 42], applicable_to='objectsOnly', applicable_classes=landmarks)])
@@ -106,6 +108,8 @@ class Setup:
                 team['participants'] = [people.get(uid, {'id': uid, 'login': f'User {uid}', 'name': f'User {uid}'})
                                         for uid in team['annotator_ids']]
                 team['can_assign'] = not bool(s.scalar(select(Batch.id).where(
+                    Batch.team_id == team['id'], Batch.state == 'releasing').limit(1)))
+                team['can_unassign'] = not bool(s.scalar(select(Batch.id).where(
                     Batch.team_id == team['id'], Batch.state != 'locked').limit(1)))
         monitors = list(groups['monitors'])
         known = {m['id'] for m in monitors}
@@ -432,8 +436,8 @@ class Setup:
                 raise WorkflowError('Select a registered team and a distinct monitor.')
             if team.revision != int(revision):
                 raise WorkflowError('Team assignment changed. Refresh setup.')
-            if s.scalar(select(Batch.id).where(Batch.team_id == team.id, Batch.state != 'locked').limit(1)):
-                raise WorkflowError('Reassign before releasing jobs. Active native reviewers require a separate handover.')
+            if s.scalar(select(Batch.id).where(Batch.team_id == team.id, Batch.state == 'releasing').limit(1)):
+                raise WorkflowError('Reconcile the pending release before handing over this team.')
         with self.operation(actor, key, 'assignment', {'team_id': team.id, 'monitor_id': monitor.id}) as checkpoint:
             if self.groups()['ready'] and monitor.id not in {u['id'] for u in self.groups()['monitors']}:
                 raise WorkflowError('The monitor group changed. Refresh setup.')
@@ -443,14 +447,20 @@ class Setup:
                     .values(revision=Team.revision + 1))
                 if changed.rowcount != 1:
                     raise WorkflowError('Team assignment changed. Refresh setup.')
-                if s.scalar(select(Batch.id).where(Batch.team_id == team.id, Batch.state != 'locked').limit(1)):
-                    raise WorkflowError('A job was released while assigning. Inspect its reviewer first.')
+                if s.scalar(select(Batch.id).where(Batch.team_id == team.id, Batch.state == 'releasing').limit(1)):
+                    raise WorkflowError('A job is being released. Reconcile it before handover.')
             gateway.add_monitor(team.id, monitor)
             checkpoint({'team_id': team.id, 'monitor_id': monitor.id})
+            with self.sessions() as s:
+                batches = list(s.scalars(select(Batch).where(Batch.team_id == team.id)))
+            for batch in batches:
+                if batch.job_ids:
+                    gateway.handover_jobs(batch, monitor.id, checkpoint)
             with self.sessions.begin() as s:
                 current = s.get(Team, team.id)
                 old = current.monitor_id
                 current.monitor_id = monitor.id
+                current.revision += 1
                 s.add(Audit(team_id=team.id, batch_id='', actor_id=actor, action='monitor_assigned',
                     details={'previous_monitor_id': old, 'monitor_id': monitor.id, 'operation_id': key}))
 
@@ -464,12 +474,14 @@ class Setup:
         unassigned = sorted([t for t in roster if not t['monitor_id']], key=lambda t: (t['name'], t['id']))
         if not unassigned:
             raise WorkflowError('All participant pairs already have monitors.')
-        loads = {uid: sum(t['monitor_id'] == uid for t in roster) for uid in monitor_ids}
+        with self.sessions() as s:
+            effort = {t['id']: sum(a.get('effort', 1) for b in s.scalars(select(Batch).where(Batch.team_id == t['id'])) for a in b.assets) or 1 for t in roster}
+        loads = {uid: sum(effort[t['id']] for t in roster if t['monitor_id'] == uid) for uid in monitor_ids}
         rows = []
         for t in unassigned:
             uid = min(monitor_ids, key=lambda u: (loads[u], u))
-            rows.append({'team_id': t['id'], 'team_name': t['name'], 'monitor_id': uid, 'revision': t['revision']})
-            loads[uid] += 1
+            rows.append({'team_id': t['id'], 'team_name': t['name'], 'monitor_id': uid, 'revision': t['revision'], 'effort': effort[t['id']]})
+            loads[uid] += effort[t['id']]
         key = uuid4().hex
         details = {'rows': rows, 'roster_hash': fingerprint(roster), 'monitors': sorted(monitors)}
         with self.sessions.begin() as session:
@@ -507,11 +519,17 @@ class Setup:
                         action='monitor_assigned', details={'previous_monitor_id': 0,
                         'monitor_id': row['monitor_id'], 'operation_id': key}))
 
-    def stage(self, actor, key, name, size, offset, encoded):
+    def stage(self, actor, key, name, size, offset, encoded, relative_path=None):
         if not KEY.fullmatch(str(key)) or not isinstance(name, str) or not name or len(name) > 180:
             raise WorkflowError('Invalid file upload.')
         if '/' in name or '\\' in name or name in ('.', '..'):
             raise WorkflowError('Upload filenames must not contain paths.')
+        from pathlib import PurePosixPath
+        relative_path = relative_path or name
+        parts = PurePosixPath(relative_path).parts
+        if (len(relative_path) > 1000 or '\\' in relative_path or not parts or relative_path.startswith('/')
+                or any(p in ('.', '..') or ':' in p for p in parts) or parts[-1] != name or '\x00' in relative_path):
+            raise WorkflowError('Choose a safe relative dataset path.')
         size = positive(size, 'File size')
         offset = int(offset)
         limit = int(os.getenv('UPLOAD_MAX_FILE_MB', '1024')) * 1024 * 1024
@@ -531,6 +549,10 @@ class Setup:
                 upload = Upload(id=key, actor_id=actor, name=name, size=size, offset=0)
                 s.add(upload)
                 s.flush()
+                s.add(UploadedPath(upload_id=key, path=relative_path))
+            recorded_path = s.get(UploadedPath, key)
+            if recorded_path and recorded_path.path != relative_path:
+                raise WorkflowError('The upload dataset path changed. Restart this file.')
             if upload.actor_id != actor or upload.name != name or upload.size != size or upload.consumed:
                 raise WorkflowError('This upload belongs to another user or was already consumed.')
             changed = s.execute(update(Upload).where(Upload.id == key, Upload.offset == offset,
@@ -561,7 +583,9 @@ class Setup:
             uploads = [s.get(Upload, uid) for uid in upload_ids]
             if any(not u or u.actor_id != actor or u.offset != u.size or u.consumed for u in uploads):
                 raise WorkflowError('Every selected file must be fully uploaded by the current organiser.')
-            names = [Path(u.name).stem + Path(u.name).suffix.lower() for u in uploads]
+            names = [(s.get(UploadedPath, u.id).path if s.get(UploadedPath, u.id) else u.name) for u in uploads]
+            from pathlib import PurePosixPath
+            names = [str(PurePosixPath(name).with_suffix(PurePosixPath(name).suffix.lower())) for name in names]
             if len(set(names)) != len(uploads):
                 raise WorkflowError('Filenames must be unique in the source dataset.')
             if any(Path(u.name).suffix.lower() not in EXTENSIONS[kind] for u in uploads):
@@ -571,7 +595,7 @@ class Setup:
             raise WorkflowError('Upload destination must belong to the monitoring team.')
         with self.operation(actor, key, 'upload', {'names': [u.name for u in uploads], 'kind': kind}) as checkpoint:
             paths = []
-            for upload in uploads:
+            for upload, relative_path in zip(uploads, names):
                 folder = self.upload_dir / upload.id
                 path = folder / ('media' + Path(upload.name).suffix.lower())
                 offset = 0
@@ -583,7 +607,9 @@ class Setup:
                         out.write(content)
                         offset += len(content)
                 # Keep the API name and temporary path extensions equal, including uppercase inputs.
-                paths.append((Path(upload.name).stem + Path(upload.name).suffix.lower(), path))
+                from pathlib import PurePosixPath
+                relative = PurePosixPath(relative_path)
+                paths.append((str(relative.with_suffix(relative.suffix.lower())), path))
             with self.sessions.begin() as s:
                 for u in uploads:
                     changed = s.execute(update(Upload).where(Upload.id == u.id,
@@ -591,6 +617,9 @@ class Setup:
                     if changed.rowcount != 1:
                         raise WorkflowError('A staged file was already used by another operation.')
             result = gateway.upload(self.monitoring_team_id, workspace.id, name.strip(), kind, paths, meta, checkpoint)
+            with self.sessions.begin() as s:
+                for origin in result.get('sources', []):
+                    s.merge(SourceOrigin(**origin))
             checkpoint(result)
         # Delete temporary copies only after confirmed remote success.
         import shutil
@@ -598,7 +627,7 @@ class Setup:
             shutil.rmtree(self.upload_dir / u.id, ignore_errors=True)
         return result
 
-    def preview(self, gateway, actor, dataset_ids, team_ids, replicas, batch_units, image_units, pilot, with_annotations):
+    def preview(self, gateway, actor, dataset_ids, team_ids, replicas, batch_units, image_units, pilot, with_annotations, allocation_options=None):
         roster = [t for t in self.roster() if t['id'] in team_ids]
         if not roster or len(roster) != len(set(team_ids)) or any(t['has_batches'] for t in roster):
             raise WorkflowError('Choose registered teams that have not received batches yet.')
@@ -609,13 +638,24 @@ class Setup:
         image_units = positive(image_units, 'Image effort units')
         replicas, batch_units = positive(replicas, 'Replicas'), positive(batch_units, 'Batch effort units')
         assets, metas = gateway.inventory(self.monitoring_team_id, dataset_ids, image_units)
+        original_inventory_hash = fingerprint(assets)
+        from .competition import Competition
+        config = Competition(self.sessions).config()
+        options = allocation_options or {}
+        effort = options.get('effort', {})
+        if not isinstance(effort, dict) or set(effort) - {a['source_id'] for a in assets}:
+            raise WorkflowError('Effort overrides must refer to selected source IDs.')
+        assets = [dict(a, units=positive(effort[a['source_id']], 'Asset effort') if a['source_id'] in effort else
+                       (max(1, (a['frames'] + config['rules']['frame_step'] - 1) // config['rules']['frame_step']) if a['kind'] == 'video' else a['units'])) for a in assets]
         if any(not m.get('classes') for m in metas.values()):
             raise WorkflowError('Configure annotation classes on every source project in Supervisely before distribution.')
         try:
-            allocation = allocate([t['id'] for t in roster], assets, replicas, batch_units, pilot=pilot)
+            allocation = allocate([t['id'] for t in roster], assets, replicas, batch_units, pilot=pilot,
+                seed=config['rules']['seed'], common_source_ids=config['rules']['common_source_ids'],
+                require_final_video=config['rules']['require_final_video'])
         except ValueError as exc:
             raise WorkflowError(str(exc)) from None
-        if any(not a['image_batches'] and a['video'] is None for a in allocation.values()):
+        if any(not a['image_batches'] and not a['videos'] for a in allocation.values()):
             raise WorkflowError('Some selected teams would have no work. Select fewer teams or increase replication.')
         assignments = []
         for team in roster:
@@ -625,17 +665,22 @@ class Setup:
             for batch in planned['image_batches']:
                 for dataset_id in sorted({a['dataset_id'] for a in batch}):
                     groups.append([a for a in batch if a['dataset_id'] == dataset_id])
-            if planned['video']:
-                groups.append([planned['video']])
+            groups.extend([[video] for video in planned['videos']])
             assignments.append({'team': team, 'groups': groups, 'units': planned['units']})
         preview = {'pilot': pilot, 'replicas': replicas, 'source_images': sum(a['kind'] == 'images' for a in assets),
             'source_videos': sum(a['kind'] == 'video' for a in assets),
             'teams': [{'id': a['team']['id'], 'name': a['team']['name'], 'monitor_id': a['team']['monitor_id'],
                 'images': sum(len(g) for g in a['groups'] if g[0]['kind'] == 'images'),
                 'videos': sum(g[0]['kind'] == 'video' for g in a['groups']),
-                'batches': len(a['groups']), 'units': a['units']} for a in assignments]}
+                'batches': len(a['groups']), 'units': a['units'],
+                'strata': allocation[a['team']['id']]['strata'],
+                'required_units': sum(1 if v['kind'] == 'images' else max(1, (v['frames'] + config['rules']['frame_step'] - 1) // config['rules']['frame_step']) for g in a['groups'] for v in g)} for a in assignments],
+                'seed': config['rules']['seed'], 'rules_revision': config['revision'],
+                'coverage': {a['source_id']: sum(any(v['source_id'] == a['source_id'] for g in t['groups'] for v in g) for t in assignments) for a in assets},
+                'workload_spread': max(a['units'] for a in assignments) - min(a['units'] for a in assignments)}
         key = uuid4().hex
-        details = {'dataset_ids': dataset_ids, 'assignments': assignments, 'inventory_hash': fingerprint(assets),
+        details = {'dataset_ids': dataset_ids, 'assignments': assignments, 'inventory_hash': original_inventory_hash,
+                   'rules_revision': config['revision'],
                    'metas': metas, 'image_units': image_units, 'with_annotations': with_annotations, 'preview': preview}
         with self.sessions.begin() as s:
             s.add(SetupOperation(id=key, actor_id=actor, kind='distribution', state='planned', details=details))
@@ -649,6 +694,9 @@ class Setup:
             details = op.details
         # Repeat the source/roster checks before any remote mutation.
         assets, metas = gateway.inventory(self.monitoring_team_id, details['dataset_ids'], details['image_units'])
+        from .competition import Competition
+        if details.get('rules_revision', 0) != Competition(self.sessions).config()['revision']:
+            raise WorkflowError('Event rules changed. Preview distribution again.')
         if fingerprint(assets) != details['inventory_hash'] or fingerprint(metas) != fingerprint(details['metas']):
             raise WorkflowError('Source inventory or annotation metadata changed. Create a new preview.')
         for assignment in details['assignments']:
@@ -667,10 +715,14 @@ class Setup:
                 t = assignment['team']
                 monitor = gateway.monitor(self.monitoring_team_id, t['monitor_id'])
                 gateway.add_monitor(t['id'], monitor)
+                video_index = 0
                 for index, group in enumerate(assignment['groups'], 1):
                     callback = lambda info, tid=t['id']: checkpoint({'team_id': tid, **info})
                     dataset_id, mapped = gateway.copy_group(t['id'], key, index, group,
                         details['metas'][str(group[0]['dataset_id'])], details['with_annotations'], callback)
+                    if group[0]['kind'] == 'video':
+                        mapped = [dict(a, assignee_id=t['annotator_ids'][video_index % 2]) for a in mapped]
+                        video_index += 1
                     batches.append(Batch(id=f'{key}_t{t["id"]}_b{index}', team_id=t['id'], position=index,
                         kind=group[0]['kind'], dataset_id=dataset_id, assets=mapped))
             # Publish all mappings atomically only after all remote copies are confirmed.

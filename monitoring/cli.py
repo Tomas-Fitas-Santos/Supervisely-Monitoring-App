@@ -21,9 +21,11 @@ def main():
     imp = sub.add_parser('import')
     imp.add_argument('manifest')
     imp.add_argument('--pilot', action='store_true')
+    imp.add_argument('--replicas', type=int, default=1)
+    imp.add_argument('--require-video', action='store_true')
     plan = sub.add_parser('plan')
     plan.add_argument('inventory', help='JSON containing team_ids and assets with source_id/kind/units')
-    plan.add_argument('--replicas', type=int, default=3)
+    plan.add_argument('--replicas', type=int, default=1)
     plan.add_argument('--batch-units', type=int, required=True, help='Derived from your pilot; no assumed throughput')
     plan.add_argument('--output', required=True)
     export = sub.add_parser('export-records')
@@ -51,7 +53,7 @@ def main():
         from .gateway import Gateway
         manifest = Manifest.model_validate_json(Path(args.manifest).read_text())
         import_manifest(sessions, manifest, Gateway(sly.Api.from_env()),
-                        int(os.environ['MONITORING_TEAM_ID']), args.pilot)
+                        int(os.environ['MONITORING_TEAM_ID']), args.pilot, replicas=args.replicas, require_final_video=args.require_video)
         print('Event imported. No remote labeling jobs have been created yet.')
     elif args.command == 'demo':
         if os.getenv('LOCAL_DEVELOPMENT', 'false').lower() != 'true' or not os.environ['DATABASE_URL'].startswith('sqlite'):
@@ -73,14 +75,10 @@ def main():
         print('Synthetic demo loaded. It does not represent a real Supervisely event.')
     elif args.command == 'export-records':
         from sqlalchemy import select
-        with sessions() as s:
-            def rows(model):
-                return [{c.name: getattr(row, c.name) for c in model.__table__.columns}
-                        for row in s.scalars(select(model))]
-            records = {'schema_version': 1, 'teams': rows(Team), 'batches': rows(Batch),
-                       'reviews': rows(Review), 'audit': rows(Audit)}
+        from .competition import Competition
+        records = Competition(sessions).export(0, organiser=True)
         Path(args.output).write_text(json.dumps(records, indent=2) + '\n')
-        print('Monitoring records exported. Annotation payloads must still be collected from Supervisely.')
+        print('Captured annotation payloads, rules, judgments and audit history exported. Uncaptured native work is not included.')
 
 
 if __name__ == '__main__':

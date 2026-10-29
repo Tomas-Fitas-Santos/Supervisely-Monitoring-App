@@ -10,7 +10,7 @@ def test_counts_are_driven_by_input_and_every_team_gets_a_whole_video():
     teams = list(range(1, 9))
     videos = [{'source_id': f'v{i}', 'kind': 'video', 'units': 50 + i} for i in range(2)]
     images = [{'source_id': f'i{i}', 'kind': 'images', 'units': 1} for i in range(48)]
-    result = allocate(teams, videos + images, batch_units=8)
+    result = allocate(teams, videos + images, replicas=3, batch_units=8, require_final_video=True)
     coverage = Counter()
     for team in result.values():
         assert team['video'] in videos
@@ -25,8 +25,8 @@ def test_counts_are_driven_by_input_and_every_team_gets_a_whole_video():
 
 
 def test_impossible_video_replication_is_reported():
-    with pytest.raises(ValueError, match='Too few teams'):
-        allocate([1, 2, 3], [{'source_id': f'v{i}', 'kind': 'video', 'units': 20} for i in range(2)], batch_units=10)
+    with pytest.raises(ValueError, match='replication factor'):
+        allocate([1, 2, 3], [{'source_id': f'v{i}', 'kind': 'video', 'units': 20} for i in range(2)], replicas=4, batch_units=10)
 
 
 def test_no_default_batch_throughput_assumption():
@@ -49,7 +49,7 @@ def test_manifest_rejects_duplicate_destination_entities():
 
 def test_manifest_reports_under_replication_and_rejects_split_video():
     data = example()
-    assert len(Manifest.model_validate(data).coverage()['under_replicated']) == 3
+    assert len(Manifest.model_validate(data).coverage(3)['under_replicated']) == 3
     data['teams'][0]['batches'][-1]['assets'].append({'source_id': 'second-video', 'entity_id': 602, 'frames': 100})
     with pytest.raises(ValueError, match='exactly one'):
         Manifest.model_validate(data)

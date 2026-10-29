@@ -26,9 +26,11 @@ def test_actual_sdk_signatures_support_used_parameters():
 
 def test_progress_uses_confirmed_entities_not_annotation_presence():
     api = Mock()
-    api.labeling_job.get_info_by_id.return_value = NS(status='in_progress')
+    api.labeling_job.get_info_by_id.return_value = NS(status='in_progress', assigned_to_id=11, reviewer_id=90)
     api.labeling_job.get_stats.return_value = {'job': {'imagesCount': 8, 'finishedImagesCount': 3}}
-    assert Gateway(api).progress(NS(job_ids=[77])) == {'status': 'in_progress', 'total': 8, 'completed': 3}
+    result = Gateway(api).progress(NS(job_ids=[77]))
+    assert {k: result[k] for k in ('status','total','completed')} == {'status': 'in_progress', 'total': 8, 'completed': 3}
+    assert result['jobs'][0]['annotator_id'] == 11
 
 
 def test_frame_acceptance_cannot_accept_entire_video():
@@ -110,5 +112,5 @@ def test_source_overview_uses_actual_dataset_counts_and_monitoring_team_only():
     source = SetupGateway(api).sources(10)
     assert source['datasets'][0]['items'] == 17
     api.workspace.get_list.assert_called_once_with(10)
-    api.dataset.get_list.assert_called_once_with(5)
+    api.dataset.get_list.assert_called_once_with(5, recursive=True)
     api.team.get_list.assert_not_called()

@@ -6,15 +6,16 @@ from .service import WorkflowError
 
 
 class Gateway:
-    def __init__(self, api):
+    def __init__(self, api, sessions=None):
         self.api = api
+        self.sessions = sessions
 
     def member(self, monitoring_team_id, user_id):
         member = self.api.user.get_member_info_by_id(monitoring_team_id, user_id)
         if not member or getattr(member, 'disabled', False):
             raise WorkflowError("You must be a member of the monitoring team.")
 
-    def review_preview(self, team, batch, entity_id, frame_index):
+    def review_preview(self, team, batch, entity_id, frame_index, snapshot=None):
         """Read-only preview of the selected annotation; never accepts an arbitrary entity."""
         import base64
         import cv2
@@ -36,13 +37,13 @@ class Gateway:
         info = media_api.get_info_by_id(entity_id)
         if not info or info.dataset_id != batch.dataset_id:
             raise WorkflowError('The selected media no longer belongs to this batch.')
-        meta = sly.ProjectMeta.from_json(self.api.project.get_meta(project.id))
+        meta = sly.ProjectMeta.from_json(snapshot['meta'] if snapshot else self.api.project.get_meta(project.id))
         if batch.kind == 'images':
             image = self.api.image.download_np(entity_id)
-            annotation = sly.Annotation.from_json(self.api.annotation.download_json(entity_id), meta)
+            annotation = sly.Annotation.from_json(snapshot['annotations'][str(entity_id)] if snapshot else self.api.annotation.download_json(entity_id), meta)
         else:
             image = self.api.video.frame.download_np(entity_id, frame_index)
-            video = sly.VideoAnnotation.from_json(self.api.video.annotation.download(entity_id), meta)
+            video = sly.VideoAnnotation.from_json(snapshot['annotations'][str(entity_id)] if snapshot else self.api.video.annotation.download(entity_id), meta)
             frame = video.frames.get(frame_index)
             labels = [sly.Label(f.geometry, f.video_object.obj_class) for f in frame.figures] if frame else []
             annotation = sly.Annotation(image.shape[:2], labels)
@@ -63,6 +64,32 @@ class Gateway:
                 'classes': [{'name': name, 'color': color} for name, color in
                     {label.obj_class.name: label.obj_class.color for label in annotation.labels}.items()],
                 'loaded_at': int(datetime.now(timezone.utc).timestamp())}
+
+    def capture_annotations(self, team, batch):
+        dataset = self.api.dataset.get_info_by_id(batch.dataset_id)
+        project = self.api.project.get_info_by_id(dataset.project_id)
+        workspace = self.api.workspace.get_info_by_id(project.workspace_id)
+        if workspace.team_id != team.id:
+            raise WorkflowError('Annotation capture is outside the assigned participant team.')
+        annotations = {}
+        for a in batch.assets:
+            media = (self.api.image if batch.kind == 'images' else self.api.video).get_info_by_id(a['entity_id'])
+            if not media or media.dataset_id != batch.dataset_id:
+                raise WorkflowError('An assigned asset moved; inspect the task before capture.')
+            annotations[str(a['entity_id'])] = (self.api.annotation.download_json(a['entity_id']) if batch.kind == 'images'
+                                                else self.api.video.annotation.download(a['entity_id']))
+        return {'meta': self.api.project.get_meta(project.id), 'annotations': annotations}
+
+    def handover_jobs(self, batch, reviewer_id, checkpoint):
+        for jid in batch.job_ids:
+            job = self.api.labeling_job.get_info_by_id(jid)
+            if not job or job.team_id != batch.team_id or job.dataset_id != batch.dataset_id:
+                raise WorkflowError('A native task no longer matches this batch. Inspect it before handover.')
+            self.api.labeling_job.set_assignees(jid, reviewer_id=reviewer_id)
+            check = self.api.labeling_job.get_info_by_id(jid)
+            if not check or check.reviewer_id != reviewer_id:
+                raise WorkflowError('Reviewer change was not confirmed. Inspect the handover operation.')
+            checkpoint({'job_id': jid, 'reviewer_id': reviewer_id})
 
     def validate(self, team, batch):
         dataset = self.api.dataset.get_info_by_id(batch.dataset_id)
@@ -88,7 +115,10 @@ class Gateway:
         # Explicit non-overlapping image jobs. Full video assigned to one lead.
         ids = [a['entity_id'] for a in batch.assets]
         if batch.kind == 'video':
-            return [(team.annotator_ids[0], ids)]
+            owner = batch.assets[0].get('assignee_id', team.annotator_ids[0])
+            if owner not in team.annotator_ids:
+                raise WorkflowError('Video owner must be one of this pair’s participants.')
+            return [(owner, ids)]
         return [(uid, ids[index::len(team.annotator_ids)])
                 for index, uid in enumerate(team.annotator_ids) if ids[index::len(team.annotator_ids)]]
 
@@ -114,14 +144,15 @@ class Gateway:
 
     def create_release(self, team, batch):
         created = []
+        from .competition import Competition, DEFAULTS
+        guide = Competition(self.sessions).config()['rules']['annotation_guide'] if self.sessions else DEFAULTS['annotation_guide']
         for uid, ids in self.slices(team, batch):
             jobs = self.api.labeling_job.create(
                 name=f'{batch.release_key}:u{uid}', dataset_id=batch.dataset_id,
                 user_ids=[uid], images_ids=ids, reviewer_id=team.monitor_id,
                 description='Nightjar independent team annotations. Submit for monitor review.',
                 enable_quality_check=True, dynamic_classes=False, dynamic_tags=False,
-                readme='Annotate each bird: bounding box, crown, left_eye, right_eye, beak and per-keypoint visibility. '
-                       'Use the event anatomical guide. The monitor will release your next task.',
+                readme=guide,
             )
             if len(jobs) != 1:
                 raise WorkflowError("Unexpected number of jobs returned by Supervisely.")
@@ -129,7 +160,7 @@ class Gateway:
         return created
 
     def progress(self, batch):
-        statuses, total, completed = [], 0, 0
+        statuses, total, completed, jobs = [], 0, 0, []
         for jid in batch.job_ids:
             info = self.api.labeling_job.get_info_by_id(jid)
             if not info:
@@ -138,7 +169,10 @@ class Gateway:
             stats = self.api.labeling_job.get_stats(jid)['job']
             total += int(stats['imagesCount'])
             completed += int(stats['finishedImagesCount'])
-        return {'status': ','.join(statuses), 'total': total, 'completed': completed}
+            jobs.append({'id': jid, 'annotator_id': info.assigned_to_id, 'reviewer_id': info.reviewer_id,
+                         'status': info.status, 'completed': int(stats['finishedImagesCount']),
+                         'total': int(stats['imagesCount'])})
+        return {'status': ','.join(statuses), 'total': total, 'completed': completed, 'jobs': jobs}
 
     def recent_activity(self, team, batch, minutes=15):
         since = (datetime.now(timezone.utc) - timedelta(minutes=minutes)).isoformat()

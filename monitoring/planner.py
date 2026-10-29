@@ -1,50 +1,52 @@
-"""Deterministic workload allocation, before copying assets into participant teams."""
+"""Reproducible effort/stratum balancing; all capacity and replication are inputs."""
 from collections import Counter
+import hashlib
 
 
-def allocate(team_ids: list[int], assets: list[dict], replicas=3, batch_units=None, pilot=False):
-    if len(set(team_ids)) != len(team_ids) or len(team_ids) < replicas or replicas < (1 if pilot else 3):
-        raise ValueError("Need distinct teams and at least three independent replicas.")
+def allocate(team_ids, assets, replicas=1, batch_units=None, pilot=False, seed=2026,
+             common_source_ids=None, require_final_video=False):
+    if not team_ids or len(set(team_ids)) != len(team_ids) or type(replicas) is not int or not 1 <= replicas <= len(team_ids):
+        raise ValueError('Choose distinct teams and a replication factor between one and the number of teams.')
     if batch_units is None or batch_units <= 0 or len({a['source_id'] for a in assets}) != len(assets):
-        raise ValueError("Batch size must be positive and source IDs unique.")
-    images = [a for a in assets if a['kind'] == 'images']
-    videos = [a for a in assets if a['kind'] == 'video']
-    if not assets or len(images) + len(videos) != len(assets) or (not videos and not pilot):
-        raise ValueError("Use images/video assets and include at least one video.")
-    if len(videos) * replicas > len(team_ids):
-        raise ValueError("Too few teams for three replicas of each video and one video per team.")
-    if any(not isinstance(a.get('units'), int) or a['units'] <= 0 for a in assets):
-        raise ValueError("Work units must be positive integers (video frame counts or pilot estimates).")
-    assigned = {t: {'images': [], 'video': None} for t in sorted(team_ids)}
-    load = dict.fromkeys(assigned, 0)
-    free = list(assigned)
-    # Longer videos first; extra teams receive additional independent versions.
-    ordered_videos = sorted(videos, key=lambda a: (-a['units'], a['source_id']))
-    for video in ordered_videos:
-        for _ in range(replicas):
-            t = free.pop(0)
-            assigned[t]['video'] = video
-            load[t] += video['units']
-    counts = Counter(v['video']['source_id'] for v in assigned.values() if v['video'])
-    for t in free if videos else []:
-        video = min(ordered_videos, key=lambda a: (counts[a['source_id']], a['units'], a['source_id']))
-        assigned[t]['video'] = video
-        load[t] += video['units']
-        counts[video['source_id']] += 1
-    for image in sorted(images, key=lambda a: (-a['units'], a['source_id'])):
-        for t in sorted(load, key=lambda t: (load[t], t))[:replicas]:
-            assigned[t]['images'].append(image)
-            load[t] += image['units']
+        raise ValueError('Batch size must be positive and source IDs unique.')
+    if not assets or any(a['kind'] not in ('images', 'video') or type(a.get('units')) is not int or a['units'] <= 0 for a in assets):
+        raise ValueError('Use image/video assets with positive integer effort units.')
+    common = set(common_source_ids or [])
+    if common - {a['source_id'] for a in assets}:
+        raise ValueError('Common challenge source IDs must be in the selected inventory.')
+    if require_final_video and not any(a['kind'] == 'video' for a in assets):
+        raise ValueError('The event rule requires a video for each team, but none were selected.')
+    assigned = {t: {'images': [], 'videos': []} for t in sorted(team_ids)}
+    loads = dict.fromkeys(assigned, 0)
+    strata = {t: Counter() for t in assigned}
+    def tie(value): return hashlib.sha256(f'{seed}:{value}'.encode()).hexdigest()
+    def place(asset):
+        count = len(team_ids) if asset['source_id'] in common else replicas
+        stratum = str(asset.get('stratum', asset['kind']))
+        candidates = sorted(assigned, key=lambda t: (loads[t], strata[t][stratum], tie(f'{asset["source_id"]}:{t}')))[:count]
+        for t in candidates:
+            assigned[t]['images' if asset['kind'] == 'images' else 'videos'].append(asset)
+            loads[t] += asset['units']; strata[t][stratum] += 1
+    videos = sorted([a for a in assets if a['kind'] == 'video'], key=lambda a: (-a['units'], tie(a['source_id'])))
+    for video in videos: place(video)
+    if require_final_video:
+        counts = Counter(v['source_id'] for a in assigned.values() for v in a['videos'])
+        for t in assigned:
+            if not assigned[t]['videos']:
+                video = min(videos, key=lambda a: (counts[a['source_id']], a['units'], tie(a['source_id'])))
+                assigned[t]['videos'].append(video); loads[t] += video['units']; counts[video['source_id']] += 1
+                strata[t][str(video.get('stratum', 'video'))] += 1
+    for asset in sorted([a for a in assets if a['kind'] == 'images'], key=lambda a: (-a['units'], tie(a['source_id']))):
+        place(asset)
     result = {}
     for t, group in assigned.items():
-        batches, current, units = [], [], 0
-        for image in group['images']:
-            if current and units + image['units'] > batch_units:
-                batches.append(current)
-                current, units = [], 0
-            current.append(image)
-            units += image['units']
-        if current:
-            batches.append(current)
-        result[t] = {'image_batches': batches, 'video': group['video'], 'units': load[t]}
+        batches, current, effort = [], [], 0
+        for a in group['images']:
+            if current and effort + a['units'] > batch_units:
+                batches.append(current); current, effort = [], 0
+            current.append(a); effort += a['units']
+        if current: batches.append(current)
+        result[t] = {'image_batches': batches, 'videos': group['videos'],
+                     'video': group['videos'][0] if group['videos'] else None, 'units': loads[t],
+                     'strata': dict(strata[t])}
     return result

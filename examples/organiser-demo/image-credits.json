@@ -1,0 +1,24 @@
+[
+  {
+    "path": "dataset/images/sparrows/bird.jpg",
+    "title": "File:House Sparrow(Passer domesticus).jpg",
+    "source": "https://commons.wikimedia.org/wiki/File:House_Sparrow(Passer_domesticus).jpg",
+    "download": "https://thumb.wikimedia.org/wikipedia/commons/thumb/d/dc/House_Sparrow%28Passer_domesticus%29.jpg/960px-House_Sparrow%28Passer_domesticus%29.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
+    "author": "Mathias Appel",
+    "license": "CC0",
+    "license_url": "http://creativecommons.org/publicdomain/zero/1.0/deed.en",
+    "changes": "Resized to 960 pixels wide and JPEG recompressed for a small demo.",
+    "sha256": "760c1bf2c65678d929961b6d021085a52b4a2e5dd7fc4bc85de7059cea231042"
+  },
+  {
+    "path": "dataset/images/garden/bird.jpg",
+    "title": "File:House sparrow (Passer domesticus), Amrum.jpg",
+    "source": "https://commons.wikimedia.org/wiki/File:House_sparrow_(Passer_domesticus),_Amrum.jpg",
+    "download": "https://thumb.wikimedia.org/wikipedia/commons/thumb/a/a1/House_sparrow_%28Passer_domesticus%29%2C_Amrum.jpg/960px-House_sparrow_%28Passer_domesticus%29%2C_Amrum.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
+    "author": "<a href=\"//commons.wikimedia.org/wiki/User:Hobbyfotowiki\" title=\"User:Hobbyfotowiki\">Hobbyfotowiki</a>",
+    "license": "CC0",
+    "license_url": "http://creativecommons.org/publicdomain/zero/1.0/deed.en",
+    "changes": "Resized to 960 pixels wide and JPEG recompressed for a small demo.",
+    "sha256": "b81960107328c0f5c7cb8cb994368f47441efb5695b2143ade3cbedec8f460e2"
+  }
+]

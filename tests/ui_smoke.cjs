@@ -9,7 +9,7 @@ global.crypto = require('crypto').webcrypto; global.FileReader = dom.window.File
 const Vue = require('vue/dist/vue.common.js');
 global.Vue = Vue; Vue.config.productionTip = false; Vue.config.devtools = false;
 const warnings = []; Vue.config.warnHandler = message => warnings.push(message);
-for (const name of ['connection.js','setup.js','dashboard.js']) {
+for (const name of ['connection.js','competition.js','setup.js','dashboard.js']) {
   eval(fs.readFileSync(path.join(__dirname, '..', 'monitoring', 'static', name), 'utf8'));
 }
 const people = [

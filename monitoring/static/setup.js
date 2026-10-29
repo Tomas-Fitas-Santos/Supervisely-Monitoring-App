@@ -8,7 +8,7 @@ Vue.component('nightjar-management', {
       pilot: true, withAnnotations: false, progress: '', inspectionNote: '',
       monitorGroupName: 'Monitors', annotatorGroupName: 'Annotators', existingMonitorGroup: null, existingAnnotatorGroup: null,
       monitorLogins: '', annotatorLogins: '', candidateMonitorIds: [],
-      selectedMonitor: null, monitorSearch: '', teamSearch: '', addTeamToMonitor: null, showAddMonitor: false, showAddTeam: false, loaded: false };
+      effortOverrides: '{}', planningDefaultsLoaded: false, selectedMonitor: null, monitorSearch: '', teamSearch: '', addTeamToMonitor: null, showAddMonitor: false, showAddTeam: false, loaded: false };
   },
   computed: {
     catalog() { return this.view.catalog || {}; },
@@ -34,9 +34,9 @@ Vue.component('nightjar-management', {
       return (this.catalog.users || []).filter(u => !paired.has(u.id) && !monitors.has(u.id) && u.login !== this.view.connection.login);
     },
     preview() { return this.view.preview; },
-    accept() { return this.kind === 'images' ? '.jpg,.jpeg,.png,.bmp,.webp,.tif,.tiff' : '.mp4,.avi,.mov,.mkv,.webm'; }
+    accept() { if(this.kind==='mixed')return '.jpg,.jpeg,.png,.bmp,.webp,.tif,.tiff,.mp4,.avi,.mov,.mkv,.webm'; return this.kind === 'images' ? '.jpg,.jpeg,.png,.bmp,.webp,.tif,.tiff' : '.mp4,.avi,.mov,.mkv,.webm'; }
   },
-  watch: { busy(value) { this.$emit('busy', value); },
+  watch: { 'view.competition': {immediate:true,handler(c){if(!this.planningDefaultsLoaded && c?.rules){this.replicas=c.rules.replicas;this.imageUnits=c.rules.image_effort;this.batchUnits=c.rules.batch_effort;this.planningDefaultsLoaded=true}}}, busy(value) { this.$emit('busy', value); },
     locked(value) { if (!value && (!this.loaded || (this.view.can_setup && !Array.isArray(this.catalog.users)))) this.reload(); },
     'groups.workspace_id'(value) { if (!this.workspaceId && value) this.workspaceId = value; } },
   methods: {
@@ -90,7 +90,7 @@ Vue.component('nightjar-management', {
       return this.run('assign', { operation_id: this.id(), setup_team_id: t.id,
         monitor_id: chosen, setup_revision: t.revision }).then(ok => { if (ok) this.$delete(this.assignments, t.id); });
     },
-    filesChanged(e) { this.files = Array.from(e.target.files || []); },
+    filesChanged(e) { const chosen=Array.from(e.target.files || []); this.files = chosen.filter(f => /\.(jpe?g|png|bmp|webp|tiff?|mp4|avi|mov|mkv|webm)$/i.test(f.name)); this.progress=chosen.length>this.files.length ? (chosen.length-this.files.length)+' unsupported non-media files skipped.' : ''; if (this.files.some(f=>f.webkitRelativePath)) this.kind='mixed'; },
     async metaChanged(e) {
       this.clientError = '';
       try { this.metaText = e.target.files[0] ? await e.target.files[0].text() : ''; JSON.parse(this.metaText || '{}'); }
@@ -112,7 +112,7 @@ Vue.component('nightjar-management', {
               reader.onerror = reject; reader.readAsDataURL(blob);
             });
             await this.request('chunk', { upload_id: uploadId, filename: file.name,
-              size: file.size, offset, chunk: encoded });
+              size: file.size, offset, chunk: encoded, relative_path: file.webkitRelativePath || file.name });
           }
           uploadIds.push(uploadId);
         }
@@ -125,9 +125,10 @@ Vue.component('nightjar-management', {
       finally { this.busy = false; }
     },
     plan() {
+      let effort; try { effort = JSON.parse(this.effortOverrides); } catch (e) { this.clientError = 'Asset effort overrides must be valid JSON.'; return; }
       return this.run('preview', { dataset_ids: this.selectedDatasets, team_ids: this.selectedTeams,
         replicas: Number(this.replicas), batch_units: Number(this.batchUnits), image_units: Number(this.imageUnits),
-        pilot: this.pilot, with_annotations: this.withAnnotations });
+        pilot: this.pilot, with_annotations: this.withAnnotations, allocation_options: {effort} });
     }
   },
   mounted() { if (!this.locked) this.reload(); if (this.groups.workspace_id) this.workspaceId = this.groups.workspace_id; },
@@ -154,7 +155,7 @@ Vue.component('nightjar-management', {
             <label class="nj-field">Annotators Supervisely team<select v-model="existingAnnotatorGroup"><option :value="null">Create a new team</option><option v-for="t in catalog.remote_teams || []" :key="t.id" :value="t.id">{{ t.name }}</option></select></label></div></div></details>
         <button class="nj-primary" @click="createGroups" :disabled="disabled || !monitorGroupName.trim() || !annotatorGroupName.trim()">Initialize event</button>
       </template><p v-else>Open Monitors & Teams as the organiser to initialize the event.</p></div>
-    <template v-if="section === 'roster'">
+    <template v-if="section === 'roster'"><event-registrations v-if="view.can_setup && directory.ready" :view="view" :run="run" :disabled="disabled"></event-registrations>
       <div class="nj-metrics nj-three-metrics"><div><span>Monitors</span><strong>{{ monitors.length }}</strong></div><div><span>Participant teams</span><strong>{{ roster.length }}</strong></div><div><span>Teams without a monitor</span><strong>{{ unassignedPairs.length }}</strong></div></div>
       <div v-if="directory.ready && view.can_setup" class="nj-actions nj-toolbar"><button class="nj-primary" @click="showAddMonitor = !showAddMonitor" :disabled="disabled">Add monitor</button><button class="nj-primary" @click="showAddTeam = !showAddTeam" :disabled="disabled">Add team</button></div>
       <div v-if="showAddMonitor && view.can_setup" class="nj-panel"><h3>Add monitors</h3><p>Choose a registered user or enter registered logins, one per line.</p>
@@ -173,36 +174,36 @@ Vue.component('nightjar-management', {
         <button v-for="m in filteredMonitors" :key="m.id" class="nj-team" :class="{selected: selectedMonitor === m.id}" @click="chooseMonitor(m)"><span>{{ m.name }}</span><small>{{ m.login }} · {{ assignedCount(m) }} teams</small></button>
         <p v-if="!monitors.length" class="nj-muted">No monitors registered. Add the people who will oversee this event.</p></aside>
         <div class="nj-panel"><template v-if="monitor"><div class="nj-section-heading"><div><h3>{{ monitor.name }}</h3><p class="nj-muted">{{ monitor.login }} · {{ assignedTeams.length }} assigned teams</p></div><button v-if="view.can_setup" @click="run('member_remove', {operation_id: id(), member_user_id: monitor.id})" :disabled="disabled || assignedTeams.length > 0">Remove monitor</button></div>
-          <div v-for="t in assignedTeams" :key="t.id" class="nj-assignment-card"><div><strong>{{ t.name }}</strong><p class="nj-muted">{{ participants(t) }}</p></div><button v-if="view.can_setup" @click="removeFromMonitor(t)" :disabled="disabled || !t.can_assign">Remove team from monitor</button></div>
+          <div v-for="t in assignedTeams" :key="t.id" class="nj-assignment-card"><div><strong>{{ t.name }}</strong><p class="nj-muted">{{ participants(t) }}</p></div><button v-if="view.can_setup" @click="removeFromMonitor(t)" :disabled="disabled || t.can_unassign === false">Remove team from monitor</button></div>
           <p v-if="!assignedTeams.length">No teams assigned to this monitor.</p>
           <div v-if="view.can_setup" class="nj-actions"><select v-model="addTeamToMonitor" aria-label="Team to assign to selected monitor"><option :value="null">Choose a team to assign</option><option v-for="t in assignableTeams" :key="t.id" :value="t.id">{{ t.name }} · {{ monitorName(t.monitor_id) }}</option></select><button class="nj-primary" @click="addToMonitor" :disabled="disabled || !addTeamToMonitor">Assign team to monitor</button></div>
-          <p class="nj-muted">Assignments can be edited before jobs are released. Released jobs need a reviewer handover.</p>
+          <p class="nj-muted">Assigning a new monitor also hands over existing native reviewer jobs. Removing an active assignment requires choosing a replacement monitor. Previous native memberships are retained; the app revokes the previous monitor's assignment access.</p>
         </template><p v-else>Select a monitor to see their assigned teams and manage assignments.</p></div></div>
       <div class="nj-panel"><div class="nj-section-heading"><h3>All participant teams</h3><input v-model="teamSearch" placeholder="Find a team or participant" aria-label="Find a team or participant"></div>
         <div class="nj-table-scroll"><table class="nj-table"><thead><tr><th>Team</th><th>Participants</th><th>Assigned monitor</th><th v-if="view.can_setup">Change assignment</th></tr></thead><tbody>
           <tr v-for="t in filteredTeams" :key="t.id"><td><strong>{{ t.name }}</strong></td><td>{{ participants(t) }}</td><td><span class="nj-badge" :class="{warning: !t.monitor_id}">{{ monitorName(t.monitor_id) }}</span></td>
-            <td v-if="view.can_setup"><div class="nj-inline-actions"><select :value="Object.prototype.hasOwnProperty.call(assignments, t.id) ? assignments[t.id] : t.monitor_id" @change="$set(assignments, t.id, Number($event.target.value))" :disabled="disabled || !t.can_assign"><option :value="0">Unassigned</option><option v-for="m in monitors" :key="m.id" :value="m.id">{{ m.name }}</option></select><button @click="assign(t)" :disabled="disabled || !t.can_assign || !Object.prototype.hasOwnProperty.call(assignments, t.id) || assignments[t.id] === t.monitor_id">Save</button></div></td></tr></tbody></table></div>
+            <td v-if="view.can_setup"><div class="nj-inline-actions"><select :value="Object.prototype.hasOwnProperty.call(assignments, t.id) ? assignments[t.id] : t.monitor_id" @change="$set(assignments, t.id, Number($event.target.value))" :disabled="disabled || !t.can_assign"><option :value="0" :disabled="t.can_unassign === false">Unassigned</option><option v-for="m in monitors" :key="m.id" :value="m.id">{{ m.name }}</option></select><button @click="assign(t)" :disabled="disabled || !t.can_assign || !Object.prototype.hasOwnProperty.call(assignments, t.id) || assignments[t.id] === t.monitor_id">Save</button></div></td></tr></tbody></table></div>
         <p v-if="!filteredTeams.length" class="nj-muted">No teams found. Use Add team to register a pair and its participants.</p></div>
       <details v-if="unassignedPairs.length && view.can_setup" class="nj-panel"><summary>Assign unassigned teams evenly across selected monitors</summary><label v-for="m in monitors" :key="m.id" class="nj-check"><input type="checkbox" v-model="candidateMonitorIds" :value="m.id">{{ m.name }}</label>
         <button @click="run('balance_preview', {monitor_ids: candidateMonitorIds})" :disabled="disabled || !candidateMonitorIds.length">Preview balanced assignments</button>
         <div v-if="view.assignment_plan_id"><p v-for="row in view.assignment_preview" :key="row.team_id">{{ row.team_name }} → {{ monitorName(row.monitor_id) }}</p><button class="nj-primary" @click="run('balance_apply', {assignment_plan_id: view.assignment_plan_id})" :disabled="disabled">Apply monitor assignments</button></div></details>
     </template>
-    <template v-if="section === 'dataset' && directory.ready">
+    <template v-if="section === 'dataset' && directory.ready"><event-rules v-if="view.can_setup" :view="view" :run="run" :disabled="disabled"></event-rules><button v-if="view.demo && view.can_setup" class="nj-primary" @click="run('demo_sources', {operation_id:id()})" :disabled="disabled">Load bundled CC0 bird photos</button>
       <div class="nj-panel"><h3>Event source datasets</h3><p class="nj-muted">These are the source files. Distribution creates independent annotation copies for the selected participant teams.</p>
         <div class="nj-table-scroll"><table class="nj-table"><thead><tr><th>Project / dataset</th><th>Type</th><th>Files</th></tr></thead><tbody><tr v-for="d in sources.datasets" :key="d.id"><td>{{ d.project }} / {{ d.name }}</td><td>{{ d.kind === 'images' ? 'Images' : 'Videos' }}</td><td>{{ d.items }}</td></tr></tbody></table></div><p v-if="!(sources.datasets || []).length">No source data yet. Upload files below, or import a dataset into the monitoring team in Supervisely and reload this list.</p></div>
       <div v-if="view.can_setup" class="nj-panel"><h3>Upload dataset</h3><p class="nj-muted">Upload raw images or videos. Select a group of files of the same type.</p>
         <label class="nj-field">Source workspace<select v-model="workspaceId"><option :value="null">Choose a workspace</option><option v-for="w in sources.workspaces || []" :key="w.id" :value="w.id">{{ w.name }}</option></select></label>
-        <div class="nj-form-row"><label>Project name<input v-model="projectName" maxlength="180"></label><label>Media type<select v-model="kind" @change="files = []; if ($refs.mediaFiles) $refs.mediaFiles.value = ''"><option value="images">Images</option><option value="video">Videos</option></select></label></div>
-        <label class="nj-field">Files<input ref="mediaFiles" type="file" multiple :accept="accept" @change="filesChanged"></label><p>{{ files.length }} files selected.</p>
+        <div class="nj-form-row"><label>Project name<input v-model="projectName" maxlength="180"></label><label>Media type<select v-model="kind" @change="files = []; if ($refs.mediaFiles) $refs.mediaFiles.value = ''"><option value="images">Images</option><option value="video">Videos</option><option value="mixed">Folder with images and videos</option></select></label></div>
+        <label class="nj-field">Files<input ref="mediaFiles" type="file" multiple :accept="accept" @change="filesChanged"></label><p>{{ files.length }} media files selected.</p><label class="nj-field">Or select a complete dataset folder<input type="file" multiple webkitdirectory directory @change="filesChanged"></label>
         <details><summary>Annotation schema</summary><label class="nj-field">Optional Supervisely meta.json<input type="file" accept=".json" @change="metaChanged"></label><p class="nj-muted">Without a schema file, uploads use the bird box and four head-point pilot template. Edit the source schema in Supervisely before distribution if needed.</p></details>
         <button class="nj-primary" @click="upload" :disabled="disabled || !workspaceId || !projectName.trim() || !files.length">Upload to Supervisely</button><p v-if="progress" role="status">{{ progress }}</p></div>
       <div v-if="view.can_setup" class="nj-panel"><h3>Distribute dataset to teams</h3><div class="nj-columns"><div><h4>1. Choose source datasets</h4><label v-for="d in sources.datasets || []" :key="d.id" class="nj-check"><input type="checkbox" v-model="selectedDatasets" :value="d.id">{{ d.project }} / {{ d.name }} ({{ d.items }} files)</label></div>
         <div><h4>2. Choose participant teams</h4><label v-for="t in readyTeams" :key="t.id" class="nj-check"><input type="checkbox" v-model="selectedTeams" :value="t.id">{{ t.name }} · {{ monitorName(t.monitor_id) }}</label><p v-if="!readyTeams.length">Add teams and assign their monitors in Monitors & Teams. Teams already given batches are excluded.</p></div></div>
-        <h4>3. Choose workload and replication</h4><label class="nj-check"><input type="checkbox" v-model="pilot">Small pilot (allow reduced replication and images-only work)</label>
-        <div class="nj-form-row"><label>Independent teams per source<input v-model.number="replicas" type="number" :min="pilot ? 1 : 3"></label><label>Estimated effort units per image<input v-model.number="imageUnits" type="number" min="1" placeholder="Your estimate"></label><label>Maximum effort units per image batch<input v-model.number="batchUnits" type="number" min="1" placeholder="Choose batch size"></label></div>
+        <h4>3. Choose workload and replication</h4><p class="nj-muted">Replication and video requirements follow your event rules. Image-only work and multiple complete videos per team are supported.</p>
+        <div class="nj-form-row"><label>Independent teams per source<input v-model.number="replicas" type="number" min="1"></label><label>Estimated effort units per image<input v-model.number="imageUnits" type="number" min="1" placeholder="Your estimate"></label><label>Maximum effort units per image batch<input v-model.number="batchUnits" type="number" min="1" placeholder="Choose batch size"></label></div>
         <p class="nj-muted">Videos remain complete and use actual frame counts as effort units. Enter a comparable image-effort estimate.</p><label class="nj-check"><input type="checkbox" v-model="withAnnotations">Copy existing source annotations</label>
-        <button @click="plan" :disabled="disabled || !selectedDatasets.length || !selectedTeams.length || !imageUnits || !batchUnits">Preview distribution</button></div>
-      <div v-if="preview && view.plan_id && view.can_setup" class="nj-panel"><h3>Review dataset distribution</h3><p>{{ preview.source_images }} source images · {{ preview.source_videos }} source videos · {{ preview.replicas }} independent teams per source</p><div class="nj-table-scroll"><table class="nj-table"><thead><tr><th>Team</th><th>Monitor</th><th>Images</th><th>Videos</th><th>Batches</th></tr></thead><tbody><tr v-for="t in preview.teams" :key="t.id"><td>{{ t.name }}</td><td>{{ monitorName(t.monitor_id) }}</td><td>{{ t.images }}</td><td>{{ t.videos }}</td><td>{{ t.batches }}</td></tr></tbody></table></div><button class="nj-primary" @click="run('distribute', {plan_id: view.plan_id})" :disabled="disabled">Apply distribution</button><p class="nj-muted">Jobs will be released from Monitoring by each assigned monitor.</p></div>
+        <details><summary>Per-source effort overrides and inventory</summary><p class="nj-muted">Enter JSON mapping source IDs to positive effort estimates. The source IDs below can also define the common challenge in Event rules.</p><textarea v-model="effortOverrides" rows="3"></textarea><button @click="run('inventory', {dataset_ids:selectedDatasets, image_units:Number(imageUnits)||1})" :disabled="disabled || !selectedDatasets.length">Inspect selected inventory</button><div v-for="a in view.inventory || []" :key="a.source_id"><code>{{a.source_id}}</code> · {{a.relative_path || a.name}} · {{a.frames || 1}} {{a.kind==='video'?'frames':'image'}}</div></details><button @click="plan" :disabled="disabled || !selectedDatasets.length || !selectedTeams.length || !imageUnits || !batchUnits">Preview distribution</button></div>
+      <div v-if="preview && view.plan_id && view.can_setup" class="nj-panel"><h3>Review dataset distribution</h3><p class="nj-muted">Seed {{preview.seed}} · workload spread {{preview.workload_spread}} effort units · rule revision {{preview.rules_revision}}</p><details><summary>Source coverage</summary><p v-for="(count,source) in preview.coverage" :key="source">{{source}} → {{count}} independent teams</p></details><p>{{ preview.source_images }} source images · {{ preview.source_videos }} source videos · {{ preview.replicas }} independent teams per source</p><div class="nj-table-scroll"><table class="nj-table"><thead><tr><th>Team</th><th>Monitor</th><th>Images</th><th>Videos</th><th>Batches</th><th>Required units</th><th>Source mix</th></tr></thead><tbody><tr v-for="t in preview.teams" :key="t.id"><td>{{ t.name }}</td><td>{{ monitorName(t.monitor_id) }}</td><td>{{ t.images }}</td><td>{{ t.videos }}</td><td>{{ t.batches }}</td><td>{{t.required_units}}</td><td>{{JSON.stringify(t.strata)}}</td></tr></tbody></table></div><button class="nj-primary" @click="run('distribute', {plan_id: view.plan_id})" :disabled="disabled">Apply distribution</button><p class="nj-muted">Jobs will be released from Monitoring by each assigned monitor.</p></div>
       <div class="nj-panel"><h3>Distribution status by team</h3><div v-for="t in roster" :key="t.id" class="nj-contribution"><span>{{ t.name }} · {{ monitorName(t.monitor_id) }}</span><span class="nj-badge" :class="{warning: !t.monitor_id}">{{ t.has_batches ? 'Batches prepared' : (t.monitor_id ? 'Awaiting distribution' : 'Assign a monitor first') }}</span></div><p v-if="!roster.length">No teams registered yet.</p></div>
     </template>
     <details v-if="view.can_setup && (setup.operations || []).length" class="nj-panel"><summary>Operation history and recovery</summary><div v-for="o in setup.operations" :key="o.id" class="nj-operation"><strong>{{ o.kind }} · {{ o.state }}</strong><small>{{ o.id }}</small><p v-if="o.result.error" class="nj-caution">{{ o.result.error }}</p><details v-if="o.result.resources"><summary>Confirmed resources</summary><pre>{{ JSON.stringify(o.result.resources, null, 2) }}</pre></details></div></details>

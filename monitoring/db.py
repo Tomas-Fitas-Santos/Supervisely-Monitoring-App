@@ -122,6 +122,109 @@ class EventMember(Base):
     name: Mapped[str] = mapped_column(String(180))
 
 
+class CompetitionConfig(Base):
+    __tablename__ = 'competition_config'
+    id: Mapped[int] = mapped_column(primary_key=True)
+    revision: Mapped[int] = mapped_column(default=0)
+    frozen: Mapped[bool] = mapped_column(default=False)
+    rules: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class Registration(Base):
+    __tablename__ = 'registrations'
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    team_name: Mapped[str] = mapped_column(String(180), unique=True)
+    members: Mapped[list] = mapped_column(JSON)
+    monitor_id: Mapped[int] = mapped_column(default=0)
+    team_id: Mapped[int | None] = mapped_column(nullable=True)
+    error: Mapped[str] = mapped_column(Text, default='')
+
+
+class Submission(Base):
+    __tablename__ = 'submissions'
+    __table_args__ = (UniqueConstraint('batch_id', 'version'),)
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    batch_id: Mapped[str] = mapped_column(ForeignKey('batches.id'), index=True)
+    version: Mapped[int]
+    digest: Mapped[str] = mapped_column(String(64))
+    captured_at: Mapped[int] = mapped_column(default=now)
+    reason: Mapped[str] = mapped_column(String(30), default='submission')
+    payload: Mapped[dict] = mapped_column(JSON)
+
+
+class WorkUnit(Base):
+    __tablename__ = 'work_units'
+    __table_args__ = (UniqueConstraint('batch_id', 'entity_id', 'frame_index'),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    batch_id: Mapped[str] = mapped_column(ForeignKey('batches.id'), index=True)
+    entity_id: Mapped[int]
+    frame_index: Mapped[int] = mapped_column(default=-1)
+    details: Mapped[dict] = mapped_column(JSON)
+    synced_at: Mapped[int] = mapped_column(default=now)
+
+
+class Assessment(Base):
+    __tablename__ = 'assessments'
+    __table_args__ = (UniqueConstraint('submission_id', 'entity_id', 'frame_index', 'bird_id', 'criterion'),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    submission_id: Mapped[str] = mapped_column(ForeignKey('submissions.id'), index=True)
+    entity_id: Mapped[int]
+    frame_index: Mapped[int]
+    bird_id: Mapped[str] = mapped_column(String(100))
+    criterion: Mapped[str] = mapped_column(String(50))
+    verdict: Mapped[str] = mapped_column(String(20))
+    note: Mapped[str] = mapped_column(Text, default='')
+    monitor_id: Mapped[int]
+    revision: Mapped[int] = mapped_column(default=0)
+    updated_at: Mapped[int] = mapped_column(default=now)
+
+
+class Simulation(Base):
+    """Local demonstration resources; never used by the live gateway."""
+    __tablename__ = 'simulation'
+    id: Mapped[int] = mapped_column(primary_key=True)
+    revision: Mapped[int] = mapped_column(default=0)
+    data: Mapped[dict] = mapped_column(JSON)
+
+
+class UploadedPath(Base):
+    __tablename__ = 'uploaded_paths'
+    upload_id: Mapped[str] = mapped_column(ForeignKey('staged_uploads.id'), primary_key=True)
+    path: Mapped[str] = mapped_column(String(1000))
+
+
+class SourceOrigin(Base):
+    __tablename__ = 'source_origins'
+    source_id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    relative_path: Mapped[str] = mapped_column(String(1000))
+    checksum: Mapped[str] = mapped_column(String(64))
+
+
+class EventClosure(Base):
+    __tablename__ = 'event_closure'
+    id: Mapped[int] = mapped_column(primary_key=True)
+    closed_at: Mapped[int] = mapped_column(default=now)
+    deadline: Mapped[int | None] = mapped_column(nullable=True)
+    operation_id: Mapped[str] = mapped_column(String(80))
+
+
+class TaskAttempt(Base):
+    __tablename__ = 'task_attempts'
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    batch_id: Mapped[str] = mapped_column(ForeignKey('batches.id'), index=True)
+    parent_job_ids: Mapped[list] = mapped_column(JSON)
+    job_ids: Mapped[list] = mapped_column(JSON)
+    report: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[int] = mapped_column(default=now)
+
+
+class TaskProgress(Base):
+    __tablename__ = 'task_progress'
+    job_id: Mapped[int] = mapped_column(primary_key=True)
+    batch_id: Mapped[str] = mapped_column(ForeignKey('batches.id'), index=True)
+    details: Mapped[dict] = mapped_column(JSON)
+
+
 def database(url: str):
     opts = {"connect_args": {"check_same_thread": False, "timeout": 30}} if url.startswith("sqlite") else {}
     engine = create_engine(url, pool_pre_ping=True, **opts)
@@ -138,3 +241,5 @@ def initialize(engine):
             session.add(SetupState(id=1))
         if not session.get(EventConfig, 1):
             session.add(EventConfig(id=1))
+        if not session.get(CompetitionConfig, 1):
+            session.add(CompetitionConfig(id=1, rules={}))
