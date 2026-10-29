@@ -4,6 +4,7 @@ Captured-at is deliberately distinct from a native submission timestamp: polling
 cannot reconstruct a historical server state that was never downloaded.
 """
 from copy import deepcopy
+from decimal import Decimal
 import hashlib
 import json
 import math
@@ -281,7 +282,7 @@ class Competition:
             from .db import EventClosure
             closed = s.get(EventClosure, 1) is not None
             for team in s.scalars(select(Team).order_by(Team.name)):
-                points, good, bad, missing, pending, units_count = 0, 0, 0, 0, 0, 0
+                points, good, bad, missing, pending, units_count = Decimal(0), 0, 0, 0, 0, 0
                 for batch in s.scalars(select(Batch).where(Batch.team_id == team.id)):
                     snap = self.latest(s, batch.id)
                     if not snap:
@@ -302,17 +303,21 @@ class Competition:
                             good += verdict == 'good'; bad += verdict == 'bad'; missing += verdict == 'missing'
                             value = rules[verdict] if verdict != 'missing' or rules['missing_penalty'] else 0
                             weight = rules['weights'].get(key[1], 1) if rules['mode'] == 'weighted' else 1
-                            points += value * weight
+                            points += Decimal(str(value)) * Decimal(str(weight))
                 assessed = good + bad + missing
                 result.append({'team_id': team.id, 'team': team.name, 'monitor_id': team.monitor_id,
-                    'points': points, 'good': good, 'bad': bad, 'missing': missing, 'pending': pending,
+                    'points': float(points), 'good': good, 'bad': bad, 'missing': missing, 'pending': pending,
                     'units': units_count, 'accuracy': round(good / assessed, 4) if assessed else None,
-                    'provisional': not closed or pending > 0 or not units_count})
-        result.sort(key=lambda row: (-(row['points'] if rules['ranking'] == 'points' else (row['accuracy'] or 0)), row['team']))
-        last_score, position = None, 0
-        for i, row in enumerate(result, 1):
+                    'provisional': not closed or pending > 0 or not units_count or (rules['ranking'] == 'accuracy' and not assessed)})
+        result.sort(key=lambda row: (row['provisional'], -(row['points'] if rules['ranking'] == 'points' else (row['accuracy'] or 0)), row['team']))
+        last_score, position, eligible_count = None, 0, 0
+        for row in result:
+            if row['provisional']:
+                row['position'] = None
+                continue
+            eligible_count += 1
             score = row['points'] if rules['ranking'] == 'points' else row['accuracy']
-            if i == 1 or score != last_score: position = i
+            if eligible_count == 1 or score != last_score: position = eligible_count
             row['position'] = position
             last_score = score
         return result

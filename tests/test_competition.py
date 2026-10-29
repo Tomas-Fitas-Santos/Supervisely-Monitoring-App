@@ -184,3 +184,32 @@ def test_legacy_video_capture_must_be_reindexed_after_freezing_new_frame_rules(s
         comp.assess(90,'av',old,201,0,'unit','whole','good')
     t,b=service.spec(90,1,'av');new=comp.refresh(reader,t,b)
     assert new!=old and comp.page(90,'av')['stats']['total']==9
+
+
+def test_unsubmitted_teams_do_not_consume_official_accuracy_rank_positions(service):
+    comp,reader,sid=capture(service,ranking='accuracy')
+    for entity in (101,102):comp.assess(90,'a1',sid,entity,-1,'unit','whole','bad','Judged incorrect.')
+    with service.sessions.begin() as s:
+        s.get(Team,1).name='Zed judged team';s.get(Team,2).name='A unsubmitted team'
+        s.add(EventClosure(id=1,operation_id='ranking_fixture'))
+    board={r['team_id']:r for r in comp.leaderboard()}
+    assert board[1]['position']==1 and not board[1]['provisional']
+    assert board[2]['position'] is None and board[2]['provisional']
+
+
+def test_fractional_weights_produce_exact_decimal_ties(service):
+    comp,reader,sid=capture(service,mode='weighted',criteria=['box','beak','crown'],weights={'box':.1,'beak':.2,'crown':.3})
+    for entity in (101,102):
+        for criterion in ('box','beak','crown'):
+            good=entity==101 and criterion!='crown'
+            comp.assess(90,'a1',sid,entity,-1,'b1',criterion,'good' if good else 'na','Not applicable under this test protocol.')
+    with service.sessions.begin() as s:
+        b=s.get(Batch,'b1');b.state='active';b.job_ids=[73]
+    reader.payload={'meta':{},'annotations':{'301':labels()}}
+    t,b=service.spec(91,2,'b1');other=comp.refresh(reader,t,b)
+    for criterion in ('box','beak','crown'):
+        comp.assess(91,'b1',other,301,-1,'b1',criterion,'good' if criterion=='crown' else 'na','Not applicable under this test protocol.')
+    with service.sessions.begin() as s:s.add(EventClosure(id=1,operation_id='tie_fixture'))
+    board=comp.leaderboard()
+    assert [r['points'] for r in board]==[.3,.3]
+    assert [r['position'] for r in board]==[1,1]
