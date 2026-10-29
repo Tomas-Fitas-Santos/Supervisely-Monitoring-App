@@ -223,3 +223,46 @@ def test_bundled_live_upload_uses_configured_workspace_and_keeps_source_checksum
         assert len(list(session.scalars(select(SourceOrigin)))) == 2
     with pytest.raises(WorkflowError, match='Source media is already available'):
         upload_photos(setup, gateway, 900, 'dont_duplicate_photos')
+
+
+def test_live_sample_setup_initializes_pending_teams_and_photos_without_simulating_work(demo):
+    from monitoring.db import EventConfig, EventMember
+    from monitoring.pilot import prepare_sample
+    service, api, gateway, _ = demo
+    with service.sessions.begin() as session:
+        config = session.get(EventConfig, 1)
+        config.monitoring_team_id = config.annotator_team_id = config.source_workspace_id = None
+        session.execute(delete(EventMember))
+    setup = Setup(service.sessions, 0)
+    prepare_sample(setup, gateway, 900, 'live_sample_setup')
+    assert setup.groups()['ready']
+    assert {r['team_name'] for r in Registrations(service.sessions).rows()} == {'TEAM 1', 'TEAM 2'}
+    assert all(r['membership_status'] == 'pending' for r in Registrations(service.sessions).rows())
+    sources = gateway.sources(setup.monitoring_team_id)
+    assert sum(d['items'] for d in sources['datasets']) == 2
+    before = api.store.read()
+    prepare_sample(setup, gateway, 900, 'repeat_live_sample')
+    after = api.store.read()
+    assert before['teams'] == after['teams'] and before['media'] == after['media']
+    assert before['invitations'] == after['invitations']
+    assert not after['jobs']
+    assert not Competition(service.sessions).config()['frozen']
+    assert not any(t['has_batches'] for t in setup.roster())
+
+
+def test_live_sample_setup_retains_recovery_lock_and_never_resets_a_closed_event(demo):
+    from monitoring.db import SetupState
+    from monitoring.pilot import prepare_sample
+    service, api, gateway, setup = demo
+    with service.sessions.begin() as session:
+        session.get(SetupState, 1).operation_id = 'unresolved_native_write'
+    before = api.store.read()
+    with pytest.raises(WorkflowError, match='needs inspection'):
+        prepare_sample(setup, gateway, 900, 'blocked_sample_setup')
+    assert before == api.store.read()
+    with service.sessions.begin() as session:
+        session.get(SetupState, 1).operation_id = None
+        session.add(EventClosure(id=1, operation_id='closed_for_test'))
+    with pytest.raises(WorkflowError, match='closed'):
+        prepare_sample(setup, gateway, 900, 'closed_sample_setup')
+    assert before == api.store.read()

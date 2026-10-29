@@ -6,7 +6,7 @@ Vue.component('nightjar-management', {
       existingTeam: null, assignments: {}, files: [], workspaceId: null, projectName: '', kind: 'images',
       metaText: '', selectedDatasets: [], selectedTeams: [], replicas: 1, batchUnits: '', imageUnits: '',
       pilot: true, withAnnotations: false, progress: '', inspectionNote: '',
-      monitorGroupName: 'Monitors', annotatorGroupName: 'Annotators', existingMonitorGroup: null, existingAnnotatorGroup: null,
+      monitorGroupName: this.view.pilot ? 'Demo Monitors' : 'Monitors', annotatorGroupName: this.view.pilot ? 'Demo Annotators' : 'Annotators', existingMonitorGroup: null, existingAnnotatorGroup: null,
       monitorLogins: '', annotatorLogins: '', candidateMonitorIds: [],
       effortOverrides: '{}', planningDefaultsLoaded: false, selectedMonitor: null, monitorSearch: '', teamSearch: '', addTeamToMonitor: null, showAddMonitor: false, showAddTeam: false, loaded: false };
   },
@@ -37,7 +37,7 @@ Vue.component('nightjar-management', {
     accept() { if(this.kind==='mixed')return '.jpg,.jpeg,.png,.bmp,.webp,.tif,.tiff,.mp4,.avi,.mov,.mkv,.webm'; return this.kind === 'images' ? '.jpg,.jpeg,.png,.bmp,.webp,.tif,.tiff' : '.mp4,.avi,.mov,.mkv,.webm'; }
   },
   watch: { 'view.competition': {immediate:true,handler(c){if(!this.planningDefaultsLoaded && c?.rules){this.replicas=c.rules.replicas;this.imageUnits=c.rules.image_effort;this.batchUnits=c.rules.batch_effort;this.planningDefaultsLoaded=true}}}, busy(value) { this.$emit('busy', value); },
-    locked(value) { if (!value && (!this.loaded || (this.view.can_setup && !Array.isArray(this.catalog.users)))) this.reload(); },
+    locked(value) { if (!value && this.view.connected && (!this.loaded || (this.view.can_setup && !Array.isArray(this.catalog.users)))) this.reload(); },
     'groups.workspace_id'(value) { if (!this.workspaceId && value) this.workspaceId = value; } },
   methods: {
     id() { return crypto.randomUUID().replace(/-/g, ''); },
@@ -45,7 +45,7 @@ Vue.component('nightjar-management', {
     participants(t) { return (t.participants || []).map(u => u.name + ' (' + u.login + ')').join(' · '); },
     chooseMonitor(m) { this.selectedMonitor = m.id; this.addTeamToMonitor = null; },
     assignedCount(m) { return this.roster.filter(t => t.monitor_id === m.id).length; },
-    async reload() { const ok = await this.run(this.view.can_setup ? 'catalog' : 'overview'); if (ok) this.loaded = true; },
+    async reload() { if (!this.view.connected) return false; const ok = await this.run(this.view.can_setup ? 'catalog' : 'overview'); if (ok) this.loaded = true; },
     async addToMonitor() { const t = this.roster.find(t => t.id === this.addTeamToMonitor); if (t && this.monitor) { this.$set(this.assignments, t.id, this.monitor.id); await this.assign(t); if (!this.clientError) this.addTeamToMonitor = null; } },
     removeFromMonitor(t) { return this.run('unassign', {operation_id: this.id(), setup_team_id: t.id, setup_revision: t.revision, expected_monitor_id: t.monitor_id}).then(ok => { if (ok) this.$delete(this.assignments, t.id); return ok; }); },
     async request(action, values = {}) {
@@ -64,6 +64,12 @@ Vue.component('nightjar-management', {
     },
     createGroups() {
       return this.run('groups', {operation_id: this.id(), monitor_group_name: this.monitorGroupName,
+        annotator_group_name: this.annotatorGroupName, existing_monitor_group: this.existingMonitorGroup,
+        existing_annotator_group: this.existingAnnotatorGroup});
+    },
+    prepareSample() {
+      if (!this.view.can_setup || this.disabled) return false;
+      return this.run('demo_setup', {operation_id: this.id(), monitor_group_name: this.monitorGroupName,
         annotator_group_name: this.annotatorGroupName, existing_monitor_group: this.existingMonitorGroup,
         existing_annotator_group: this.existingAnnotatorGroup});
     },
@@ -130,14 +136,23 @@ Vue.component('nightjar-management', {
         pilot: this.pilot, with_annotations: this.withAnnotations, allocation_options: {effort} });
     }
   },
-  mounted() { if (!this.locked) this.reload(); if (this.groups.workspace_id) this.workspaceId = this.groups.workspace_id; },
+  mounted() { if (!this.locked && this.view.connected) this.reload(); if (this.groups.workspace_id) this.workspaceId = this.groups.workspace_id; },
   template: `
   <section class="nj-management">
     <div class="nj-section-heading"><div><h2>{{ section === 'roster' ? 'Monitors & Teams' : 'Dataset' }}</h2>
       <p class="nj-muted">{{ section === 'roster' ? 'Register monitors and teams, then check invitations and assignments.' : 'Upload event source data, choose teams and review distribution before applying it.' }}</p></div>
       <button @click="reload" :disabled="busy || locked">Reload lists</button></div>
-    <p v-if="!view.can_setup" class="nj-message">You can view the event lists. The monitoring organiser manages people, assignments and dataset distribution.</p>
+    <p v-if="!view.connected" class="nj-message">First connect your organiser account using the Supervisely server and API token above. Event setup becomes available after connection.</p>
+    <p v-else-if="!view.can_setup" class="nj-message">You can view the event lists. The monitoring organiser manages people, assignments and dataset distribution.</p>
     <div v-if="clientError" class="nj-message nj-error" role="alert">{{ clientError }}</div>
+    <div v-if="view.pilot && section === 'roster'" class="nj-panel nj-demo-setup"><h3>Set up the demo event</h3>
+      <p>The sample uses TEAM 1 and TEAM 2, each with your organiser account as monitor and one annotator, plus two bundled bird photos.</p>
+      <ol><li>Connect the organiser account above.</li><li>Click Set up sample event to initialize the groups, load the CSV, create real teams/send invitations and upload the photos.</li><li>Annotators accept in Supervisely. Refresh invitations until both teams are Ready.</li><li>In Dataset, configure/freeze rules, preview and apply distribution. In Monitoring, release the real labeling jobs.</li></ol>
+      <button class="nj-primary" @click="prepareSample" :disabled="disabled || !view.can_setup || view.closed || !monitorGroupName.trim() || !annotatorGroupName.trim()">Set up sample event</button>
+      <p v-if="!view.connected" class="nj-muted">Connect account first to enable this button. Emails alone cannot authenticate real Supervisely operations.</p>
+      <p v-else-if="!view.can_setup" class="nj-muted">The event organiser needs native Admin permissions to perform setup.</p>
+      <p class="nj-muted">Existing confirmed teams and sample uploads are reused. Invitation acceptance, task submission and scoring are never simulated. You can also use the individual setup controls below.</p>
+    </div>
     <div v-if="blocked && view.can_setup" class="nj-panel nj-caution"><h3>Setup needs attention</h3><p>Check the operation history at the bottom of this tab before continuing.</p>
       <template v-if="(setup.operations || []).some(o => o.id === setup.blocked_by && o.state === 'needs_inspection')">
         <label>What did you verify in Supervisely?<textarea v-model="inspectionNote" rows="2" maxlength="2000"></textarea></label>
@@ -145,14 +160,14 @@ Vue.component('nightjar-management', {
       </template></div>
     <div v-if="!directory.ready" class="nj-panel"><h3>Start the event</h3>
       <p>Create the event groups once. Then add monitors and teams here; manage source data in Dataset. Annotators work in the Supervisely web app.</p>
-      <template v-if="view.can_setup && section === 'roster'">
+      <template v-if="section === 'roster' && (view.can_setup || (view.connection.local && !view.connected))">
         <details><summary>Choose existing Supervisely groups or change their names</summary><div class="nj-columns">
           <div><label class="nj-field">Monitors group name<input v-model="monitorGroupName" maxlength="180"></label>
             <label v-if="view.connection.local" class="nj-field">Monitors Supervisely team<select v-model="existingMonitorGroup"><option :value="null">Create a new team</option><option v-for="t in catalog.remote_teams || []" :key="t.id" :value="t.id">{{ t.name }}</option></select></label>
             <p v-else class="nj-muted">Monitors use the team where this shared session is running.</p></div>
           <div><label class="nj-field">Annotators group name<input v-model="annotatorGroupName" maxlength="180"></label>
             <label class="nj-field">Annotators Supervisely team<select v-model="existingAnnotatorGroup"><option :value="null">Create a new team</option><option v-for="t in catalog.remote_teams || []" :key="t.id" :value="t.id">{{ t.name }}</option></select></label></div></div></details>
-        <button class="nj-primary" @click="createGroups" :disabled="disabled || !monitorGroupName.trim() || !annotatorGroupName.trim()">Initialize event</button>
+        <button class="nj-primary" @click="createGroups" :disabled="disabled || !view.can_setup || !monitorGroupName.trim() || !annotatorGroupName.trim()">Initialize event</button>
       </template><p v-else>Open Monitors & Teams as the organiser to initialize the event.</p></div>
     <template v-if="section === 'roster'"><event-registrations v-if="view.can_setup && directory.ready" :view="view" :run="run" :disabled="disabled"></event-registrations>
       <div class="nj-metrics nj-three-metrics"><div><span>Monitors</span><strong>{{ monitors.length }}</strong></div><div><span>Participant teams</span><strong>{{ roster.length }}</strong></div><div><span>Teams without a monitor</span><strong>{{ unassignedPairs.length }}</strong></div></div>

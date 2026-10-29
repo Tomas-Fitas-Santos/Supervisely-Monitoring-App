@@ -18,7 +18,7 @@
 
 The unit/integration suite uses real pinned-SDK geometry and method signatures, disposable databases, and simulated/mocked remote responses. The Chromium walkthrough runs the actual local server, exercises the three tabs and checks no external browser requests. Optional manual CI supports Windows, PostgreSQL and browser checks; the app has no dependency on GitHub Actions availability.
 
-No live Supervisely credentials were available in this development environment. The [real pilot guide](real-pilot.md) is the acceptance gate for native invitation semantics, permissions, correction/acceptance state transitions, cross-team isolation and simultaneous authenticated platform sessions. Neither the fixture size nor native multi-user support establishes event-scale capacity.
+A read-only live check verified the supplied organiser identity, encrypted local connection, team visibility and setup authorisation. No native resources were created by that check; invitation/task execution remains separate. The [real pilot guide](real-pilot.md) is the acceptance gate for native invitation semantics, permissions, correction/acceptance state transitions, cross-team isolation and simultaneous authenticated platform sessions. Neither the fixture size nor native multi-user support establishes event-scale capacity.
 
 Email invitations avoid global account lookup. Actual public-route email support, invitation delivery and accepted-member identity association must be verified on the target instance; a native UI fallback is linked from the app. Supplied emails do not grant API access or bypass invitation acceptance. See email-invitations.md.
 

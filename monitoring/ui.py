@@ -468,6 +468,16 @@ def setup_action(request: Request):
             reset_demo(sessions, settings.home)
             data.update(plan_id=None, preview=None, assignment_plan_id=None, assignment_preview=[], unit_page={}, review_preview=None, export_data=None, sources={}, inventory=[])
             message = 'Demo reset. Previous simulated results were backed up locally. Load the CSV to rehearse again.'
+        elif name == 'demo_setup':
+            if not settings.local or os.getenv('MONITORING_PILOT') != '1' or os.getenv('MONITORING_SIMULATOR') == '1':
+                raise WorkflowError('Sample event setup is available only in the live Demo/Pilot.')
+            from .pilot import prepare_sample
+            prepare_sample(setup, gateway, uid, key, f.get('monitor_group_name', 'Demo Monitors'),
+                           f.get('annotator_group_name', 'Demo Annotators'),
+                           f.get('existing_monitor_group'), f.get('existing_annotator_group'))
+            message = ('Sample setup finished. Check each team below for invitation errors or pending acceptance. '
+                       'Annotators accept in Supervisely; then refresh invitations, configure distribution in Dataset '
+                       'and release jobs from Monitoring. The sample photos are uploaded; no work was simulated.')
         elif name in ('demo_csv', 'demo_sources'):
             if not settings.local or not any(os.getenv(k) == '1' for k in ('MONITORING_SIMULATOR', 'MONITORING_PILOT')):
                 raise WorkflowError('Bundled inputs are available in local --demo, --pilot or --simulator mode.')
@@ -549,7 +559,7 @@ def setup_action(request: Request):
         data.update(setup=setup.snapshot(), directory=setup.directory(), connected=True,
                     can_setup=True, connection=connection_view(True))
         display_access(uid, gateway)
-        if name in ('groups', 'upload', 'catalog', 'distribute', 'demo_sources', 'demo_prepare'):
+        if name in ('groups', 'upload', 'catalog', 'distribute', 'demo_sources', 'demo_prepare', 'demo_setup'):
             data['sources'] = gateway.sources(setup.monitoring_team_id)
         dashboard.display(service.snapshot(uid), message)
         return {'ok': True}
@@ -557,6 +567,7 @@ def setup_action(request: Request):
         # Setup data is only sent after successful organiser authorization.
         if authorized:
             DataJson()['dashboard']['setup'] = setup.snapshot()
+            DataJson()['dashboard']['directory'] = setup.directory()
         else:
             clear_access()
         dashboard.display(service.snapshot(uid) if uid else {'teams': []}, str(exc), True)
@@ -567,6 +578,7 @@ def setup_action(request: Request):
             clear_access()
         else:
             DataJson()['dashboard']['setup'] = setup.snapshot()
+            DataJson()['dashboard']['directory'] = setup.directory()
         dashboard.display(service.snapshot(uid) if uid else {'teams': []},
             'Supervisely setup request failed. Check permissions and setup operation history before retrying.', True)
         return {'ok': False}

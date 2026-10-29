@@ -36,7 +36,7 @@ py -3.12 -m venv .venv
 
 If the environment already exists, use just the last command. Open **http://127.0.0.1:8000**. Follow [the organiser demo walkthrough](examples/organiser-demo/README.md).
 
-Follow the real-account steps below: create groups, load the CSV, create teams/invite emails, wait for actual acceptance, load the photos, freeze rules, distribute and release native jobs. Replication 1 gives one unique photo per team; replication 2 gives both photos independently to both teams. The live demo has no simulated acceptance/submission, role switch, one-click fake presentation or reset of native resources.
+In Monitors & Teams, **Set up the demo event** is visible from the start. Connect the organiser account above to enable **Set up sample event**: it creates/reuses event groups, imports the bundled CSV, creates the two native teams/requests invitations and uploads the sample photos. Check each membership, wait for actual acceptance, then freeze rules, distribute and release native jobs. **Initialize event** remains available for manual setup. Replication 1 gives one unique photo per team; replication 2 gives both photos independently to both teams. The live demo has no simulated acceptance/submission, role switch, one-click fake presentation or reset of native resources.
 
 Linux/macOS:
 
@@ -125,4 +125,4 @@ NODE_PATH=/tmp/monitor-ui/node_modules python tests/browser_demo.py
 
 Node/Chromium are development-only checks; running the app needs no Node build. GitHub Actions checks are **manual-only** (`workflow_dispatch`), so pushes and pull requests do not consume Actions minutes. Run checks locally with the commands above. Set `TEST_DATABASE_URL` only to a **disposable** database: the Python tests drop its schema.
 
-Live instance permissions, invitation behavior, native correction/acceptance transitions, simultaneous platform sessions, API throughput and actual event-scale review capacity still require the real pilot. No live Supervisely credentials were provided in this development environment. See [current capability status](docs/implementation-roadmap.md).
+Live instance permissions, invitation behavior, native correction/acceptance transitions, simultaneous platform sessions, API throughput and actual event-scale review capacity still require the real pilot. A read-only live check verified the supplied organiser identity, encrypted local connection, team visibility and setup authorisation; it did not create native resources or verify invitations/tasks. See [current capability status](docs/implementation-roadmap.md).

@@ -35,4 +35,4 @@ Primary references:
 
 Automated tests cover actual application code with native-shaped pending/accepted records, denied global user search, same-ID pending users, definitive and uncertain failures, idempotent import/refresh, role loss, monitor transfer, even image distribution, nested uploads and native-shaped job ownership. The browser walkthrough covers pending teams, simulated acceptance, upload, allocation and review.
 
-No live Supervisely credential is supplied to the development tests. Actual email delivery, public-route email acceptance, accepted-only filtering, hidden-email association, role permissions, native jobs and licensing require the real-account pilot. Online presence is not implemented.
+Automated tests never require a live credential. A separate read-only check verified the supplied organiser identity, encrypted connection and setup authorisation; it did not send invitations or create native resources. Actual email delivery, public-route email acceptance, accepted-only filtering, hidden-email association, role permissions, native jobs and licensing require the real-account pilot. Online presence is not implemented.

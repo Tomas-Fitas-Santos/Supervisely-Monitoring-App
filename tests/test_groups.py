@@ -27,6 +27,7 @@ def remote():
     gw = Mock()
     gw.api.team.create.side_effect = [NS(id=10, name='Monitors'), NS(id=20, name='Annotators')]
     gw.api.workspace.create.return_value = NS(id=30)
+    gw.api.user.get_my_info.return_value = person(99, 'organiser', 'admin')
     gw.role_id.side_effect = lambda role: {'manager': 5, 'annotator': 7}[role]
     people = {p.login: p for p in [person(90, 'monitor', 'manager'), person(91, 'other', 'manager'),
                                       person(11, 'alice'), person(12, 'bob'), person(21, 'carol'), person(22, 'dave')]}
@@ -48,7 +49,7 @@ def test_groups_and_registered_users_are_persisted_without_env_ids(event):
     assert event.monitoring_team_id == 10
     saved = Setup(event.sessions, 999).groups()
     assert saved['ready'] and saved['workspace_id'] == 30
-    assert [m['login'] for m in saved['monitors']] == ['monitor', 'other']
+    assert [m['login'] for m in saved['monitors']] == ['monitor', 'organiser', 'other']
     assert len(saved['annotators']) == 4
     assert gw.api.user.create.call_count == 0
     with event.sessions() as s:
@@ -163,7 +164,7 @@ def test_removal_is_blocked_for_assigned_people(event):
             event.remove_member(gw, 99, 'remove_assigned', uid)
     event.remove_member(gw, 99, 'remove_unused', 91)
     gw.api.user.remove_from_team.assert_called_once_with(91, 10)
-    assert [u['id'] for u in event.groups()['monitors']] == [90]
+    assert [u['id'] for u in event.groups()['monitors']] == [90, 99]
 
 
 def test_existing_event_members_are_adopted_during_group_upgrade(event):
@@ -176,7 +177,7 @@ def test_existing_event_members_are_adopted_during_group_upgrade(event):
     users = {u.id: u for u in [person(11, 'alice'), person(12, 'bob'), person(90, 'monitor', 'manager')]}
     gw.api.user.get_member_info_by_id.side_effect = lambda tid, uid: users[uid]
     event.configure_groups(gw, 99, 'upgrade_groups', 'Monitors', 'Annotators', 10)
-    assert [u['id'] for u in event.groups()['monitors']] == [90]
+    assert [u['id'] for u in event.groups()['monitors']] == [90, 99]
     assert [u['id'] for u in event.groups()['annotators']] == [11, 12]
 
 

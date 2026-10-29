@@ -17,6 +17,10 @@ The CSV includes `team_name`, `monitor_email` and `member_1_email`; the second a
 
 Stop the server, pull the implementation branch and restart with `-Mode Demo`. The old offline records stay untouched in `data/organiser-demo/`. Live Demo and Pilot both use `data/account-pilot/`, so an existing real pilot is resumed rather than provisioned again. Simulated pending invitations never sent an email and must not be treated as native teams.
 
+## Quick live setup
+
+In **Monitors & Teams**, the **Set up the demo event** panel and manual **Initialize event** control stay visible before connection. Connect the organiser token above, then click **Set up sample event** to initialize groups, load the CSV, create the native teams/request invitations and upload the sample photos. The organiser appears immediately as a monitor. Inspect pending/errors below, have annotators accept in Supervisely, then configure distribution and release jobs. The shortcut does not accept invitations, freeze rules or fabricate submissions. Confirmed teams/uploads are reused on a repeat; unresolved writes still require inspection.
+
 ## Manual walkthrough
 
 1. Connect the API token belonging to **tomas.bf.santos@gmail.com** and create/adopt the event groups. Then **Monitors & Teams → Load bundled demo CSV → Create teams and invite CSV emails.** Both real native teams appear immediately with **Pending invitations**. Their annotators are not yet ready for jobs; the organiser's existing Admin membership is retained.

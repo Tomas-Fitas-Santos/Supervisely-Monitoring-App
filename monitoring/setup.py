@@ -201,6 +201,12 @@ class Setup:
                 checkpoint({'group': 'monitors' if len(teams) == 1 else 'annotators', 'team_id': team.id})
             workspace = gateway.api.workspace.create(teams[0].id, 'Event source data', change_name_if_conflict=True)
             checkpoint({'workspace_id': workspace.id})
+            # The organiser is already the native Admin of the monitoring team.
+            # Register this monitor immediately, even while annotators' future
+            # invitations are pending, so setup/retries can select the owner.
+            organiser = gateway.api.user.get_my_info()
+            if int(organiser.id) != int(actor):
+                raise WorkflowError('The setup credential belongs to a different organiser.')
             for uid, (group, person) in legacy_members.items():
                 target = teams[0].id if group == 'monitors' else teams[1].id
                 role = gateway.role_id('manager' if group == 'monitors' else 'annotator')
@@ -215,6 +221,9 @@ class Setup:
                 for uid, (group, person) in legacy_members.items():
                     s.add(EventMember(user_id=uid, group=group, login=person.login,
                                       name=person.name or person.login))
+                if actor not in legacy_members:
+                    s.merge(EventMember(user_id=actor, group='monitors', login=organiser.login,
+                                        name=organiser.name or organiser.login))
 
     def add_members(self, gateway, actor, key, group, logins):
         if group not in ('monitors', 'annotators') or not self.groups()['ready']:

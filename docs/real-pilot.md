@@ -17,6 +17,8 @@ git pull --ff-only
 
 Open http://127.0.0.1:8000 and connect the organiser account in the UI. A fresh installation needs no event `.env`. Demo and Pilot share `data/account-pilot/`. The ordinary local event (`data/`) and offline Simulator (`data/organiser-demo/`) stores are separate. Upgrading from the old offline Demo leaves its records untouched. Local mode represents one connected account, even with multiple browser tabs; genuine multi-user testing needs a shared native hosted session. `Start-App.ps1 -Mode Pilot -Install` is the Windows shortcut.
 
+The **Set up the demo event** panel is visible before connection. Its **Set up sample event** button becomes available after connecting the organiser. It runs group initialization, bundled CSV import, native team/invitation setup and sample-photo upload through the normal recovery checkpoints. Use it as a shortcut for steps 2–5 below; acceptance remains an actual participant action. The manual **Initialize event** control is also visible, with connection guidance.
+
 ## Supplied account rehearsal
 
 The CSV creates **TEAM 1** with `tomas.gaming.21@gmail.com` as Annotator and **TEAM 2** with `tomas.santos.work2002@gmail.com` as Annotator. Both use `tomas.bf.santos@gmail.com` as monitor/Manager responsibility. Each demo team therefore has two people in total, not two annotators. The organiser retains native Admin membership and is the assigned job reviewer.
