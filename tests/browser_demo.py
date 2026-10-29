@@ -12,13 +12,13 @@ import time
 import urllib.request
 
 
-def main():
+def walkthrough(mode, script):
     repo = Path(__file__).resolve().parents[1]
     with tempfile.TemporaryDirectory(prefix='organiser-browser-') as temp:
         env = dict(os.environ, PYTHONPATH=str(repo))
         env['DEMO_SCREENSHOT_DIR'] = temp
         with open(Path(temp)/'server.log', 'w+') as log:
-            process = subprocess.Popen([sys.executable, '-m', 'monitoring.run', '--demo'], cwd=temp,
+            process = subprocess.Popen([sys.executable, '-m', 'monitoring.run', '--' + mode], cwd=temp,
                                        env=env, stdout=log, stderr=subprocess.STDOUT)
             try:
                 ready = False
@@ -33,7 +33,7 @@ def main():
                         time.sleep(.25)
                 if not ready:
                     raise RuntimeError('Demo server did not become ready.')
-                result = subprocess.run(['node', str(repo/'tests'/'browser_demo.cjs')], env=env, timeout=180)
+                result = subprocess.run(['node', str(repo/'tests'/script)], env=env, timeout=180)
                 if result.returncode:
                     raise RuntimeError('Chromium organiser walkthrough failed.')
             except Exception:
@@ -47,6 +47,11 @@ def main():
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait()
+
+
+def main():
+    walkthrough('demo', 'browser_demo.cjs')
+    walkthrough('pilot', 'browser_pilot.cjs')
 
 
 if __name__ == '__main__':

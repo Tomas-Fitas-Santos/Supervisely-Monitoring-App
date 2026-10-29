@@ -1,0 +1,8 @@
+{
+  "organiser_email": "tomas.bf.santos@gmail.com",
+  "participant_emails": [
+    "tomas.gaming.21@gmail.com",
+    "tomas.santos.work2002@gmail.com"
+  ],
+  "note": "User-supplied accounts for the real Supervisely pilot. Native logins and IDs must be resolved on the connected instance. This file grants no access and contains no credentials."
+}

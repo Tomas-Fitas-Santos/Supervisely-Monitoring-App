@@ -119,8 +119,14 @@ class Gateway:
             if owner not in team.annotator_ids:
                 raise WorkflowError('Video owner must be one of this pair’s participants.')
             return [(owner, ids)]
-        return [(uid, ids[index::len(team.annotator_ids)])
-                for index, uid in enumerate(team.annotator_ids) if ids[index::len(team.annotator_ids)]]
+        # New distributions persist ownership across batches/dataset partitions.
+        # Older manifests retain their original within-batch assignment.
+        owners = [a.get('assignee_id', team.annotator_ids[i % len(team.annotator_ids)])
+                  for i, a in enumerate(batch.assets)]
+        if any(owner not in team.annotator_ids for owner in owners):
+            raise WorkflowError('Image owner must be one of this pair’s participants.')
+        return [(uid, [entity for entity, owner in zip(ids, owners) if owner == uid])
+                for uid in team.annotator_ids if uid in owners]
 
     def find_release(self, team, batch):
         found = []

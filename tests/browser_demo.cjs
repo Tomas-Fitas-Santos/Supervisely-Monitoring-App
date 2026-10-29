@@ -3,8 +3,9 @@ const {chromium}=require('playwright');const assert=require('assert');const path
 page.on('pageerror',e=>errors.push(String(e)));page.on('request',r=>{if(!r.url().startsWith('http://127.0.0.1:8000')&&!r.url().startsWith('data:'))external.push(r.url())});
 await page.goto('http://127.0.0.1:8000',{waitUntil:'networkidle'});await page.getByText('Organiser demonstration — simulated Supervisely resources').waitFor();
 await page.getByRole('button',{name:'Load bundled demo CSV',exact:true}).click();await page.getByRole('button',{name:'Match all registration emails',exact:true}).click();
-const registrations=page.locator('.nj-registration');await registrations.first().getByText('Accounts matched',{exact:true}).waitFor();assert(await registrations.count()===3);
-for(let i=0;i<3;i++){const row=registrations.nth(i);await row.locator('select').selectOption(String(i===1?901:900));await row.getByRole('button',{name:'Provision this pair',exact:true}).click();await row.getByText('Provisioned',{exact:true}).waitFor();}
+const registrations=page.locator('.nj-registration');await registrations.first().getByText('Accounts matched',{exact:true}).waitFor();assert(await registrations.count()===1);
+await registrations.first().getByText('tomas.gaming.21@gmail.com',{exact:false}).waitFor();await registrations.first().getByText('tomas.santos.work2002@gmail.com',{exact:false}).waitFor();
+const row=registrations.first();await row.locator('select').selectOption('900');await row.getByRole('button',{name:'Provision this pair',exact:true}).click();await row.getByText('Provisioned',{exact:true}).waitFor();
 console.log('Browser: CSV match and provision passed');
 await page.getByRole('tab',{name:'Dataset',exact:true}).click();await page.getByRole('button',{name:'Load bundled CC0 bird photos',exact:true}).click();
 await page.locator('summary').filter({hasText:'Event rules and scoring'}).click();await page.getByRole('button',{name:'Save and freeze official rules',exact:true}).click();await page.getByText('Rules are frozen.',{exact:false}).waitFor();
@@ -19,4 +20,15 @@ await page.getByRole('combobox',{name:'Demo role',exact:true}).selectOption('901
 await page.getByRole('combobox',{name:'Demo role',exact:true}).selectOption('900');await page.getByRole('checkbox',{name:'Organiser oversight: inspect all teams and adjudicate judgments'}).check();
 await page.getByRole('button',{name:'Close event: stop jobs and capture final state',exact:true}).click();await page.getByText('Event closed: current native jobs have been stopped.',{exact:false}).waitFor();
 const download=page.waitForEvent('download');await page.getByRole('button',{name:'Download complete event records',exact:true}).click();const file=await download;assert(file.suggestedFilename()==='event-annotation-records.json');
-assert(errors.length===0,errors.join('\n'));assert(external.length===0,external.join('\n'));console.log('Browser: monitor isolation, closure and export passed; zero external browser requests or JavaScript errors');await browser.close();})().catch(e=>{console.error(e);process.exit(1)});
+console.log('Browser: monitor isolation, closure and export passed');
+await page.getByRole('button',{name:'Reset this demo (previous results are backed up)',exact:true}).click();
+const prepared=page.waitForResponse(r=>r.url().endsWith('/setup/action')&&r.request().postDataJSON()?.state?.dashboard?.setup_action==='demo_prepare');
+await page.getByRole('button',{name:'Prepare working presentation',exact:true}).click();
+assert((await (await prepared).json()).ok===true,await page.locator('body').innerText());
+await page.getByRole('button',{name:'Prepare working presentation',exact:true}).waitFor({state:'detached'});
+await page.getByRole('tab',{name:'Monitoring',exact:true}).click();
+await page.locator('.nj-unit').first().waitFor();
+await page.locator('.nj-unit').first().click();
+await page.getByRole('button',{name:'Load this captured image / frame',exact:true}).click();
+await page.locator('.nj-competition-review img').waitFor();
+assert(errors.length===0,errors.join('\n'));assert(external.length===0,external.join('\n'));console.log('Browser: one-click presentation with captured photo passed; zero external browser requests or JavaScript errors');await browser.close();})().catch(e=>{console.error(e);process.exit(1)});

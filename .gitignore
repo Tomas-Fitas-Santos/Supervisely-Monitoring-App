@@ -8,3 +8,4 @@ exports/
 local-manifest.json
 data/uploads/
 data/
+dist/

@@ -12,8 +12,7 @@ import threading
 from sqlalchemy import select, update
 from .db import EventConfig, EventMember, Simulation, CompetitionConfig
 from .service import WorkflowError
-
-ROOT = Path(__file__).resolve().parents[1] / 'examples' / 'organiser-demo'
+from .pilot import ROOT, accounts
 _LOCK = threading.RLock()
 
 
@@ -184,19 +183,19 @@ def initialize_demo(sessions):
         if s.get(Simulation, 1): return
         from .registration import Registrations
         _, rows = Registrations.columns((ROOT/'registrations.csv').read_text())
-        users = {'900':dict(id=900,login='demo_organiser',name='Demo organiser',email='organiser@example.test',disabled=False),
+        users = {'900':dict(id=900,login='demo_organiser',name='Tomás Santos (simulated admin)',email=accounts()['organiser_email'],disabled=False),
                  '901':dict(id=901,login='demo_monitor',name='Demo monitor',email='monitor@example.test',disabled=False)}
         for i,row in enumerate(rows):
             for n in (1,2):
                 uid=1000+i*2+n
-                users[str(uid)]=dict(id=uid,login=row[f'member_{n}_login'],name=row[f'member_{n}_name'],email=row[f'member_{n}_email'],disabled=False)
+                users[str(uid)]=dict(id=uid,login=row[f'member_{n}_login'] or f'demo_member_{n}_{i}',name=row[f'member_{n}_name'],email=row[f'member_{n}_email'],disabled=False)
         s.add(Simulation(id=1,data={'next_id':10000,'users':users,
             'teams':{'10':dict(id=10,name='Demo Monitors',members={'900':'admin','901':'manager'}),'20':dict(id=20,name='Demo Annotators',members={'900':'admin'})},
             'workspaces':{'30':dict(id=30,name='Demo event sources',team_id=10)},'projects':{},'datasets':{},'media':{},'jobs':{}}))
         c=s.get(EventConfig,1); c.owner_id=900;c.owner_login='demo_organiser';c.server_address=DemoApi.server_address
         c.monitoring_team_id=10;c.annotator_team_id=20;c.source_workspace_id=30
         s.add_all([EventMember(user_id=uid,group='monitors',login=users[str(uid)]['login'],name=users[str(uid)]['name']) for uid in (900,901)])
-        s.get(CompetitionConfig,1).rules={'name':'Organiser demonstration','replicas':3,'batch_effort':1}
+        s.get(CompetitionConfig,1).rules={'name':'Organiser demonstration','replicas':1,'batch_effort':1}
 
 
 def submit_demo(api, batch):
@@ -210,6 +209,50 @@ def submit_demo(api, batch):
                          points={'exterior':[[round(x),round(y)]],'interior':[]}) for name,(x,y) in points.items()]
         api.store.edit('media', media.id, {'annotation':{'size':{'height':h,'width':w},'objects':objects,'tags':[]}})
     for jid in batch.job_ids: api.labeling_job.set_status(jid, 'on_review')
+
+
+def prepare_presentation(sessions, home):
+    """Exercise the application workflow once, only inside a fresh simulator."""
+    from . import controller
+    from .competition import Competition
+    from .db import Batch, Registration, Team
+    from .pilot import import_roster, upload_photos
+    from .registration import Registrations
+    from .service import Service
+    from .setup import Setup
+    from .setup_gateway import SetupGateway
+    with sessions() as session:
+        config = session.get(EventConfig, 1)
+        if not session.get(Simulation, 1) or config.server_address != DemoApi.server_address:
+            raise WorkflowError('Presentation preparation is available only in the isolated simulator.')
+        if session.scalar(select(Team.id).limit(1)) or session.scalar(select(Registration.id).limit(1)):
+            raise WorkflowError('Continue the existing demo or reset it with a backup before preparing a new presentation.')
+    api = DemoApi(sessions, 900, home)
+    gateway = SetupGateway(api, sessions)
+    setup = Setup(sessions, 10, Path(home) / 'uploads')
+    service = Service(sessions)
+    import_roster(sessions, 900)
+    registrations = Registrations(sessions)
+    registrations.resolve(gateway, 900)
+    for row in registrations.rows():
+        registrations.provision(gateway, setup, 900, row['id'], 900)
+    from uuid import uuid4
+    result = upload_photos(setup, gateway, 900, uuid4().hex)
+    competition = Competition(sessions)
+    config = competition.config()
+    if not config['frozen']:
+        competition.save_rules(900, config['revision'], config['rules'], True)
+    team_ids = [team['id'] for team in setup.roster()]
+    plan, _ = setup.preview(gateway, 900, result['dataset_ids'], team_ids, 1, 1, 1, True, False)
+    setup.distribute(gateway, 900, plan)
+    with sessions() as session:
+        team = session.get(Team, team_ids[0])
+        batch = session.scalar(select(Batch).where(Batch.team_id == team.id).order_by(Batch.position))
+    controller.release(service, gateway, 900, team.id, batch.id, team.revision)
+    team, batch = service.spec(900, team.id, batch.id)
+    submit_demo(api, batch)
+    controller.sync(service, gateway, team, batch)
+    competition.refresh(gateway, team, batch)
 
 
 def reset_demo(sessions, home):

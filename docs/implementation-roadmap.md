@@ -11,15 +11,16 @@
 - Immutable captured submission payloads/metadata/digests, historical previews, rule freezing, whole/per-criterion/weighted scoring, configurable penalties, pending/NA handling, audited revisions, provisional standings and ties.
 - Native correction tasks with precise issue reports, submission/approval release gates and guarded native acceptance of fully judged unchanged captures.
 - Polling-based observed event closure, continued judging of captures after closure and reproducible JSON exports including annotation payloads and audit.
-- A persistent, resettable local organiser simulator, fictional registration CSV and two real credited CC0 bird photographs in nested folders. Local frontend assets are bundled; hosted sessions retain the native SDK shell.
+- A persistent, resettable organiser simulator with one-click presentation preparation; the supplied real-email pair CSV and two credited CC0 bird photographs in nested folders. A separate real-account pilot offers the same bundled inputs through actual authenticated actions. Local frontend assets are bundled; hosted sessions retain the native SDK shell.
+- Production-only startup guards, database health probe, container recipe and a native release source packager. Deployment requires a validated instance version and your own published container image. GitHub Actions is manual-only; local validation is independent of its quota.
 
 ## Validation boundaries
 
-The unit/integration suite uses real pinned-SDK geometry and method signatures, disposable databases, and simulated/mocked remote responses. The Chromium walkthrough runs the actual local server, exercises the three tabs and checks no external browser requests. CI runs Windows and PostgreSQL checks as well as the browser walkthrough.
+The unit/integration suite uses real pinned-SDK geometry and method signatures, disposable databases, and simulated/mocked remote responses. The Chromium walkthrough runs the actual local server, exercises the three tabs and checks no external browser requests. Optional manual CI supports Windows, PostgreSQL and browser checks; the app has no dependency on GitHub Actions availability.
 
 No live Supervisely credentials were available in this development environment. The [real pilot guide](real-pilot.md) is the acceptance gate for native invitation semantics, permissions, correction/acceptance state transitions, cross-team isolation and simultaneous authenticated platform sessions. Neither the fixture size nor native multi-user support establishes event-scale capacity.
 
-Email-based lookup is constrained by the account's native visibility. The application can use visible email information or audited organiser verification; it cannot discover private accounts magically or create real accounts from fictional demo emails.
+Email-based lookup is constrained by the account's native visibility. The application can use visible email information or audited organiser verification. The supplied real emails alone do not grant API access or reveal private native IDs/logins.
 
 Native job allocation is entity-based. Whole videos are supported; independent native submissions for frame ranges of the same video are not assumed. Splitting oversized videos would require a deliberate clip-generation workflow with original frame mappings and scientific boundary rules.
 

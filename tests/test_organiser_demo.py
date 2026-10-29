@@ -30,7 +30,7 @@ def prepare(demo):
     paths=[(p.relative_to(ROOT/'dataset').as_posix(),p) for p in sorted((ROOT/'dataset'/'images').rglob('*.jpg'))]
     result=gw.upload(10,30,'Birds','images',paths,pilot_meta(),lambda info:None)
     comp=Competition(service.sessions);config=comp.config();comp.save_rules(900,config['revision'],config['rules'],True)
-    pid,preview=setup.preview(gw,900,result['dataset_ids'],[t['id'] for t in setup.roster()],3,1,1,True,False)
+    pid,preview=setup.preview(gw,900,result['dataset_ids'],[t['id'] for t in setup.roster()],1,1,1,True,False)
     setup.distribute(gw,900,pid)
     with service.sessions() as s:
         t=s.scalar(select(Team).where(Team.monitor_id==900));b=s.scalar(select(Batch).where(Batch.team_id==t.id).order_by(Batch.position))
@@ -61,7 +61,7 @@ def test_complete_real_photo_demo_and_persistent_restart(demo):
     comp.assess(900,b.id,sid,u['entity_id'],-1,'unit','whole','good')
     assert next(r for r in comp.leaderboard() if r['team_id']==t.id)['points']==1
     initialize_demo(service.sessions)
-    assert len(setup.roster())==3 and len(Registrations(service.sessions).rows())==3
+    assert len(setup.roster())==1 and len(Registrations(service.sessions).rows())==1
     assert comp.export(900)['submissions']
 
 
@@ -138,7 +138,7 @@ def test_demo_reset_is_isolated_backed_up_and_can_rehearse_again(demo):
     assert list((api.home/'backups').glob('*.json'))
     assert not Competition(service.sessions).config()['frozen']
     prepare(demo)
-    assert len(setup.roster())==3
+    assert len(setup.roster())==1
 
 
 def test_video_handover_is_limited_to_the_pair_and_keeps_one_native_owner(demo):
@@ -162,3 +162,56 @@ def test_video_handover_is_limited_to_the_pair_and_keeps_one_native_owner(demo):
     current,video=service.spec(900,t.id,'whole_video')
     assert api.labeling_job.get_info_by_id(jobs[0].id).assigned_to_id==t.annotator_ids[1]
     assert Gateway.slices(current,video)==[(t.annotator_ids[1],[native.id])]
+
+
+def test_supplied_emails_and_two_native_accounts_receive_work_across_small_batches(demo):
+    from monitoring.gateway import Gateway
+    from monitoring.pilot import accounts
+    comp, team, batch, _ = prepare(demo)
+    service, api, gateway, setup = demo
+    assert api.user.get_my_info().email == 'tomas.bf.santos@gmail.com'
+    participants = {api.user.get_info_by_id(uid).email for uid in team.annotator_ids}
+    assert participants == set(accounts()['participant_emails'])
+    with service.sessions() as session:
+        batches = list(session.scalars(select(Batch).where(Batch.team_id == team.id).order_by(Batch.position)))
+    assert len(batches) == 2
+    owners = [uid for b in batches for uid, _ in Gateway.slices(team, b)]
+    assert owners == team.annotator_ids
+    # Release the next one-image batch after the first submission; the second
+    # member receives a real-shaped native job instead of always the first member.
+    current, upcoming = service.spec(900, team.id, batches[1].id)
+    controller.release(service, gateway, 900, team.id, upcoming.id, current.revision)
+    _, released = service.spec(900, team.id, upcoming.id)
+    assert api.labeling_job.get_info_by_id(released.job_ids[0]).assigned_to_id == team.annotator_ids[1]
+
+
+def test_presentation_shortcut_builds_submitted_and_upcoming_work_without_network(demo):
+    from monitoring.demo import prepare_presentation
+    service, api, gateway, setup = demo
+    prepare_presentation(service.sessions, api.home)
+    team = setup.roster()[0]
+    with service.sessions() as session:
+        batches = list(session.scalars(select(Batch).order_by(Batch.position)))
+    assert len(batches) == 2 and batches[1].state == 'locked'
+    page = Competition(service.sessions).page(900, batches[0].id)
+    assert page['submission_id'] and page['stats']['pending'] > 0
+    assert Competition(service.sessions).config()['frozen']
+    with pytest.raises(WorkflowError, match='Continue the existing demo'):
+        prepare_presentation(service.sessions, api.home)
+
+
+def test_bundled_live_upload_uses_configured_workspace_and_keeps_source_checksums(demo):
+    from monitoring.pilot import upload_photos
+    from monitoring.db import EventConfig, SourceOrigin
+    service, api, gateway, setup = demo
+    workspace = api.workspace.create(10, 'Different configured workspace')
+    with service.sessions.begin() as session:
+        session.get(EventConfig, 1).source_workspace_id = workspace.id
+    result = upload_photos(setup, gateway, 900, 'upload_bundled_photos')
+    assert result['dataset_ids']
+    for project in api.project.get_list(workspace.id):
+        assert project.workspace_id == workspace.id
+    with service.sessions() as session:
+        assert len(list(session.scalars(select(SourceOrigin)))) == 2
+    with pytest.raises(WorkflowError, match='Source media is already available'):
+        upload_photos(setup, gateway, 900, 'dont_duplicate_photos')

@@ -209,3 +209,28 @@ def test_manager_cannot_enable_organiser_oversight_and_cached_admin_data_is_clea
     ui.action(NS(state=NS(state={'dashboard':{'action':'refresh','organiser_view':True}})))
     assert data['dashboard']['can_setup'] is False and data['dashboard']['registration_rows']==[]
     assert ui.dashboard.display.call_args.args[0]['organiser_view'] is False
+
+
+def test_health_reports_database_failure_without_exposing_connection_details(ui, monkeypatch):
+    monkeypatch.delenv('MONITORING_DEMO', raising=False)
+    assert ui.health() == {'status': 'ok', 'mode': 'production'}
+    broken = Mock(side_effect=RuntimeError('postgresql://secret-password@private-host'))
+    monkeypatch.setattr(ui, 'sessions', broken)
+    response = ui.health()
+    assert response.status_code == 503
+    assert b'secret-password' not in response.body
+
+
+def test_live_mode_rejects_simulator_presentation_actions_before_mutation(ui, monkeypatch):
+    import supervisely.app
+    import monitoring.demo
+    data = {'dashboard': {}}
+    monkeypatch.setattr(supervisely.app, 'DataJson', lambda: data)
+    monkeypatch.setattr(ui.dashboard, 'display', Mock())
+    monkeypatch.setattr(ui, 'identity', lambda request: (90, NS(api=Mock())))
+    monkeypatch.setattr(ui.setup, 'authorize', lambda *args: None)
+    monkeypatch.delenv('MONITORING_DEMO', raising=False)
+    prepare = Mock()
+    monkeypatch.setattr(monitoring.demo, 'prepare_presentation', prepare)
+    assert ui.setup_action(NS(state=NS(state={'dashboard': {'setup_action': 'demo_prepare'}}))) == {'ok': False}
+    prepare.assert_not_called()

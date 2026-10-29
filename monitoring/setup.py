@@ -716,6 +716,7 @@ class Setup:
                 monitor = gateway.monitor(self.monitoring_team_id, t['monitor_id'])
                 gateway.add_monitor(t['id'], monitor)
                 video_index = 0
+                image_index = 0
                 for index, group in enumerate(assignment['groups'], 1):
                     callback = lambda info, tid=t['id']: checkpoint({'team_id': tid, **info})
                     dataset_id, mapped = gateway.copy_group(t['id'], key, index, group,
@@ -723,6 +724,10 @@ class Setup:
                     if group[0]['kind'] == 'video':
                         mapped = [dict(a, assignee_id=t['annotator_ids'][video_index % 2]) for a in mapped]
                         video_index += 1
+                    else:
+                        mapped = [dict(a, assignee_id=t['annotator_ids'][(image_index + i) % 2])
+                                  for i, a in enumerate(mapped)]
+                        image_index += len(mapped)
                     batches.append(Batch(id=f'{key}_t{t["id"]}_b{index}', team_id=t['id'], position=index,
                         kind=group[0]['kind'], dataset_id=dataset_id, assets=mapped))
             # Publish all mappings atomically only after all remote copies are confirmed.

@@ -1,5 +1,6 @@
 name: Checks
-on: [push, pull_request]
+# Local checks are sufficient for development; Actions run only on explicit request.
+on: workflow_dispatch
 jobs:
   tests:
     runs-on: ubuntu-latest

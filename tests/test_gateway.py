@@ -16,6 +16,13 @@ def test_independent_nonoverlapping_image_jobs_and_complete_video():
     assert Gateway.slices(team, batch) == [(11, [999])]
 
 
+def test_persisted_image_ownership_survives_one_image_batches_and_rejects_foreign_owner():
+    team = NS(annotator_ids=[11, 12], monitor_id=90)
+    assert Gateway.slices(team, NS(kind='images', assets=[{'entity_id': 501, 'assignee_id': 12}])) == [(12, [501])]
+    with pytest.raises(WorkflowError, match='Image owner'):
+        Gateway.slices(team, NS(kind='images', assets=[{'entity_id': 501, 'assignee_id': 99}]))
+
+
 def test_actual_sdk_signatures_support_used_parameters():
     import inspect
     from supervisely.api.labeling_job_api import LabelingJobApi

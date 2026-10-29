@@ -12,10 +12,23 @@ git switch feat/multi-user-monitoring-mvp
 git pull --ff-only
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 .\.venv\Scripts\python.exe -m pip install --force-reinstall --no-deps -r requirements-windows.txt
-.\.venv\Scripts\python.exe -m monitoring.run
+.\.venv\Scripts\python.exe -m monitoring.run --pilot
 ```
 
-Open http://127.0.0.1:8000 and connect the organiser account in the UI. A fresh installation needs no event `.env`. Real local and organiser-demo databases are separate. Local mode represents one connected account, even with multiple browser tabs; genuine multi-user testing needs a shared native hosted session.
+Open http://127.0.0.1:8000 and connect the organiser account in the UI. A fresh installation needs no event `.env`. Pilot (`data/account-pilot/`), ordinary local event (`data/`) and organiser-demo (`data/organiser-demo/`) stores are separate. Local mode represents one connected account, even with multiple browser tabs; genuine multi-user testing needs a shared native hosted session. `Start-App.ps1 -Mode Pilot -Install` is the Windows shortcut.
+
+## Supplied account rehearsal
+
+1. Connect the token belonging to **tomas.bf.santos@gmail.com**. Confirm the server is the instance where all three accounts exist. The app obtains the actual native user ID/login from this token.
+2. In **Monitors & Teams**, create or adopt the Monitors and Annotators groups. Add the connected organiser to Monitors using **Add monitor → Include my account → Save monitors**. The organiser must have native Admin permission in the chosen monitoring team.
+3. Click **Load bundled demo CSV**, then **Match all registration emails**. The one pair is **tomas.gaming.21@gmail.com** and **tomas.santos.work2002@gmail.com**. Login columns are deliberately blank: email is not assumed to equal login. If necessary, enter each actual accessible native login and verify the email association explicitly. Select your monitor account and provision the pair.
+4. Where native invitations require acceptance, sign into each participant account and accept them. Inspect operation history and actual resource IDs before clearing a blocked setup operation; do not blindly repeat partial creation.
+5. In **Dataset**, click **Load bundled CC0 bird photos**. This uploads real media to the configured monitoring-team workspace. Select both photo datasets; replication 1, image effort 1 and batch effort 1 are suitable for this tiny rehearsal. Save/freeze your guide and scoring policy, preview and apply distribution.
+6. In **Monitoring**, release the first upcoming batch. Open its native labeling job as the assigned participant in another browser profile. Annotate the image and submit through Supervisely. Return to the monitor app, refresh/capture and judge it. Native presence, submission and judgment remain separate.
+7. Release the next batch after the first submission (or approval if that release gate was chosen). Its task belongs to the other participant. Annotate/submit using that account. This proves both accounts receive work despite the photos being in separate source folders.
+8. Test correction/resubmission and native acceptance, then close and export this rehearsal. Keep the pilot database for inspection; use a fresh production PostgreSQL event for the competition. There is no automatic deletion/reset of real native resources.
+
+These supplied emails are not hardcoded event authorization. The production app uses token identity, current native membership and app assignments. The demo role switch and simulated submission are unavailable here.
 
 ## Prove the capabilities before full provisioning
 

@@ -36,6 +36,21 @@ app = sly.Application(layout=dashboard, static_dir=str(Path(__file__).parent / '
 log = logging.getLogger(__name__)
 
 
+@app.get_server().get('/healthz')
+def health():
+    """No event data or credentials; also used by the production container probe."""
+    from sqlalchemy import text
+    try:
+        with sessions() as session:
+            session.execute(text('SELECT 1'))
+    except Exception:
+        return JSONResponse({'status': 'unavailable'}, status_code=503)
+    mode = ('demo' if os.getenv('MONITORING_DEMO') == '1' else
+            'pilot' if os.getenv('MONITORING_PILOT') == '1' and settings.local else
+            'local' if settings.local else 'production')
+    return {'status': 'ok', 'mode': mode}
+
+
 def event_config():
     with sessions() as s:
         return s.get(EventConfig, 1)
@@ -111,8 +126,10 @@ def identity(request):
 
 def connection_view(connected=False):
     config = event_config()
+    from .pilot import accounts
     return {'local': settings.local, 'connected': connected, 'server_address': config.server_address or settings.server_address,
-            'login': config.owner_login or '', 'groups_ready': bool(config.monitoring_team_id and config.annotator_team_id)}
+            'login': config.owner_login or '', 'groups_ready': bool(config.monitoring_team_id and config.annotator_team_id),
+            'pilot_email': accounts()['organiser_email'] if os.getenv('MONITORING_PILOT') == '1' else ''}
 
 
 def display_access(uid, gateway):
@@ -130,7 +147,8 @@ def display_access(uid, gateway):
     data.update(competition=Competition(sessions).config(),
                 leaderboard=Competition(sessions).leaderboard() if gateway else [],
                 registration_rows=Registrations(sessions).rows() if can_setup else [],
-                demo=os.getenv('MONITORING_DEMO') == '1')
+                demo=os.getenv('MONITORING_DEMO') == '1',
+                pilot=os.getenv('MONITORING_PILOT') == '1' and settings.local)
     from .db import EventClosure
     with sessions() as s:
         data['closed'] = s.get(EventClosure, 1) is not None
@@ -161,6 +179,8 @@ def clear_access():
                                    assignment_plan_id=None, assignment_preview=[],
                                    directory={}, sources={}, connected=False, review_preview=None,
                                    registration_rows=[], unit_page={}, leaderboard=[], export_data=None,
+                                   demo=os.getenv('MONITORING_DEMO') == '1',
+                                   pilot=os.getenv('MONITORING_PILOT') == '1' and settings.local,
                                    connection=connection_view(False))
 
 
@@ -392,6 +412,12 @@ def setup_action(request: Request):
         elif name == 'registration_provision':
             Registrations(sessions).provision(gateway, setup, uid, f['registration_id'], f.get('monitor_id', 0))
             message = 'Participant pair provisioned.'
+        elif name == 'demo_prepare':
+            if os.getenv('MONITORING_DEMO') != '1' or not settings.local:
+                raise WorkflowError('Presentation preparation is available only in the isolated organiser simulator.')
+            from .demo import prepare_presentation
+            prepare_presentation(sessions, settings.home)
+            message = 'Presentation ready. Open Monitoring: one batch is submitted for judging and the next is locked. All native operations were simulated.'
         elif name == 'demo_reset':
             if os.getenv('MONITORING_DEMO') != '1':
                 raise WorkflowError('Reset is available only in the isolated organiser simulator.')
@@ -400,24 +426,15 @@ def setup_action(request: Request):
             data.update(plan_id=None, preview=None, assignment_plan_id=None, assignment_preview=[], unit_page={}, review_preview=None, export_data=None, sources={}, inventory=[])
             message = 'Demo reset. Previous fictional results were backed up locally. Load the CSV to rehearse again.'
         elif name in ('demo_csv', 'demo_sources'):
-            if os.getenv('MONITORING_DEMO') != '1':
-                raise WorkflowError('Bundled simulator actions are disabled in live events.')
-            from .demo import ROOT
+            if not settings.local or not any(os.getenv(k) == '1' for k in ('MONITORING_DEMO', 'MONITORING_PILOT')):
+                raise WorkflowError('Bundled inputs are available in local --pilot or --demo mode.')
+            from .pilot import import_roster, upload_photos
             if name == 'demo_csv':
-                from .registration import COLUMNS
-                Registrations(sessions).import_csv(uid, (ROOT / 'registrations.csv').read_text(), {k:k for k in COLUMNS})
-                message = 'Fictional registrations loaded. Match the demo accounts, then provision the pairs.'
+                import_roster(sessions, uid)
+                message = 'Pilot pair loaded with the supplied participant emails. Match actual accounts before provisioning.'
             else:
-                from .setup import pilot_meta
-                from .db import SourceOrigin
-                paths = [(p.relative_to(ROOT / 'dataset').as_posix(), p) for p in sorted((ROOT/'dataset'/'images').rglob('*.jpg'))]
-                if gateway.inventory(setup.monitoring_team_id, [d['id'] for d in gateway.sources(setup.monitoring_team_id)['datasets']], 1)[0]:
-                    raise WorkflowError('Demo source photos are already loaded. Use the existing datasets.')
-                with setup.operation(uid, f['operation_id'], 'demo_source_upload', {}) as checkpoint:
-                    result = gateway.upload(setup.monitoring_team_id, 30, 'CC0 demonstration birds', 'images', paths, pilot_meta(), checkpoint)
-                    with sessions.begin() as s:
-                        for origin in result['sources']: s.merge(SourceOrigin(**origin))
-                message = 'Two real CC0 bird photographs loaded into the simulated event.'
+                upload_photos(setup, gateway, uid, f['operation_id'])
+                message = 'Bundled CC0 bird photos uploaded to the event source workspace.'
         elif name == 'close_event':
             from .event_actions import close_event
             close_event(service, setup, gateway, uid)
@@ -487,7 +504,7 @@ def setup_action(request: Request):
         data.update(setup=setup.snapshot(), directory=setup.directory(), connected=True,
                     can_setup=True, connection=connection_view(True))
         display_access(uid, gateway)
-        if name in ('groups', 'upload', 'catalog', 'distribute', 'demo_sources'):
+        if name in ('groups', 'upload', 'catalog', 'distribute', 'demo_sources', 'demo_prepare'):
             data['sources'] = gateway.sources(setup.monitoring_team_id)
         dashboard.display(service.snapshot(uid), message)
         return {'ok': True}
