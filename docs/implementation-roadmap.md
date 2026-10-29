@@ -3,15 +3,15 @@
 ## Implemented
 
 - Native hosted multi-user sessions with credential-owner checks, assigned-team enforcement, current Admin authorization, organiser oversight/adjudication and per-browser selections.
-- CSV column mapping for one pair per row or two participant rows per team, exact email matching where visible, audited manual identity verification for hidden email, duplicate checks and idempotent registration imports.
-- Native pair provisioning using existing accounts, manual/balanced monitor assignment, released-job reviewer handover, pre-release unassignment and operation checkpoints.
+- CSV column mapping with one or two annotators per team and a separate monitor email; email-first native team creation, durable individual Pending/Accepted/error records, readiness checks, duplicate checks and idempotent registration imports. Legacy account matching remains available internally.
+- Native team provisioning before invitation acceptance, normal resumable Pending status, manual/balanced monitor assignment, released-job reviewer handover, pre-release unassignment and operation checkpoints.
 - Recursive source discovery and folder uploads, path-preserving source identity, explicit original-to-copy mappings, independent team-local entities and streaming upload checksums.
 - Seeded effort balancing, configurable replication, optional common challenge, whole-video assignment, multiple videos per pair, alternating member ownership and explicit native video handover.
 - Current/submitted/upcoming batch views, per-member job progress, confirmed native entity counts, paginated image/required-frame observations and stale-data warnings. Frame presence is distinct from completion/quality.
 - Immutable captured submission payloads/metadata/digests, historical previews, rule freezing, whole/per-criterion/weighted scoring, configurable penalties, pending/NA handling, audited revisions, provisional standings and ties.
 - Native correction tasks with precise issue reports, submission/approval release gates and guarded native acceptance of fully judged unchanged captures.
 - Polling-based observed event closure, continued judging of captures after closure and reproducible JSON exports including annotation payloads and audit.
-- A persistent, resettable organiser simulator with one-click presentation preparation; the supplied real-email pair CSV and two credited CC0 bird photographs in nested folders. A separate real-account pilot offers the same bundled inputs through actual authenticated actions. Local frontend assets are bundled; hosted sessions retain the native SDK shell.
+- A persistent, resettable organiser simulator with one-click presentation preparation; the supplied two-team real-email CSV and two credited CC0 bird photographs in nested folders. A separate real-account pilot offers the same bundled inputs through actual authenticated actions. Local frontend assets are bundled; hosted sessions retain the native SDK shell.
 - Production-only startup guards, database health probe, container recipe and a native release source packager. Deployment requires a validated instance version and your own published container image. GitHub Actions is manual-only; local validation is independent of its quota.
 
 ## Validation boundaries
@@ -20,7 +20,7 @@ The unit/integration suite uses real pinned-SDK geometry and method signatures, 
 
 No live Supervisely credentials were available in this development environment. The [real pilot guide](real-pilot.md) is the acceptance gate for native invitation semantics, permissions, correction/acceptance state transitions, cross-team isolation and simultaneous authenticated platform sessions. Neither the fixture size nor native multi-user support establishes event-scale capacity.
 
-Email-based lookup is constrained by the account's native visibility. The application can use visible email information or audited organiser verification. The supplied real emails alone do not grant API access or reveal private native IDs/logins.
+Email invitations avoid global account lookup. Actual public-route email support, invitation delivery and accepted-member identity association must be verified on the target instance; a native UI fallback is linked from the app. Supplied emails do not grant API access or bypass invitation acceptance. See email-invitations.md.
 
 Native job allocation is entity-based. Whole videos are supported; independent native submissions for frame ranges of the same video are not assumed. Splitting oversized videos would require a deliberate clip-generation workflow with original frame mappings and scientific boundary rules.
 

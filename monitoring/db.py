@@ -152,6 +152,16 @@ class Submission(Base):
     payload: Mapped[dict] = mapped_column(JSON)
 
 
+class TeamOnboarding(Base):
+    """Invitation-first provisioning state, including teams not ready for jobs."""
+    __tablename__ = 'team_onboarding'
+    registration_id: Mapped[str] = mapped_column(ForeignKey('registrations.id'), primary_key=True)
+    manager_email: Mapped[str] = mapped_column(String(254), default='')
+    memberships: Mapped[list] = mapped_column(JSON, default=list)
+    status: Mapped[str] = mapped_column(String(30), default='not_created')
+    checked_at: Mapped[int | None] = mapped_column(nullable=True)
+
+
 class WorkUnit(Base):
     __tablename__ = 'work_units'
     __table_args__ = (UniqueConstraint('batch_id', 'entity_id', 'frame_index'),)

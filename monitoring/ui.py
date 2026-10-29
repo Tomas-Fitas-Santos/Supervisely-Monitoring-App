@@ -151,6 +151,9 @@ def display_access(uid, gateway):
                 pilot=os.getenv('MONITORING_PILOT') == '1' and settings.local)
     from .db import EventClosure
     with sessions() as s:
+        from .db import Simulation
+        simulation = s.get(Simulation, 1)
+        data['demo_roster_outdated'] = bool(simulation and simulation.data.get('fixture_version') != 2)
         data['closed'] = s.get(EventClosure, 1) is not None
         page_batch = s.get(Batch, data.get('unit_page', {}).get('batch_id', ''))
         page_team = s.get(Team, page_batch.team_id) if page_batch else None
@@ -399,22 +402,61 @@ def setup_action(request: Request):
             message = 'Event rules frozen.' if f.get('freeze_rules') else 'Event rules saved.'
         elif name == 'registration_import':
             count = Registrations(sessions).import_csv(uid, f['csv_text'], f['csv_mapping'])
-            message = f'{count} registration rows checked. Existing resolved pairs were preserved.'
+            message = f'{count} registration rows checked. Existing teams and invitation status were preserved.'
+        elif name == 'email_team':
+            import csv
+            import io
+            from .registration import COLUMNS
+            from .onboarding import EmailOnboarding
+            emails = f.get('participant_emails')
+            if not isinstance(emails, list) or not 1 <= len(emails) <= 2 or any(not isinstance(e, str) for e in emails):
+                raise WorkflowError('Enter one or two annotator email addresses.')
+            stream = io.StringIO()
+            writer = csv.DictWriter(stream, fieldnames=COLUMNS)
+            writer.writeheader()
+            writer.writerow({'team_name': f['name'], 'monitor_email': f.get('monitor_email', ''),
+                             **{f'member_{i}_email': email for i, email in enumerate(emails, 1)}})
+            registrations = Registrations(sessions)
+            registrations.import_csv(uid, stream.getvalue(), {k:k for k in COLUMNS})
+            row = next(r for r in registrations.rows() if r['team_name'].casefold() == f['name'].strip().casefold())
+            EmailOnboarding(sessions).provision(gateway, setup, uid, row['id'], f.get('monitor_id', 0))
+            message = 'Team saved and invitations requested. Check each membership before distributing tasks.'
         elif name == 'registration_resolve':
             Registrations(sessions).resolve(gateway, uid, f.get('registration_id'), f.get('login_overrides'))
             message = 'Account matching finished. Resolve any unmatched emails before provisioning.'
         elif name == 'registration_provision_all':
             registrations = Registrations(sessions)
+            from .onboarding import EmailOnboarding
             for row in registrations.rows():
-                if row['ready'] and not row['team_id']:
-                    registrations.provision(gateway, setup, uid, row['id'], 0)
-            message = 'Matched pairs provisioned. Assign their monitors from the directory or balanced assignment preview.'
+                if row['monitor_email'] and row['membership_status'] != 'ready':
+                    EmailOnboarding(sessions).provision(gateway, setup, uid, row['id'], row['monitor_id'])
+            message = 'Teams created and invitations requested. Pending acceptance is normal; refresh invitations after members accept.'
         elif name == 'registration_provision':
-            Registrations(sessions).provision(gateway, setup, uid, f['registration_id'], f.get('monitor_id', 0))
-            message = 'Participant pair provisioned.'
+            from .onboarding import EmailOnboarding
+            EmailOnboarding(sessions).provision(gateway, setup, uid, f['registration_id'], f.get('monitor_id', 0))
+            message = 'Team saved. Invitations are pending until accepted in Supervisely. Refresh invitations to confirm readiness.'
+        elif name == 'registration_refresh':
+            from .onboarding import EmailOnboarding
+            EmailOnboarding(sessions).refresh(gateway, setup, uid, f.get('registration_id'))
+            message = 'Native invitation acceptance and roles checked. Only ready teams can receive tasks.'
+        elif name == 'demo_accept_invitations':
+            if os.getenv('MONITORING_DEMO') != '1' or not settings.local:
+                raise WorkflowError('Only actual Supervisely users can accept invitations in real mode.')
+            from .db import TeamOnboarding
+            from .onboarding import EmailOnboarding
+            with sessions() as session:
+                plan = session.get(TeamOnboarding, f['registration_id'])
+                if not plan:
+                    raise WorkflowError('Choose a created demo team.')
+                for tid in {e['team_id'] for e in plan.memberships}:
+                    gateway.api.accept_invitations(tid)
+            EmailOnboarding(sessions).refresh(gateway, setup, uid, f['registration_id'])
+            message = 'Demo invitation acceptance simulated. No real invitation or email was sent.'
         elif name == 'demo_prepare':
             if os.getenv('MONITORING_DEMO') != '1' or not settings.local:
                 raise WorkflowError('Presentation preparation is available only in the isolated organiser simulator.')
+            if data.get('demo_roster_outdated'):
+                raise WorkflowError('Reset this older demo with a backup before loading the new TEAM 1 / TEAM 2 roster.')
             from .demo import prepare_presentation
             prepare_presentation(sessions, settings.home)
             message = 'Presentation ready. Open Monitoring: one batch is submitted for judging and the next is locked. All native operations were simulated.'
@@ -424,14 +466,16 @@ def setup_action(request: Request):
             from .demo import reset_demo
             reset_demo(sessions, settings.home)
             data.update(plan_id=None, preview=None, assignment_plan_id=None, assignment_preview=[], unit_page={}, review_preview=None, export_data=None, sources={}, inventory=[])
-            message = 'Demo reset. Previous fictional results were backed up locally. Load the CSV to rehearse again.'
+            message = 'Demo reset. Previous simulated results were backed up locally. Load the CSV to rehearse again.'
         elif name in ('demo_csv', 'demo_sources'):
             if not settings.local or not any(os.getenv(k) == '1' for k in ('MONITORING_DEMO', 'MONITORING_PILOT')):
                 raise WorkflowError('Bundled inputs are available in local --pilot or --demo mode.')
             from .pilot import import_roster, upload_photos
             if name == 'demo_csv':
+                if os.getenv('MONITORING_DEMO') == '1' and data.get('demo_roster_outdated'):
+                    raise WorkflowError('Reset this older demo with a backup before loading the new TEAM 1 / TEAM 2 roster.')
                 import_roster(sessions, uid)
-                message = 'Pilot pair loaded with the supplied participant emails. Match actual accounts before provisioning.'
+                message = 'TEAM 1 and TEAM 2 registrations loaded. Create teams and invite the CSV emails, then refresh after acceptance.'
             else:
                 upload_photos(setup, gateway, uid, f['operation_id'])
                 message = 'Bundled CC0 bird photos uploaded to the event source workspace.'

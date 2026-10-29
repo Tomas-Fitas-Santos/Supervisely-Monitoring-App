@@ -177,6 +177,36 @@ class DemoApi:
         self.labeling_job = Jobs(self)
         self.role = NS(get_list=lambda:[NS(id=id,role=role) for id,role in [(1,'admin'),(3,'manager'),(5,'annotator')]])
 
+    def post(self, method, data, **kwargs):
+        """Native-shaped raw member API, including pending invitations."""
+        tid = str(data['teamId'])
+        if method == 'members.list':
+            state = self.store.read()
+            rows = [dict(vars(user), activated=True) for user in self.user.get_team_members(int(tid))]
+            if data.get('showInvited', True):
+                rows += [dict(item, activated=False) for item in state.get('invitations', {}).get(tid, {}).values()]
+            return NS(json=lambda: {'entities': rows, 'pagesCount': 1})
+        if method == 'members.add':
+            state = self.store.read()
+            email = data['login'].casefold()
+            user = next((u for u in state['users'].values() if u['email'].casefold() == email or u['login'] == data['login']), None)
+            if not user:
+                raise WorkflowError('Use a bundled account for the offline invitation demonstration.')
+            if str(user['id']) not in state['teams'][tid]['members']:
+                def invite(store):
+                    store.setdefault('invitations', {}).setdefault(tid, {})[email] = dict(
+                        id=user['id'], login=user['login'], inviteEmail=email, email=None, name=user['name'],
+                        role={1:'admin',3:'manager',5:'annotator'}[data['roleId']], disabled=False)
+                self.store.mutate(invite)
+            return NS(json=lambda: {'userId': user['id']})
+        raise WorkflowError('Unsupported simulator API operation.')
+
+    def accept_invitations(self, team_id):
+        def accept(state):
+            for invitation in state.setdefault('invitations', {}).pop(str(team_id), {}).values():
+                state['teams'][str(team_id)]['members'][str(invitation['id'])] = invitation['role']
+        self.store.mutate(accept)
+
 
 def initialize_demo(sessions):
     with sessions.begin() as s:
@@ -187,15 +217,17 @@ def initialize_demo(sessions):
                  '901':dict(id=901,login='demo_monitor',name='Demo monitor',email='monitor@example.test',disabled=False)}
         for i,row in enumerate(rows):
             for n in (1,2):
+                if not row.get(f'member_{n}_email'):
+                    continue
                 uid=1000+i*2+n
                 users[str(uid)]=dict(id=uid,login=row[f'member_{n}_login'] or f'demo_member_{n}_{i}',name=row[f'member_{n}_name'],email=row[f'member_{n}_email'],disabled=False)
-        s.add(Simulation(id=1,data={'next_id':10000,'users':users,
+        s.add(Simulation(id=1,data={'fixture_version':2,'next_id':10000,'users':users,'invitations':{},
             'teams':{'10':dict(id=10,name='Demo Monitors',members={'900':'admin','901':'manager'}),'20':dict(id=20,name='Demo Annotators',members={'900':'admin'})},
             'workspaces':{'30':dict(id=30,name='Demo event sources',team_id=10)},'projects':{},'datasets':{},'media':{},'jobs':{}}))
         c=s.get(EventConfig,1); c.owner_id=900;c.owner_login='demo_organiser';c.server_address=DemoApi.server_address
         c.monitoring_team_id=10;c.annotator_team_id=20;c.source_workspace_id=30
         s.add_all([EventMember(user_id=uid,group='monitors',login=users[str(uid)]['login'],name=users[str(uid)]['name']) for uid in (900,901)])
-        s.get(CompetitionConfig,1).rules={'name':'Organiser demonstration','replicas':1,'batch_effort':1}
+        s.get(CompetitionConfig,1).rules={'name':'Organiser demonstration','replicas':2,'batch_effort':1}
 
 
 def submit_demo(api, batch):
@@ -218,6 +250,7 @@ def prepare_presentation(sessions, home):
     from .db import Batch, Registration, Team
     from .pilot import import_roster, upload_photos
     from .registration import Registrations
+    from .onboarding import EmailOnboarding
     from .service import Service
     from .setup import Setup
     from .setup_gateway import SetupGateway
@@ -233,9 +266,11 @@ def prepare_presentation(sessions, home):
     service = Service(sessions)
     import_roster(sessions, 900)
     registrations = Registrations(sessions)
-    registrations.resolve(gateway, 900)
+    onboarding = EmailOnboarding(sessions)
     for row in registrations.rows():
-        registrations.provision(gateway, setup, 900, row['id'], 900)
+        tid = onboarding.provision(gateway, setup, 900, row['id'], 900)
+        api.accept_invitations(tid)
+    onboarding.refresh(gateway, setup, 900)
     from uuid import uuid4
     result = upload_photos(setup, gateway, 900, uuid4().hex)
     competition = Competition(sessions)
@@ -243,7 +278,7 @@ def prepare_presentation(sessions, home):
     if not config['frozen']:
         competition.save_rules(900, config['revision'], config['rules'], True)
     team_ids = [team['id'] for team in setup.roster()]
-    plan, _ = setup.preview(gateway, 900, result['dataset_ids'], team_ids, 1, 1, 1, True, False)
+    plan, _ = setup.preview(gateway, 900, result['dataset_ids'], team_ids, 2, 1, 1, True, False)
     setup.distribute(gateway, 900, plan)
     with sessions() as session:
         team = session.get(Team, team_ids[0])

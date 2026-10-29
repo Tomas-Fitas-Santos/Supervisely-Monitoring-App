@@ -92,6 +92,10 @@ class Gateway:
             checkpoint({'job_id': jid, 'reviewer_id': reviewer_id})
 
     def validate(self, team, batch):
+        if self.sessions:
+            from .onboarding import EmailOnboarding
+            from .setup_gateway import SetupGateway
+            EmailOnboarding(self.sessions).verify_ready(SetupGateway(self.api, self.sessions), team.id)
         dataset = self.api.dataset.get_info_by_id(batch.dataset_id)
         if not dataset:
             raise WorkflowError("Dataset is unavailable.")
@@ -101,7 +105,7 @@ class Gateway:
             raise WorkflowError("Dataset type or participant team does not match the manifest.")
         for uid in [*team.annotator_ids, team.monitor_id]:
             if not self.api.user.get_member_info_by_id(team.id, uid):
-                raise WorkflowError("Add both annotators and their monitor to the participant team first.")
+                raise WorkflowError("Add the annotators and their monitor to the participant team first.")
         api = self.api.image if batch.kind == 'images' else self.api.video
         for asset in batch.assets:
             info = api.get_info_by_id(asset['entity_id'])
@@ -112,6 +116,8 @@ class Gateway:
 
     @staticmethod
     def slices(team, batch):
+        if not team.annotator_ids:
+            raise WorkflowError('This team has no accepted annotators yet.')
         # Explicit non-overlapping image jobs. Full video assigned to one lead.
         ids = [a['entity_id'] for a in batch.assets]
         if batch.kind == 'video':

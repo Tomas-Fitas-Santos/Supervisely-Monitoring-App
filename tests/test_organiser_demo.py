@@ -25,7 +25,14 @@ def demo(service,tmp_path):
 
 def prepare(demo):
     service,api,gw,setup=demo;r=Registrations(service.sessions)
-    r.import_csv(900,(ROOT/'registrations.csv').read_text(),{k:k for k in COLUMNS});r.resolve(gw,900)
+    # Preserve coverage of the ordinary two-annotator event pair separately
+    # from the requested demo's two one-annotator teams.
+    import csv,io
+    from monitoring.pilot import accounts
+    stream=io.StringIO();writer=csv.DictWriter(stream,fieldnames=COLUMNS);writer.writeheader()
+    writer.writerow({'team_name':'Legacy pair fixture','member_1_email':accounts()['participant_emails'][0],
+                     'member_2_email':accounts()['participant_emails'][1]})
+    r.import_csv(900,stream.getvalue(),{k:k for k in COLUMNS});r.resolve(gw,900)
     for i,row in enumerate(r.rows()):r.provision(gw,setup,900,row['id'],900 if i%2==0 else 901)
     paths=[(p.relative_to(ROOT/'dataset').as_posix(),p) for p in sorted((ROOT/'dataset'/'images').rglob('*.jpg'))]
     result=gw.upload(10,30,'Birds','images',paths,pilot_meta(),lambda info:None)
@@ -191,7 +198,8 @@ def test_presentation_shortcut_builds_submitted_and_upcoming_work_without_networ
     prepare_presentation(service.sessions, api.home)
     team = setup.roster()[0]
     with service.sessions() as session:
-        batches = list(session.scalars(select(Batch).order_by(Batch.position)))
+        batches = list(session.scalars(select(Batch).where(Batch.team_id==team['id']).order_by(Batch.position)))
+        assert len(list(session.scalars(select(Team)))) == 2
     assert len(batches) == 2 and batches[1].state == 'locked'
     page = Competition(service.sessions).page(900, batches[0].id)
     assert page['submission_id'] and page['stats']['pending'] > 0

@@ -2,11 +2,19 @@ const {chromium}=require('playwright');const assert=require('assert');const path
 (async()=>{const browser=await chromium.launch({headless:true,args:['--no-sandbox']});const page=await browser.newPage({viewport:{width:1440,height:1100}});const errors=[],external=[];
 page.on('pageerror',e=>errors.push(String(e)));page.on('request',r=>{if(!r.url().startsWith('http://127.0.0.1:8000')&&!r.url().startsWith('data:'))external.push(r.url())});
 await page.goto('http://127.0.0.1:8000',{waitUntil:'networkidle'});await page.getByText('Organiser demonstration — simulated Supervisely resources').waitFor();
-await page.getByRole('button',{name:'Load bundled demo CSV',exact:true}).click();await page.getByRole('button',{name:'Match all registration emails',exact:true}).click();
-const registrations=page.locator('.nj-registration');await registrations.first().getByText('Accounts matched',{exact:true}).waitFor();assert(await registrations.count()===1);
-await registrations.first().getByText('tomas.gaming.21@gmail.com',{exact:false}).waitFor();await registrations.first().getByText('tomas.santos.work2002@gmail.com',{exact:false}).waitFor();
-const row=registrations.first();await row.locator('select').selectOption('900');await row.getByRole('button',{name:'Provision this pair',exact:true}).click();await row.getByText('Provisioned',{exact:true}).waitFor();
-console.log('Browser: CSV match and provision passed');
+await page.getByRole('button',{name:'Load bundled demo CSV',exact:true}).click();
+const registrations=page.locator('.nj-registration');await registrations.nth(1).waitFor();assert(await registrations.count()===2);
+await registrations.nth(0).getByText('tomas.gaming.21@gmail.com',{exact:false}).waitFor();await registrations.nth(1).getByText('tomas.santos.work2002@gmail.com',{exact:false}).waitFor();
+for(let i=0;i<2;i++){
+  const row=registrations.nth(i);await row.getByRole('button',{name:'Create team and send invitations',exact:true}).click();
+  await row.getByText('Pending invitations',{exact:true}).first().waitFor();
+}
+const createdRows=page.locator('table tbody tr');assert((await createdRows.allTextContents()).filter(t=>t.includes('Pending invitations')).length===2);
+for(let i=0;i<2;i++){
+  const row=registrations.nth(i);await row.getByRole('button',{name:'Simulate invitation acceptance',exact:true}).click();
+  await row.getByText('Ready',{exact:true}).waitFor();
+}
+console.log('Browser: two email teams visible while Pending, then accepted with correct membership roles');
 await page.getByRole('tab',{name:'Dataset',exact:true}).click();await page.getByRole('button',{name:'Load bundled CC0 bird photos',exact:true}).click();
 await page.locator('summary').filter({hasText:'Event rules and scoring'}).click();await page.getByRole('button',{name:'Save and freeze official rules',exact:true}).click();await page.getByText('Rules are frozen.',{exact:false}).waitFor();
 const dist=page.locator('.nj-panel').filter({has:page.getByRole('heading',{name:'Distribute dataset to teams',exact:true})});

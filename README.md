@@ -2,21 +2,21 @@
 
 A shared organiser/monitor app for a bird-annotation event. Participants work in **native Supervisely**, using their own existing accounts. The app manages registrations, independent pair annotations, task release, submission captures, human judging and competition standings.
 
-**There are no fixed event totals.** Teams, source inventory, replication, frame requirements and batch effort are inputs. The included one-pair roster and two photos are test inputs, not estimates of event size.
+**There are no fixed event totals.** Teams, source inventory, replication, frame requirements and batch effort are inputs. The included two teams (one monitor plus one annotator each) and two photos are test inputs, not estimates of event size. Ordinary event teams can still have two annotators.
 
 The same application has two delivery modes: a **production app** for authenticated Supervisely users and a **DEMO** for organiser presentations. A local real-account pilot runs the production integration against the supplied test accounts before hosted deployment. GitHub Actions is optional and manual-only; neither installation nor execution uses Actions.
 
 | Start | Purpose | Supervisely operations | Storage |
 |---|---|---|---|
 | `python -m monitoring.run --demo` | Working organiser presentation, no token required | Simulated, with the supplied emails displayed as roster data | `data/organiser-demo/` |
-| `python -m monitoring.run --pilot` | Real-account rehearsal with the supplied pair | Actual API/SDK operations after connecting in the app | `data/account-pilot/` |
+| `python -m monitoring.run --pilot` | Real-account rehearsal with the supplied two teams | Actual API/SDK operations after connecting in the app | `data/account-pilot/` |
 | `python -m monitoring.run --production` | Shared production session inside Supervisely | Actual per-user authenticated operations | Persistent PostgreSQL |
 
 On Windows, `Start-App.ps1 -Mode Demo` and `Start-App.ps1 -Mode Pilot` handle the local environment and Windows libmagic dependency. Add `-Install` after pulling dependency changes. The default mode is Demo. [Production deployment](docs/production.md) includes the image, native release packaging, persistence and operational checks.
 
 | Main tab | Workflow |
 |---|---|
-| **Monitors & Teams** | Import Google Forms CSV responses, map columns, match emails to accounts, resolve identities, provision participant pairs and assign monitors. Click a monitor to inspect or transfer assignments. |
+| **Monitors & Teams** | Import Google Forms CSV responses, create native teams, invite by email, see individual Pending/Accepted states and assign monitors. Click a monitor to inspect or transfer assignments. |
 | **Dataset** | Upload a complete folder tree or select existing nested datasets. Set event rules, inspect source IDs, configure replication/effort, preview source coverage and distribute independent annotation copies. |
 | **Monitoring** | Select a team; inspect current, submitted and upcoming batches; see member-level native tasks; capture submissions; browse images/required frames; judge quality; return corrections; complete accepted native tasks; export records and standings. |
 
@@ -35,7 +35,7 @@ py -3.12 -m venv .venv
 
 If the environment already exists, use just the last command. Open **http://127.0.0.1:8000**. Follow [the organiser demo walkthrough](examples/organiser-demo/README.md).
 
-Click **Prepare working presentation** to create the sample pair, distribute both photos, freeze example rules and submit the first simulated batch. Open **Monitoring** to show image inspection, judging, standings and the next batch. Manual setup remains available instead. If you previously loaded the old fictional roster, use **Reset this demo** first; it preserves a backup.
+Click **Prepare working presentation** to create TEAM 1 and TEAM 2, simulate invitation acceptance, distribute both photos to each team, freeze example rules and submit the first simulated batch. Open **Monitoring** to show image inspection, judging, standings and upcoming batches. The presentation shortcut uses replication 2 so both teams receive identical material. For the manual walkthrough, replication 1 divides the two photos evenly: one unique photo per team. If an older demo is loaded, use **Reset this demo** first; it preserves a backup.
 
 Linux/macOS:
 
@@ -57,9 +57,16 @@ The demo resumes its previous state on restart. **Reset this demo** backs up its
 .\.venv\Scripts\python.exe -m monitoring.run --pilot
 ```
 
-Open **http://127.0.0.1:8000** and connect using the API token belonging to **tomas.bf.santos@gmail.com** on the same Supervisely instance as the participants. Create/adopt the two event groups. Add your connected account to Monitors using **Include my account → Save monitors**. Click **Load bundled demo CSV** to import **Pilot Bird Team**, with **tomas.gaming.21@gmail.com** and **tomas.santos.work2002@gmail.com**. Match accounts; emails are not assumed to be native logins. Assign yourself and provision the pair. In Dataset, click **Load bundled CC0 bird photos**, then configure/freeze rules, preview and apply distribution with replication **1**. Both participants receive work across the photo batches. Each signs into native Supervisely to annotate/submit; return here to capture and judge.
+Open **http://127.0.0.1:8000** and connect using the API token belonging to **tomas.bf.santos@gmail.com** on the same Supervisely instance as the participants. Create/adopt the two event groups. Click **Load bundled demo CSV**, then **Create teams and invite CSV emails**. The requested roster is:
 
-No native account IDs or logins are invented in this mode. If Supervisely hides an email, resolve the actual login in the app and explicitly verify the association. Accept any required native invitations before continuing provisioning. See the [step-by-step real pilot](docs/real-pilot.md). This mode ignores legacy `.env` event IDs/tokens and uses its own encrypted connection and database.
+| Team | Monitor / Manager responsibility | Annotator |
+|---|---|---|
+| TEAM 1 | tomas.bf.santos@gmail.com | tomas.gaming.21@gmail.com |
+| TEAM 2 | tomas.bf.santos@gmail.com | tomas.santos.work2002@gmail.com |
+
+Teams appear immediately with per-member invitation status. Sign in as each annotator and accept the native invitation. Click **Refresh all invitations**; both teams must say **Ready**. Your organiser retains native **Admin** membership when creating these teams and performs the Manager/reviewer responsibility; the app never demotes the team's required Admin. In Dataset, click **Load bundled CC0 bird photos** or upload your folder, freeze rules, then preview/apply distribution with replication **1** to give one photo to each team. Release each team's job from Monitoring. Each annotator works and submits in Supervisely; return here to capture and judge.
+
+No native account IDs or logins are invented in this mode, and global account search is not a prerequisite. Native IDs are obtained from invitation responses and confirmed accepted team memberships. Refreshes do not resend pending invitations. Definite native rejections remain visible without blocking other setup; uncertain writes retain checkpoints for inspection. See [invitation API details and live-validation limits](docs/email-invitations.md) and the [real pilot](docs/real-pilot.md). This mode ignores legacy `.env` event IDs/tokens and uses its own encrypted connection and database.
 
 ## Run a real event
 
@@ -77,8 +84,8 @@ Without a hosted background polling credential, signed-in monitors refresh their
 
 ## Registration and allocation
 
-- CSV accepts either one pair per row or two participant rows grouped by team name. Map the actual form column names; optional logins/names are supported. Duplicate emails, inconsistent reimports and unresolved identities are rejected before pair creation.
-- Email is not assumed to equal login. Matching uses visible native account emails. If an accessible account hides its email, an organiser can explicitly verify the login-to-registration association; the confirmation is audited. A conflicting returned email cannot be overridden. Invitation acceptance and instance permissions remain native platform requirements.
+- CSV accepts one team per row (one or two annotators, optional monitor_email), or two participant rows grouped by team name. Map the form columns. Monitors are separate from annotators and can supervise multiple teams; duplicate annotator emails and conflicting reimports are rejected.
+- Email onboarding creates the native team before waiting for invitations. Pending members, definitive invitation errors, accepted memberships and readiness are separate states. Raw native membership checks retain invitation information which the SDK UserInfo tuple omits. Accepted native IDs and correct roles are required before distribution/release. The Add team form uses the same email-invitation flow; legacy username-based backend operations remain available for existing integrations.
 - A pair currently has its own native Supervisely team and independent destination entities. The organiser retains administrative ownership. Verify team/seat quotas on the actual instance before provisioning the full roster.
 - Allocation is seeded, greedy effort balancing, with source-stratum tie balancing, configurable replication and an optional common scored challenge. Image effort and batch effort are estimates supplied/reviewed by the organiser; they are not measured annotation speed. Videos stay whole; multiple videos per pair are supported and alternate between the two members. Native video ownership can be handed over explicitly.
 - Previews show actual counts, effort spread, source coverage and required image/frame units. SDK copying is partitioned by source dataset, so actual batch counts can exceed the planner's initial packing groups. Source paths and original-to-copy IDs are retained.

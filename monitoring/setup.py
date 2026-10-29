@@ -10,7 +10,7 @@ from uuid import uuid4
 
 from sqlalchemy import select, update
 
-from .db import Audit, Batch, EventConfig, EventMember, SetupOperation, SetupState, Team, Upload, UploadedPath, SourceOrigin
+from .db import Audit, Batch, EventConfig, EventMember, SetupOperation, SetupState, Team, Upload, UploadedPath, SourceOrigin, Registration, TeamOnboarding
 from .planner import allocate
 from .service import WorkflowError
 
@@ -78,8 +78,10 @@ class Setup:
 
     def roster(self):
         with self.sessions() as s:
+            states = {r.team_id: s.get(TeamOnboarding, r.id) for r in s.scalars(select(Registration)) if r.team_id}
             return [{'id': t.id, 'name': t.name, 'monitor_id': t.monitor_id,
                      'annotator_ids': t.annotator_ids, 'revision': t.revision,
+                     'membership_status': states[t.id].status if states.get(t.id) and states[t.id].memberships else 'ready',
                      'has_batches': s.scalar(select(Batch.id).where(Batch.team_id == t.id).limit(1)) is not None}
                     for t in s.scalars(select(Team).order_by(Team.id))]
 
@@ -105,10 +107,22 @@ class Setup:
         teams = self.roster()
         with self.sessions() as s:
             for team in teams:
+                reg = s.scalar(select(Registration).where(Registration.team_id == team['id']))
+                plan = s.get(TeamOnboarding, reg.id) if reg else None
                 team['participants'] = [people.get(uid, {'id': uid, 'login': f'User {uid}', 'name': f'User {uid}'})
                                         for uid in team['annotator_ids']]
+                if plan and plan.memberships:
+                    team['participants'] = [dict(id=e.get('user_id'), login=e.get('login') or '', name=e.get('name') or e['email'],
+                                                email=e['email'], status=e['status']) for e in plan.memberships if e['requested_role']=='annotator']
+                    team['memberships'] = plan.memberships
+                    team['monitor_email'] = plan.manager_email
+                    team['checked_at'] = plan.checked_at
+                else:
+                    team['memberships'] = []
                 team['can_assign'] = not bool(s.scalar(select(Batch.id).where(
                     Batch.team_id == team['id'], Batch.state == 'releasing').limit(1)))
+                if plan and plan.memberships and plan.status != 'ready':
+                    team['can_assign'] = False
                 team['can_unassign'] = not bool(s.scalar(select(Batch.id).where(
                     Batch.team_id == team['id'], Batch.state != 'locked').limit(1)))
         monitors = list(groups['monitors'])
@@ -436,6 +450,10 @@ class Setup:
                 raise WorkflowError('Select a registered team and a distinct monitor.')
             if team.revision != int(revision):
                 raise WorkflowError('Team assignment changed. Refresh setup.')
+            registration = s.scalar(select(Registration).where(Registration.team_id == team.id))
+            plan = s.get(TeamOnboarding, registration.id) if registration else None
+            if plan and plan.memberships and plan.status != 'ready':
+                raise WorkflowError('Confirm the existing invitations before handing this team to another monitor.')
             if s.scalar(select(Batch.id).where(Batch.team_id == team.id, Batch.state == 'releasing').limit(1)):
                 raise WorkflowError('Reconcile the pending release before handing over this team.')
         with self.operation(actor, key, 'assignment', {'team_id': team.id, 'monitor_id': monitor.id}) as checkpoint:
@@ -461,6 +479,10 @@ class Setup:
                 old = current.monitor_id
                 current.monitor_id = monitor.id
                 current.revision += 1
+                registration = s.scalar(select(Registration).where(Registration.team_id == team.id))
+                if registration:
+                    from .onboarding import EmailOnboarding
+                    EmailOnboarding(self.sessions).handover(gateway, s, registration, monitor)
                 s.add(Audit(team_id=team.id, batch_id='', actor_id=actor, action='monitor_assigned',
                     details={'previous_monitor_id': old, 'monitor_id': monitor.id, 'operation_id': key}))
 
@@ -471,7 +493,7 @@ class Setup:
         for uid in monitor_ids:
             gateway.monitor(self.monitoring_team_id, uid)
         roster = self.roster()
-        unassigned = sorted([t for t in roster if not t['monitor_id']], key=lambda t: (t['name'], t['id']))
+        unassigned = sorted([t for t in roster if not t['monitor_id'] and t['membership_status']=='ready'], key=lambda t: (t['name'], t['id']))
         if not unassigned:
             raise WorkflowError('All participant pairs already have monitors.')
         with self.sessions() as s:
@@ -515,6 +537,10 @@ class Setup:
             with self.sessions.begin() as s:
                 for row in details['rows']:
                     s.get(Team, row['team_id']).monitor_id = row['monitor_id']
+                    registration = s.scalar(select(Registration).where(Registration.team_id == row['team_id']))
+                    if registration:
+                        from .onboarding import EmailOnboarding
+                        EmailOnboarding(self.sessions).handover(gateway, s, registration, monitors[row['monitor_id']])
                     s.add(Audit(team_id=row['team_id'], batch_id='', actor_id=actor,
                         action='monitor_assigned', details={'previous_monitor_id': 0,
                         'monitor_id': row['monitor_id'], 'operation_id': key}))
@@ -633,6 +659,11 @@ class Setup:
             raise WorkflowError('Choose registered teams that have not received batches yet.')
         if any(not t['monitor_id'] for t in roster):
             raise WorkflowError('Assign every selected participant pair to a monitor before distributing data.')
+        if any(not t['annotator_ids'] or t['membership_status'] != 'ready' for t in roster):
+            raise WorkflowError('Wait for participant and monitor invitations to be accepted, then refresh invitations before distributing.')
+        from .onboarding import EmailOnboarding
+        for team in roster:
+            EmailOnboarding(self.sessions).verify_ready(gateway, team['id'])
         if not dataset_ids or len(set(dataset_ids)) != len(dataset_ids):
             raise WorkflowError('Choose distinct source datasets.')
         image_units = positive(image_units, 'Image effort units')
@@ -701,6 +732,8 @@ class Setup:
             raise WorkflowError('Source inventory or annotation metadata changed. Create a new preview.')
         for assignment in details['assignments']:
             gateway.monitor(self.monitoring_team_id, assignment['team']['monitor_id'])
+            from .onboarding import EmailOnboarding
+            EmailOnboarding(self.sessions).verify_ready(gateway, assignment['team']['id'])
         current = {t['id']: t for t in self.roster()}
         if any(current.get(a['team']['id']) != a['team'] for a in details['assignments']):
             raise WorkflowError('Participant roster changed. Create a new preview.')
@@ -722,10 +755,10 @@ class Setup:
                     dataset_id, mapped = gateway.copy_group(t['id'], key, index, group,
                         details['metas'][str(group[0]['dataset_id'])], details['with_annotations'], callback)
                     if group[0]['kind'] == 'video':
-                        mapped = [dict(a, assignee_id=t['annotator_ids'][video_index % 2]) for a in mapped]
+                        mapped = [dict(a, assignee_id=t['annotator_ids'][video_index % len(t['annotator_ids'])]) for a in mapped]
                         video_index += 1
                     else:
-                        mapped = [dict(a, assignee_id=t['annotator_ids'][(image_index + i) % 2])
+                        mapped = [dict(a, assignee_id=t['annotator_ids'][(image_index + i) % len(t['annotator_ids'])])
                                   for i, a in enumerate(mapped)]
                         image_index += len(mapped)
                     batches.append(Batch(id=f'{key}_t{t["id"]}_b{index}', team_id=t['id'], position=index,

@@ -3,7 +3,51 @@ from .gateway import Gateway
 from .service import WorkflowError
 
 
+class InvitationRejected(WorkflowError):
+    """A definitive native validation/permission rejection, safe to retry explicitly."""
+
+
 class SetupGateway(Gateway):
+    def invitation_members(self, team_id):
+        """Keep raw invitation fields; UserInfo drops activated/inviteEmail.
+
+        members.list's documented showInvited=False selects accepted members,
+        including on instances which omit the activated field in their response.
+        """
+        def listing(invited):
+            result, page = [], 1
+            while True:
+                payload = self.api.post('members.list', {'teamId': int(team_id), 'page': page,
+                    'showInvited': invited, 'showUnregistered': invited}).json()
+                if not isinstance(payload, dict) or not isinstance(payload.get('entities'), list):
+                    raise WorkflowError('Supervisely returned an unsupported membership response. No invitation was marked accepted.')
+                result.extend(payload['entities'])
+                if page >= payload.get('pagesCount', 1):
+                    return result
+                page += 1
+        all_members, accepted = listing(True), listing(False)
+        active_ids = {m.get('id') or m.get('userId') for m in accepted
+                      if m.get('activated') is not False and not m.get('disabled') and not m.get('disabledAt')}
+        return [dict(m, membership_active=(m.get('id') or m.get('userId')) in active_ids
+                     and m.get('activated') is not False and not m.get('disabled') and not m.get('disabledAt'))
+                for m in all_members]
+
+    def invite_email(self, team_id, email, role):
+        """Same members.add route used by the SDK, with an email identifier.
+
+        Community invitation acceptance is asynchronous. Do not look up the
+        email through users.list and do not infer membership from this response.
+        """
+        try:
+            result = self.api.post('members.add', {'teamId': int(team_id), 'login': email,
+                                                  'roleId': self.role_id(role)}, retries=1).json()
+        except Exception as exc:
+            status = getattr(getattr(exc, 'response', None), 'status_code', None)
+            if status in (400, 401, 402, 403, 404, 409, 422):
+                raise InvitationRejected(f'Supervisely rejected the invitation (HTTP {status}). Check email, native Admin permissions, plan/seat limits and email-invitation support on this instance.') from None
+            raise  # Unknown remote outcome: retain the setup operation checkpoint.
+        return {'user_id': result.get('userId') or result.get('id')} if isinstance(result, dict) else {}
+
     def visible_accounts(self):
         """Use accessible membership data; global listing is an optional capability."""
         people = {}

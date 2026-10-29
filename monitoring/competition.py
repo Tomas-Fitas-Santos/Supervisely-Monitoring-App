@@ -331,9 +331,10 @@ class Competition:
             snapshots = list(s.scalars(select(Submission).where(Submission.batch_id.in_(batch_ids))))
             submission_ids = {r.id for r in snapshots}
             def serialize(rows): return [{c.name: getattr(row, c.name) for c in row.__table__.columns} for row in rows]
-            from .db import Review, SourceOrigin, TaskAttempt, EventClosure, Registration
+            from .db import Review, SourceOrigin, TaskAttempt, EventClosure, Registration, TeamOnboarding
             closure = s.get(EventClosure, 1)
-            return {'schema_version': 2, 'registrations': serialize(s.scalars(select(Registration))) if organiser else [], 'closure': serialize([closure]) if closure else [],
+            return {'schema_version': 2, 'registrations': serialize(s.scalars(select(Registration))) if organiser else [],
+                    'onboarding': serialize(s.scalars(select(TeamOnboarding))) if organiser else [], 'closure': serialize([closure]) if closure else [],
                     'source_origins': serialize(s.scalars(select(SourceOrigin))),
                     'task_attempts': serialize(s.scalars(select(TaskAttempt).where(TaskAttempt.batch_id.in_(batch_ids)))),
                     'operational_reviews': serialize(s.scalars(select(Review).where(Review.batch_id.in_(batch_ids)))), 'exported_at': now(), 'capture_notice': 'Captured when observed; not guaranteed exact native submission-time snapshots.',

@@ -2,7 +2,7 @@
 Vue.component('nightjar-management', {
   props: ['view', 'form', 'post', 'section', 'locked'],
   data() {
-    return { busy: false, clientError: '', teamName: '', login1: '', login2: '', monitorId: null,
+    return { busy: false, clientError: '', teamName: '', login1: '', login2: '', monitorEmail: '', monitorId: null,
       existingTeam: null, assignments: {}, files: [], workspaceId: null, projectName: '', kind: 'images',
       metaText: '', selectedDatasets: [], selectedTeams: [], replicas: 1, batchUnits: '', imageUnits: '',
       pilot: true, withAnnotations: false, progress: '', inspectionNote: '',
@@ -24,7 +24,7 @@ Vue.component('nightjar-management', {
     unassignedPairs() { return this.roster.filter(t => !t.monitor_id); },
     assignableTeams() { return this.roster.filter(t => t.can_assign && t.monitor_id !== this.selectedMonitor); },
     participantTeams() { return (this.catalog.remote_teams || []).filter(t => ![this.groups.monitoring_team_id, this.groups.annotator_team_id].includes(t.id)); },
-    readyTeams() { return this.roster.filter(t => !t.has_batches && t.monitor_id); },
+    readyTeams() { return this.roster.filter(t => !t.has_batches && t.monitor_id && (t.membership_status||'ready')==='ready'); },
     blocked() { return !!this.setup.blocked_by; },
     disabled() { return this.busy || this.locked || this.blocked; },
     sources() { return this.view.sources || {datasets: [], workspaces: []}; },
@@ -80,9 +80,8 @@ Vue.component('nightjar-management', {
       if (!list.includes(login)) this[key] = [...list, login].join('\n');
     },
     async createTeam() {
-      const ok = await this.run('register_team', { operation_id: this.id(), name: this.teamName,
-        logins: [this.login1, this.login2], monitor_id: this.monitorId, existing_team_id: this.existingTeam });
-      if (ok) { this.showAddTeam = false; this.teamName = ''; this.login1 = ''; this.login2 = ''; this.monitorId = null; this.existingTeam = null; }
+      const ok = await this.run('email_team', { name: this.teamName, participant_emails: [this.login1, this.login2].map(e=>e.trim()).filter(Boolean), monitor_email: this.monitorEmail.trim(), monitor_id: this.monitorId });
+      if (ok) { this.showAddTeam = false; this.teamName = ''; this.login1 = ''; this.login2 = ''; this.monitorEmail = ''; this.monitorId = null; this.existingTeam = null; }
     },
     assign(t) {
       const chosen = Object.prototype.hasOwnProperty.call(this.assignments, t.id) ? this.assignments[t.id] : t.monitor_id;
@@ -135,7 +134,7 @@ Vue.component('nightjar-management', {
   template: `
   <section class="nj-management">
     <div class="nj-section-heading"><div><h2>{{ section === 'roster' ? 'Monitors & Teams' : 'Dataset' }}</h2>
-      <p class="nj-muted">{{ section === 'roster' ? 'Register monitors and participant pairs, then assign each team to a monitor.' : 'Upload event source data, choose teams and review distribution before applying it.' }}</p></div>
+      <p class="nj-muted">{{ section === 'roster' ? 'Register monitors and teams, then check invitations and assignments.' : 'Upload event source data, choose teams and review distribution before applying it.' }}</p></div>
       <button @click="reload" :disabled="busy || locked">Reload lists</button></div>
     <p v-if="!view.can_setup" class="nj-message">You can view the event lists. The monitoring organiser manages people, assignments and dataset distribution.</p>
     <div v-if="clientError" class="nj-message nj-error" role="alert">{{ clientError }}</div>
@@ -162,14 +161,13 @@ Vue.component('nightjar-management', {
         <select aria-label="Choose a registered monitor" @change="appendLogin('monitors', $event.target.value); $event.target.value = ''"><option value="">Choose a registered user</option><option v-for="u in catalog.users || []" :key="u.id" :value="u.login">{{ u.name }} · {{ u.login }}</option></select>
         <label class="nj-field">Monitor logins<textarea v-model="monitorLogins" rows="3"></textarea></label>
         <div class="nj-actions"><button class="nj-primary" @click="addMembers('monitors')" :disabled="disabled || !monitorLogins.trim()">Save monitors</button><button v-if="view.connection.login" @click="appendLogin('monitors', view.connection.login)">Include my account</button><button @click="showAddMonitor = false" :disabled="busy">Cancel</button></div></div>
-      <div v-if="showAddTeam && view.can_setup" class="nj-panel"><h3>Add a team and its two participants</h3>
+      <div v-if="showAddTeam && view.can_setup" class="nj-panel"><h3>Create a team and invite participants</h3>
         <label class="nj-field">Team name<input v-model="teamName" maxlength="180"></label>
-        <datalist id="nj-participant-logins"><option v-for="u in suggestedParticipants" :key="u.id" :value="u.login">{{ u.name }}</option></datalist>
-        <div class="nj-form-row"><label>First participant's Supervisely login<input v-model="login1" list="nj-participant-logins" autocomplete="off"></label><label>Second participant's Supervisely login<input v-model="login2" list="nj-participant-logins" autocomplete="off"></label></div>
-        <p class="nj-muted">Both must already have Supervisely accounts. The app registers them in the event and adds them to this team. They will annotate in Supervisely.</p>
-        <label class="nj-field">Monitor<select v-model="monitorId"><option :value="null">Unassigned — assign later</option><option v-for="u in monitors" :key="u.id" :value="u.id">{{ u.name }} · {{ u.login }}</option></select></label>
-        <details><summary>Use an existing participant team</summary><label class="nj-field">Supervisely team<select v-model="existingTeam"><option :value="null">Create a new Supervisely team</option><option v-for="t in participantTeams" :key="t.id" :value="t.id">{{ t.name }}</option></select></label></details>
-        <div class="nj-actions"><button class="nj-primary" @click="createTeam" :disabled="disabled || !teamName.trim() || !login1.trim() || !login2.trim() || login1.toLowerCase() === login2.toLowerCase()">Save team</button><button @click="showAddTeam = false" :disabled="busy">Cancel</button></div></div>
+        <div class="nj-form-row"><label>First annotator email<input type="email" v-model="login1" autocomplete="off"></label><label>Second annotator email (optional)<input type="email" v-model="login2" autocomplete="off"></label></div>
+        <p class="nj-muted">The team appears immediately. Annotators accept email invitations through Supervisely before tasks can be distributed. The monitor is a separate person.</p>
+        <label class="nj-field">Registered monitor<select v-model="monitorId"><option :value="null">Use the monitor email below</option><option v-for="u in monitors" :key="u.id" :value="u.id">{{ u.name }} · {{ u.login }}</option></select></label>
+        <label class="nj-field">Monitor email<input type="email" v-model="monitorEmail" placeholder="Required if no registered monitor was selected"></label>
+        <div class="nj-actions"><button class="nj-primary" @click="createTeam" :disabled="disabled || !teamName.trim() || !login1.trim() || (!monitorId&&!monitorEmail.trim()) || (login2.trim()&&login1.toLowerCase()===login2.toLowerCase())">Create team and invite</button><button @click="showAddTeam = false" :disabled="busy">Cancel</button></div></div>
       <div class="nj-directory-layout"><aside class="nj-panel"><h3>Monitors</h3><input v-model="monitorSearch" placeholder="Find a monitor" aria-label="Find a monitor">
         <button v-for="m in filteredMonitors" :key="m.id" class="nj-team" :class="{selected: selectedMonitor === m.id}" @click="chooseMonitor(m)"><span>{{ m.name }}</span><small>{{ m.login }} · {{ assignedCount(m) }} teams</small></button>
         <p v-if="!monitors.length" class="nj-muted">No monitors registered. Add the people who will oversee this event.</p></aside>
@@ -180,10 +178,10 @@ Vue.component('nightjar-management', {
           <p class="nj-muted">Assigning a new monitor also hands over existing native reviewer jobs. Removing an active assignment requires choosing a replacement monitor. Previous native memberships are retained; the app revokes the previous monitor's assignment access.</p>
         </template><p v-else>Select a monitor to see their assigned teams and manage assignments.</p></div></div>
       <div class="nj-panel"><div class="nj-section-heading"><h3>All participant teams</h3><input v-model="teamSearch" placeholder="Find a team or participant" aria-label="Find a team or participant"></div>
-        <div class="nj-table-scroll"><table class="nj-table"><thead><tr><th>Team</th><th>Participants</th><th>Assigned monitor</th><th v-if="view.can_setup">Change assignment</th></tr></thead><tbody>
-          <tr v-for="t in filteredTeams" :key="t.id"><td><strong>{{ t.name }}</strong></td><td>{{ participants(t) }}</td><td><span class="nj-badge" :class="{warning: !t.monitor_id}">{{ monitorName(t.monitor_id) }}</span></td>
+        <div class="nj-table-scroll"><table class="nj-table"><thead><tr><th>Team</th><th>Participants</th><th>Assigned monitor</th><th>Membership</th><th v-if="view.can_setup">Change assignment</th></tr></thead><tbody>
+          <tr v-for="t in filteredTeams" :key="t.id"><td><strong>{{ t.name }}</strong></td><td>{{ participants(t) }}</td><td><span class="nj-badge" :class="{warning: !t.monitor_id}">{{ monitorName(t.monitor_id) }}</span></td><td><span class="nj-badge" :class="{warning:t.membership_status!=='ready'}">{{t.membership_status==='ready'?'Ready':t.membership_status==='pending'?'Pending invitations':'Needs attention'}}</span></td>
             <td v-if="view.can_setup"><div class="nj-inline-actions"><select :value="Object.prototype.hasOwnProperty.call(assignments, t.id) ? assignments[t.id] : t.monitor_id" @change="$set(assignments, t.id, Number($event.target.value))" :disabled="disabled || !t.can_assign"><option :value="0" :disabled="t.can_unassign === false">Unassigned</option><option v-for="m in monitors" :key="m.id" :value="m.id">{{ m.name }}</option></select><button @click="assign(t)" :disabled="disabled || !t.can_assign || !Object.prototype.hasOwnProperty.call(assignments, t.id) || assignments[t.id] === t.monitor_id">Save</button></div></td></tr></tbody></table></div>
-        <p v-if="!filteredTeams.length" class="nj-muted">No teams found. Use Add team to register a pair and its participants.</p></div>
+        <p v-if="!filteredTeams.length" class="nj-muted">No teams found. Import the CSV or use Add team to invite its participants.</p></div>
       <details v-if="unassignedPairs.length && view.can_setup" class="nj-panel"><summary>Assign unassigned teams evenly across selected monitors</summary><label v-for="m in monitors" :key="m.id" class="nj-check"><input type="checkbox" v-model="candidateMonitorIds" :value="m.id">{{ m.name }}</label>
         <button @click="run('balance_preview', {monitor_ids: candidateMonitorIds})" :disabled="disabled || !candidateMonitorIds.length">Preview balanced assignments</button>
         <div v-if="view.assignment_plan_id"><p v-for="row in view.assignment_preview" :key="row.team_id">{{ row.team_name }} → {{ monitorName(row.monitor_id) }}</p><button class="nj-primary" @click="run('balance_apply', {assignment_plan_id: view.assignment_plan_id})" :disabled="disabled">Apply monitor assignments</button></div></details>
@@ -204,7 +202,7 @@ Vue.component('nightjar-management', {
         <p class="nj-muted">Videos remain complete and use actual frame counts as effort units. Enter a comparable image-effort estimate.</p><label class="nj-check"><input type="checkbox" v-model="withAnnotations">Copy existing source annotations</label>
         <details><summary>Per-source effort overrides and inventory</summary><p class="nj-muted">Enter JSON mapping source IDs to positive effort estimates. The source IDs below can also define the common challenge in Event rules.</p><textarea v-model="effortOverrides" rows="3"></textarea><button @click="run('inventory', {dataset_ids:selectedDatasets, image_units:Number(imageUnits)||1})" :disabled="disabled || !selectedDatasets.length">Inspect selected inventory</button><div v-for="a in view.inventory || []" :key="a.source_id"><code>{{a.source_id}}</code> · {{a.relative_path || a.name}} · {{a.frames || 1}} {{a.kind==='video'?'frames':'image'}}</div></details><button @click="plan" :disabled="disabled || !selectedDatasets.length || !selectedTeams.length || !imageUnits || !batchUnits">Preview distribution</button></div>
       <div v-if="preview && view.plan_id && view.can_setup" class="nj-panel"><h3>Review dataset distribution</h3><p class="nj-muted">Seed {{preview.seed}} · workload spread {{preview.workload_spread}} effort units · rule revision {{preview.rules_revision}}</p><details><summary>Source coverage</summary><p v-for="(count,source) in preview.coverage" :key="source">{{source}} → {{count}} independent teams</p></details><p>{{ preview.source_images }} source images · {{ preview.source_videos }} source videos · {{ preview.replicas }} independent teams per source</p><div class="nj-table-scroll"><table class="nj-table"><thead><tr><th>Team</th><th>Monitor</th><th>Images</th><th>Videos</th><th>Batches</th><th>Required units</th><th>Source mix</th></tr></thead><tbody><tr v-for="t in preview.teams" :key="t.id"><td>{{ t.name }}</td><td>{{ monitorName(t.monitor_id) }}</td><td>{{ t.images }}</td><td>{{ t.videos }}</td><td>{{ t.batches }}</td><td>{{t.required_units}}</td><td>{{JSON.stringify(t.strata)}}</td></tr></tbody></table></div><button class="nj-primary" @click="run('distribute', {plan_id: view.plan_id})" :disabled="disabled">Apply distribution</button><p class="nj-muted">Jobs will be released from Monitoring by each assigned monitor.</p></div>
-      <div class="nj-panel"><h3>Distribution status by team</h3><div v-for="t in roster" :key="t.id" class="nj-contribution"><span>{{ t.name }} · {{ monitorName(t.monitor_id) }}</span><span class="nj-badge" :class="{warning: !t.monitor_id}">{{ t.has_batches ? 'Batches prepared' : (t.monitor_id ? 'Awaiting distribution' : 'Assign a monitor first') }}</span></div><p v-if="!roster.length">No teams registered yet.</p></div>
+      <div class="nj-panel"><h3>Distribution status by team</h3><div v-for="t in roster" :key="t.id" class="nj-contribution"><span>{{ t.name }} · {{ monitorName(t.monitor_id) }}</span><span class="nj-badge" :class="{warning: !t.monitor_id}">{{ t.has_batches ? 'Batches prepared' : ((t.membership_status||'ready')!=='ready' ? 'Waiting for accepted invitations' : t.monitor_id ? 'Awaiting distribution' : 'Assign a monitor first') }}</span></div><p v-if="!roster.length">No teams registered yet.</p></div>
     </template>
     <details v-if="view.can_setup && (setup.operations || []).length" class="nj-panel"><summary>Operation history and recovery</summary><div v-for="o in setup.operations" :key="o.id" class="nj-operation"><strong>{{ o.kind }} · {{ o.state }}</strong><small>{{ o.id }}</small><p v-if="o.result.error" class="nj-caution">{{ o.result.error }}</p><details v-if="o.result.resources"><summary>Confirmed resources</summary><pre>{{ JSON.stringify(o.result.resources, null, 2) }}</pre></details></div></details>
   </section>`

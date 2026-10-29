@@ -3,10 +3,10 @@ import csv
 import hashlib
 import io
 from sqlalchemy import select
-from .db import Audit, Registration, Team
+from .db import Audit, Registration, Team, TeamOnboarding
 from .service import WorkflowError
 
-COLUMNS = ['team_name', 'member_1_email', 'member_2_email', 'member_1_name', 'member_2_name', 'member_1_login', 'member_2_login']
+COLUMNS = ['team_name', 'member_1_email', 'member_2_email', 'member_1_name', 'member_2_name', 'member_1_login', 'member_2_login', 'monitor_email']
 PERSON_COLUMNS = ['team_name', 'participant_email', 'participant_name', 'participant_login']
 
 
@@ -56,10 +56,11 @@ class Registrations:
                         item[f'member_{i}_{field}'] = person.get(mapping.get(f'participant_{field}', ''), '')
                 converted.append(item)
             raw, headers, mapping = converted, COLUMNS, {field:field for field in COLUMNS}
-        for field in COLUMNS[:3]:
+        for field in COLUMNS[:2]:
             if mapping.get(field) not in headers:
-                raise WorkflowError('Map the team name and both participant email columns.')
-        if len(set(mapping[field] for field in COLUMNS[:3])) != 3:
+                raise WorkflowError('Map the team name and first participant email column; the second participant is optional.')
+        mapped_required = [mapping[field] for field in COLUMNS[:3] if mapping.get(field)]
+        if len(set(mapped_required)) != len(mapped_required):
             raise WorkflowError('Map different columns for team name and the two emails.')
         rows, seen, emails = [], set(), set()
         for number, raw_row in enumerate(raw, 2):
@@ -71,16 +72,28 @@ class Registrations:
             members = []
             for i in (1, 2):
                 email = row[f'member_{i}_email'].casefold()
+                if i == 2 and not email:
+                    continue
                 if len(email) > 254 or email.count('@') != 1 or not email.split('@', 1)[0] or not email.rsplit('@', 1)[1] or any(c.isspace() for c in email) or email in emails:
                     raise WorkflowError(f'Row {number}: invalid email or a participant appears in multiple teams.')
                 emails.add(email)
                 members.append({'email': email, 'name': row[f'member_{i}_name'],
                                 'login': row[f'member_{i}_login'], 'user_id': None, 'status': 'unresolved'})
             key = hashlib.sha256(name.casefold().encode()).hexdigest()
-            rows.append((key, name, members))
+            manager = row['monitor_email'].casefold()
+            if manager and (manager.count('@') != 1 or any(c.isspace() for c in manager) or not all(manager.split('@'))
+                            or len(manager) > 254 or manager in {m['email'] for m in members}):
+                raise WorkflowError(f'Row {number}: use a valid monitor email distinct from the annotators.')
+            rows.append((key, name, members, manager))
+        if {manager for _, _, _, manager in rows if manager}.intersection(emails):
+            raise WorkflowError('A monitor cannot also be registered as an annotator in this event.')
         with self.sessions.begin() as s:
             existing = list(s.scalars(select(Registration)))
-            for key, name, members in rows:
+            existing_participants = {m['email'] for r in existing for m in r.members}
+            existing_managers = {p.manager_email for p in s.scalars(select(TeamOnboarding)) if p.manager_email}
+            if existing_managers.intersection(emails) or existing_participants.intersection(manager for _,_,_,manager in rows if manager):
+                raise WorkflowError('Monitors and annotators must use separate event accounts.')
+            for key, name, members, manager in rows:
                 for previous in existing:
                     if previous.id != key and {m['email'] for m in previous.members}.intersection(m['email'] for m in members):
                         raise WorkflowError('An email is already registered to another event team.')
@@ -88,16 +101,29 @@ class Registrations:
                 if record:
                     if [m['email'] for m in record.members] != [m['email'] for m in members]:
                         raise WorkflowError('This team name has different registered members. Resolve the roster explicitly.')
+                    onboarding = s.get(TeamOnboarding, key)
+                    if manager and onboarding and not record.team_id and onboarding.manager_email != manager:
+                        raise WorkflowError('This registration has a different monitor email. Use the explicit monitor assignment controls.')
                     continue  # Idempotent import preserves resolution and team ownership.
                 s.add(Registration(id=key, team_name=name, members=members))
+                s.flush()
+                s.add(TeamOnboarding(registration_id=key, manager_email=manager))
             s.add(Audit(team_id=0, batch_id='', actor_id=actor, action='registrations_imported', details={'teams': len(rows)}))
         return len(rows)
 
     def rows(self):
         with self.sessions() as s:
-            return [{'id': r.id, 'team_name': r.team_name, 'members': r.members, 'monitor_id': r.monitor_id,
-                     'team_id': r.team_id, 'error': r.error, 'ready': all(m.get('user_id') and m['status'] in ('matched', 'verified') for m in r.members)}
-                    for r in s.scalars(select(Registration).order_by(Registration.team_name))]
+            rows = []
+            for r in s.scalars(select(Registration).order_by(Registration.team_name)):
+                onboarding = s.get(TeamOnboarding, r.id)
+                rows.append({'id': r.id, 'team_name': r.team_name, 'members': r.members, 'monitor_id': r.monitor_id,
+                    'team_id': r.team_id, 'error': r.error,
+                    'ready': onboarding.status == 'ready' if onboarding and onboarding.memberships else all(m.get('user_id') and m['status'] in ('matched', 'verified', 'accepted') for m in r.members),
+                    'monitor_email': onboarding.manager_email if onboarding else '',
+                    'membership_status': onboarding.status if onboarding and (onboarding.memberships or not r.team_id) else 'ready',
+                    'memberships': onboarding.memberships if onboarding else [],
+                    'checked_at': onboarding.checked_at if onboarding else None})
+            return rows
 
     def resolve(self, gateway, actor, row_id=None, overrides=None):
         overrides = overrides or {}
@@ -129,7 +155,8 @@ class Registrations:
                 else:
                     member.update(user_id=None, login=login, status='ambiguous' if len(matches) > 1 else 'unresolved')
                 members.append(member)
-            if members[0]['user_id'] and members[0]['user_id'] == members[1]['user_id']:
+            ids = [m['user_id'] for m in members if m['user_id']]
+            if len(ids) != len(set(ids)):
                 raise WorkflowError('Both registration emails resolved to the same Supervisely account.')
             with self.sessions.begin() as s:
                 current = s.get(Registration, row.id)

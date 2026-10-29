@@ -64,8 +64,8 @@ function management(dashboard) { return dashboard.$children.find(c=>c.$options.n
   assert(roster.assignedTeams.length===2);
   const assigned=roster.roster.find(t=>t.id===102);await roster.removeFromMonitor(assigned);await settle();
   assert(roster.roster.find(t=>t.id===102).monitor_id===0);
-  roster.showAddTeam=true;roster.teamName='Pair D';roster.login1='grace';roster.login2='henry';roster.monitorId=null;
-  await roster.createTeam();assert(calls.some(c=>c.form.setup_action==='register_team' && c.form.logins.join()==='grace,henry' && c.form.monitor_id===null));
+  roster.showAddTeam=true;roster.teamName='Pair D';roster.login1='grace@example.test';roster.login2='henry@example.test';roster.monitorId=90;
+  await roster.createTeam();assert(calls.some(c=>c.form.setup_action==='email_team' && c.form.participant_emails.join()==='grace@example.test,henry@example.test' && c.form.monitor_id===90));
   assert(roster.login1==='' && !roster.showAddTeam);
   await d.changeTab('dataset');await settle();const dataset=management(d);assert(dataset);
   assert(admin.$el.textContent.includes('Event source datasets'));assert(!admin.$el.textContent.includes('All participant teams'));

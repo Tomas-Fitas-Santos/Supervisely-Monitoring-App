@@ -19,23 +19,26 @@ Open http://127.0.0.1:8000 and connect the organiser account in the UI. A fresh 
 
 ## Supplied account rehearsal
 
-1. Connect the token belonging to **tomas.bf.santos@gmail.com**. Confirm the server is the instance where all three accounts exist. The app obtains the actual native user ID/login from this token.
-2. In **Monitors & Teams**, create or adopt the Monitors and Annotators groups. Add the connected organiser to Monitors using **Add monitor → Include my account → Save monitors**. The organiser must have native Admin permission in the chosen monitoring team.
-3. Click **Load bundled demo CSV**, then **Match all registration emails**. The one pair is **tomas.gaming.21@gmail.com** and **tomas.santos.work2002@gmail.com**. Login columns are deliberately blank: email is not assumed to equal login. If necessary, enter each actual accessible native login and verify the email association explicitly. Select your monitor account and provision the pair.
-4. Where native invitations require acceptance, sign into each participant account and accept them. Inspect operation history and actual resource IDs before clearing a blocked setup operation; do not blindly repeat partial creation.
-5. In **Dataset**, click **Load bundled CC0 bird photos**. This uploads real media to the configured monitoring-team workspace. Select both photo datasets; replication 1, image effort 1 and batch effort 1 are suitable for this tiny rehearsal. Save/freeze your guide and scoring policy, preview and apply distribution.
-6. In **Monitoring**, release the first upcoming batch. Open its native labeling job as the assigned participant in another browser profile. Annotate the image and submit through Supervisely. Return to the monitor app, refresh/capture and judge it. Native presence, submission and judgment remain separate.
-7. Release the next batch after the first submission (or approval if that release gate was chosen). Its task belongs to the other participant. Annotate/submit using that account. This proves both accounts receive work despite the photos being in separate source folders.
-8. Test correction/resubmission and native acceptance, then close and export this rehearsal. Keep the pilot database for inspection; use a fresh production PostgreSQL event for the competition. There is no automatic deletion/reset of real native resources.
+The CSV creates **TEAM 1** with `tomas.gaming.21@gmail.com` as Annotator and **TEAM 2** with `tomas.santos.work2002@gmail.com` as Annotator. Both use `tomas.bf.santos@gmail.com` as monitor/Manager responsibility. Each demo team therefore has two people in total, not two annotators. The organiser retains native Admin membership and is the assigned job reviewer.
 
-These supplied emails are not hardcoded event authorization. The production app uses token identity, current native membership and app assignments. The demo role switch and simulated submission are unavailable here.
+1. Connect the token belonging to **tomas.bf.santos@gmail.com**. Confirm all accounts use this Supervisely instance. The organiser's identity comes from the token; participants do not provide API tokens/passwords.
+2. Create/adopt the two event groups in **Monitors & Teams**. Then **Load bundled demo CSV → Create teams and invite CSV emails**. Both native teams appear before acceptance. No global account lookup or username collection is required for this path.
+3. Inspect each member's status. Pending acceptance is normal and does not block other setup. Each actual annotator signs into Supervisely and accepts the invitation for its participant team. Click **Refresh all invitations**; both teams must become **Ready**. A user ID alone is not acceptance.
+4. If the instance rejects email through the public invitation route, the created team remains visible with an error. Use **Open native invitations**, select the exact team name/ID shown by the app, invite that row's email in Supervisely, and refresh membership. See [invitation integration and limits](email-invitations.md). Inspect uncertain writes before acknowledging them; never blindly recreate resources.
+5. In **Dataset**, click **Load bundled CC0 bird photos**, or upload the nested `examples/organiser-demo/dataset/` folder using the folder picker. It contains two photos and no video media. Non-media README files are skipped. The same basename in two source folders must remain distinct.
+6. Select both source photo datasets and both ready teams. Use replication **1**, image effort **1** and batch effort **1** for **one unique image per team**, equal effort and no overlap. Use replication **2** if both teams should annotate both photos independently. Save/freeze the annotation guide/scoring rules, preview coverage/effort and apply distribution.
+7. In **Monitoring**, select TEAM 1 and release its batch. Open the native labeling job as `tomas.gaming.21@gmail.com`, annotate and submit. Repeat with TEAM 2 and `tomas.santos.work2002@gmail.com`. The jobs must have the correct native annotator IDs, team-local entity IDs and your reviewer ID.
+8. Refresh/capture in the monitor app and judge the images. Test correction/resubmission and native acceptance, then close and export this rehearsal. Keep its database for inspection. Use fresh production PostgreSQL for the actual competition; real resources are not reset/deleted automatically.
+
+The presentation shortcut in offline `--demo` mode explicitly simulates invitation acceptance and submission. Those controls are unavailable in real mode. If an older offline roster is loaded, reset it with a backup. If a previous real pilot already assigned these emails to another registration, retain that event and start this new rehearsal with separate storage/resources; do not silently reassign or delete its work.
 
 ## Prove the capabilities before full provisioning
 
 | Check | Required observation |
 |---|---|
 | Instance/account identity | All accounts exist on the same instance as the organiser; registered emails resolve to the intended native IDs. |
-| Email visibility | Automatic matching succeeds with the actual permissions, or explicit accessible-login/manual verification resolves hidden email. A conflicting returned email is rejected. |
+| Email invitations | Public members.add accepts the CSV email, or the documented native UI fallback sends it. No instance-wide users.list access is needed. |
+| Accepted identity | Invited/accepted filtering works; the invitation association yields the correct native ID even when profile email is hidden. Conflicting IDs/emails are rejected. |
 | Invitations | Determine whether native membership is immediate or requires acceptance. Verify active membership before creating jobs. |
 | Pair isolation | Each pair edits independent entities, cannot open competitors' jobs and cannot access unreleased work through its normal native role. |
 | Native resources | Confirm team creation/adoption permissions and actual licence/seat/storage limits before scaling the roster. |

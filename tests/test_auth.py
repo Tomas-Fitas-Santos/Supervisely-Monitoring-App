@@ -234,3 +234,23 @@ def test_live_mode_rejects_simulator_presentation_actions_before_mutation(ui, mo
     monkeypatch.setattr(monitoring.demo, 'prepare_presentation', prepare)
     assert ui.setup_action(NS(state=NS(state={'dashboard': {'setup_action': 'demo_prepare'}}))) == {'ok': False}
     prepare.assert_not_called()
+
+
+def test_add_team_form_uses_email_invitations_and_keeps_pending_team_visible(ui, monkeypatch):
+    import supervisely.app
+    from monitoring.demo import DemoApi, initialize_demo
+    from monitoring.gateway import Gateway
+    data={'dashboard':{}}
+    monkeypatch.setattr(supervisely.app,'DataJson',lambda:data)
+    monkeypatch.setattr(ui.dashboard,'display',Mock())
+    monkeypatch.setattr(ui,'settings',replace(ui.settings,local=True))
+    initialize_demo(ui.sessions)
+    api=DemoApi(ui.sessions,900,ui.settings.home)
+    monkeypatch.setattr(ui,'identity',lambda request:(900,Gateway(api,ui.sessions)))
+    form={'setup_action':'email_team','name':'Manual email team',
+          'participant_emails':['tomas.gaming.21@gmail.com'], 'monitor_email':'tomas.bf.santos@gmail.com'}
+    assert ui.setup_action(NS(state=NS(state={'dashboard':form}))) == {'ok':True}
+    team=data['dashboard']['directory']['teams'][0]
+    assert team['name']=='Manual email team' and team['membership_status']=='pending'
+    assert team['participants'][0]['email']=='tomas.gaming.21@gmail.com'
+    assert not team['annotator_ids'] and not data['dashboard']['setup']['blocked_by']
