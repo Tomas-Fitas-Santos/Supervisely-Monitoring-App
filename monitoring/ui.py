@@ -45,7 +45,8 @@ def health():
             session.execute(text('SELECT 1'))
     except Exception:
         return JSONResponse({'status': 'unavailable'}, status_code=503)
-    mode = ('demo' if os.getenv('MONITORING_DEMO') == '1' else
+    mode = ('simulator' if os.getenv('MONITORING_SIMULATOR') == '1' else
+            'demo' if os.getenv('MONITORING_LIVE_DEMO') == '1' and settings.local else
             'pilot' if os.getenv('MONITORING_PILOT') == '1' and settings.local else
             'local' if settings.local else 'production')
     return {'status': 'ok', 'mode': mode}
@@ -58,7 +59,7 @@ def event_config():
 
 def identity(request):
     config = event_config()
-    if os.getenv('MONITORING_DEMO') == '1':
+    if os.getenv('MONITORING_SIMULATOR') == '1':
         if not settings.local or request.client.host not in ('127.0.0.1', '::1', 'testclient'):
             raise WorkflowError('The organiser simulator is available only on loopback.')
         from .demo import DemoApi
@@ -147,13 +148,13 @@ def display_access(uid, gateway):
     data.update(competition=Competition(sessions).config(),
                 leaderboard=Competition(sessions).leaderboard() if gateway else [],
                 registration_rows=Registrations(sessions).rows() if can_setup else [],
-                demo=os.getenv('MONITORING_DEMO') == '1',
+                simulator=os.getenv('MONITORING_SIMULATOR') == '1',
                 pilot=os.getenv('MONITORING_PILOT') == '1' and settings.local)
     from .db import EventClosure
     with sessions() as s:
         from .db import Simulation
         simulation = s.get(Simulation, 1)
-        data['demo_roster_outdated'] = bool(simulation and simulation.data.get('fixture_version') != 2)
+        data['simulator_roster_outdated'] = bool(simulation and simulation.data.get('fixture_version') != 2)
         data['closed'] = s.get(EventClosure, 1) is not None
         page_batch = s.get(Batch, data.get('unit_page', {}).get('batch_id', ''))
         page_team = s.get(Team, page_batch.team_id) if page_batch else None
@@ -182,7 +183,7 @@ def clear_access():
                                    assignment_plan_id=None, assignment_preview=[],
                                    directory={}, sources={}, connected=False, review_preview=None,
                                    registration_rows=[], unit_page={}, leaderboard=[], export_data=None,
-                                   demo=os.getenv('MONITORING_DEMO') == '1',
+                                   simulator=os.getenv('MONITORING_SIMULATOR') == '1',
                                    pilot=os.getenv('MONITORING_PILOT') == '1' and settings.local,
                                    connection=connection_view(False))
 
@@ -222,7 +223,7 @@ def local_connect(values):
 
 @app.get_server().post('/connection')
 async def connect(request: Request):
-    if os.getenv('MONITORING_DEMO') == '1' or not settings.local or request.client.host not in ('127.0.0.1', '::1', 'testclient'):
+    if os.getenv('MONITORING_SIMULATOR') == '1' or not settings.local or request.client.host not in ('127.0.0.1', '::1', 'testclient'):
         return JSONResponse({'ok': False, 'message': 'Use your Supervisely session to authenticate.'}, status_code=403)
     # This endpoint does not use widget state; credentials cannot be echoed back by the SDK.
     origin = request.headers.get('origin')
@@ -296,7 +297,7 @@ def action(request: Request):
                     from .db import Submission
                     comp = Competition(sessions)
                     if name == 'demo_submit':
-                        if os.getenv('MONITORING_DEMO') != '1':
+                        if os.getenv('MONITORING_SIMULATOR') != '1':
                             raise WorkflowError('Simulated submissions are unavailable for a live event.')
                         from .db import EventClosure
                         with sessions() as s:
@@ -440,7 +441,7 @@ def setup_action(request: Request):
             EmailOnboarding(sessions).refresh(gateway, setup, uid, f.get('registration_id'))
             message = 'Native invitation acceptance and roles checked. Only ready teams can receive tasks.'
         elif name == 'demo_accept_invitations':
-            if os.getenv('MONITORING_DEMO') != '1' or not settings.local:
+            if os.getenv('MONITORING_SIMULATOR') != '1' or not settings.local:
                 raise WorkflowError('Only actual Supervisely users can accept invitations in real mode.')
             from .db import TeamOnboarding
             from .onboarding import EmailOnboarding
@@ -453,26 +454,26 @@ def setup_action(request: Request):
             EmailOnboarding(sessions).refresh(gateway, setup, uid, f['registration_id'])
             message = 'Demo invitation acceptance simulated. No real invitation or email was sent.'
         elif name == 'demo_prepare':
-            if os.getenv('MONITORING_DEMO') != '1' or not settings.local:
+            if os.getenv('MONITORING_SIMULATOR') != '1' or not settings.local:
                 raise WorkflowError('Presentation preparation is available only in the isolated organiser simulator.')
-            if data.get('demo_roster_outdated'):
+            if data.get('simulator_roster_outdated'):
                 raise WorkflowError('Reset this older demo with a backup before loading the new TEAM 1 / TEAM 2 roster.')
             from .demo import prepare_presentation
             prepare_presentation(sessions, settings.home)
             message = 'Presentation ready. Open Monitoring: one batch is submitted for judging and the next is locked. All native operations were simulated.'
         elif name == 'demo_reset':
-            if os.getenv('MONITORING_DEMO') != '1':
+            if os.getenv('MONITORING_SIMULATOR') != '1':
                 raise WorkflowError('Reset is available only in the isolated organiser simulator.')
             from .demo import reset_demo
             reset_demo(sessions, settings.home)
             data.update(plan_id=None, preview=None, assignment_plan_id=None, assignment_preview=[], unit_page={}, review_preview=None, export_data=None, sources={}, inventory=[])
             message = 'Demo reset. Previous simulated results were backed up locally. Load the CSV to rehearse again.'
         elif name in ('demo_csv', 'demo_sources'):
-            if not settings.local or not any(os.getenv(k) == '1' for k in ('MONITORING_DEMO', 'MONITORING_PILOT')):
-                raise WorkflowError('Bundled inputs are available in local --pilot or --demo mode.')
+            if not settings.local or not any(os.getenv(k) == '1' for k in ('MONITORING_SIMULATOR', 'MONITORING_PILOT')):
+                raise WorkflowError('Bundled inputs are available in local --demo, --pilot or --simulator mode.')
             from .pilot import import_roster, upload_photos
             if name == 'demo_csv':
-                if os.getenv('MONITORING_DEMO') == '1' and data.get('demo_roster_outdated'):
+                if os.getenv('MONITORING_SIMULATOR') == '1' and data.get('simulator_roster_outdated'):
                     raise WorkflowError('Reset this older demo with a backup before loading the new TEAM 1 / TEAM 2 roster.')
                 import_roster(sessions, uid)
                 message = 'TEAM 1 and TEAM 2 registrations loaded. Create teams and invite the CSV emails, then refresh after acceptance.'

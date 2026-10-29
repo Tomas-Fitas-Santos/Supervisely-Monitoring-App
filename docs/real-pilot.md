@@ -1,10 +1,10 @@
 # Real Supervisely pilot
 
-Only monitors and the organiser open this app. Participants annotate and submit through their own Supervisely accounts. The bundled simulator is a usability demonstration; this checklist validates the actual platform integration.
+Only monitors and the organiser open this app. Participants annotate and submit through their own Supervisely accounts. Demo and Pilot run this same live workflow with the bundled sample inputs; the separate Simulator is only an offline development tool.
 
 ## Start
 
-On Windows, update the implementation branch and run without the demo flag:
+On Windows, update the implementation branch and start the live demo (the --pilot alias uses the same workflow and database):
 
 ```powershell
 git fetch origin
@@ -12,10 +12,10 @@ git switch feat/multi-user-monitoring-mvp
 git pull --ff-only
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 .\.venv\Scripts\python.exe -m pip install --force-reinstall --no-deps -r requirements-windows.txt
-.\.venv\Scripts\python.exe -m monitoring.run --pilot
+.\.venv\Scripts\python.exe -m monitoring.run --demo
 ```
 
-Open http://127.0.0.1:8000 and connect the organiser account in the UI. A fresh installation needs no event `.env`. Pilot (`data/account-pilot/`), ordinary local event (`data/`) and organiser-demo (`data/organiser-demo/`) stores are separate. Local mode represents one connected account, even with multiple browser tabs; genuine multi-user testing needs a shared native hosted session. `Start-App.ps1 -Mode Pilot -Install` is the Windows shortcut.
+Open http://127.0.0.1:8000 and connect the organiser account in the UI. A fresh installation needs no event `.env`. Demo and Pilot share `data/account-pilot/`. The ordinary local event (`data/`) and offline Simulator (`data/organiser-demo/`) stores are separate. Upgrading from the old offline Demo leaves its records untouched. Local mode represents one connected account, even with multiple browser tabs; genuine multi-user testing needs a shared native hosted session. `Start-App.ps1 -Mode Pilot -Install` is the Windows shortcut.
 
 ## Supplied account rehearsal
 
@@ -30,7 +30,7 @@ The CSV creates **TEAM 1** with `tomas.gaming.21@gmail.com` as Annotator and **T
 7. In **Monitoring**, select TEAM 1 and release its batch. Open the native labeling job as `tomas.gaming.21@gmail.com`, annotate and submit. Repeat with TEAM 2 and `tomas.santos.work2002@gmail.com`. The jobs must have the correct native annotator IDs, team-local entity IDs and your reviewer ID.
 8. Refresh/capture in the monitor app and judge the images. Test correction/resubmission and native acceptance, then close and export this rehearsal. Keep its database for inspection. Use fresh production PostgreSQL for the actual competition; real resources are not reset/deleted automatically.
 
-The presentation shortcut in offline `--demo` mode explicitly simulates invitation acceptance and submission. Those controls are unavailable in real mode. If an older offline roster is loaded, reset it with a backup. If a previous real pilot already assigned these emails to another registration, retain that event and start this new rehearsal with separate storage/resources; do not silently reassign or delete its work.
+The presentation shortcut in offline `--simulator` mode explicitly simulates invitation acceptance and submission. Those controls are unavailable in real mode. If an older offline roster is loaded, reset it with a backup. If a previous real pilot already assigned these emails to another registration, retain that event and start this new rehearsal with separate storage/resources; do not silently reassign or delete its work.
 
 ## Prove the capabilities before full provisioning
 

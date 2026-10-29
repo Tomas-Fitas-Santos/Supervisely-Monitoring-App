@@ -15,7 +15,7 @@ import urllib.request
 def walkthrough(mode, script):
     repo = Path(__file__).resolve().parents[1]
     with tempfile.TemporaryDirectory(prefix='organiser-browser-') as temp:
-        env = dict(os.environ, PYTHONPATH=str(repo))
+        env = dict(os.environ, PYTHONPATH=str(repo), EXPECTED_APP_MODE=mode)
         env['DEMO_SCREENSHOT_DIR'] = os.getenv('DEMO_SCREENSHOT_DIR', temp)
         with open(Path(temp)/'server.log', 'w+') as log:
             process = subprocess.Popen([sys.executable, '-m', 'monitoring.run', '--' + mode], cwd=temp,
@@ -50,8 +50,9 @@ def walkthrough(mode, script):
 
 
 def main():
-    walkthrough('demo', 'browser_demo.cjs')
-    walkthrough('demo', 'browser_upload.cjs')
+    walkthrough('simulator', 'browser_demo.cjs')
+    walkthrough('simulator', 'browser_upload.cjs')
+    walkthrough('demo', 'browser_pilot.cjs')
     walkthrough('pilot', 'browser_pilot.cjs')
 
 

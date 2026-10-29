@@ -22,7 +22,7 @@ class Settings:
         load_dotenv()
         hosted = any(os.getenv(k) for k in ('TASK_ID', 'task_id', 'SLY_APP_TASK_ID'))
         local = os.getenv('LOCAL_DEVELOPMENT', 'false' if hosted else 'true').lower() == 'true'
-        if not local and any(os.getenv(k) == '1' for k in ('MONITORING_DEMO', 'MONITORING_PILOT')):
+        if not local and any(os.getenv(k) == '1' for k in ('MONITORING_DEMO', 'MONITORING_SIMULATOR', 'MONITORING_PILOT', 'MONITORING_LIVE_DEMO')):
             raise RuntimeError('Hosted sessions cannot enable local demo or pilot controls.')
         if local and any(os.getenv(k) for k in ('TASK_ID', 'task_id', 'SLY_APP_TASK_ID')):
             raise RuntimeError('Local development identity is forbidden in a Supervisely app session.')

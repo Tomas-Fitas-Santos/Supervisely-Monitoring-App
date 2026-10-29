@@ -1,6 +1,6 @@
 # Two-team organiser demonstration
 
-Use `Start-App.ps1 -Mode Demo -Install` on Windows, or `python -m monitoring.run --demo`, then open **http://127.0.0.1:8000**. This offline version sends no real invitations or API requests. For actual Supervisely upload/invitations/tasks, stop it and start **Pilot** mode instead: `Start-App.ps1 -Mode Pilot` or `python -m monitoring.run --pilot`.
+Use `Start-App.ps1 -Mode Demo -Install` on Windows, or `python -m monitoring.run --demo`, then open **http://127.0.0.1:8000**. Demo and Pilot are the **same live Supervisely workflow**, using the same saved database and connection. Connect the organiser token in the app. Teams, email invitation requests, uploads and labeling jobs are real. Only the roster and dataset are small sample inputs.
 
 ## Requested accounts
 
@@ -13,25 +13,27 @@ Each demo team has two people in total: one monitor and one annotator. The produ
 
 The CSV includes `team_name`, `monitor_email` and `member_1_email`; the second annotator columns are blank. Usernames are not a prerequisite for email invitations. The offline simulator creates illustrative IDs/logins; real mode obtains them from native membership records.
 
-## Quick presentation
+## Updating from the previous offline Demo
 
-On a fresh demo, click **Prepare working presentation**, then open **Monitoring**. This shortcut creates both teams, simulates acceptance, uploads both photos to the simulator, freezes example rules and distributes the same two photos independently to each team (replication 2). It releases/submits the first batch for TEAM 1 so judging is immediately available. Other batches remain upcoming. Example annotations are deliberately imperfect, not scientific ground truth.
-
-If an older saved roster is loaded, click **Reset this demo** first. Previous records are backed up under `data/organiser-demo/backups/`. Reset is never available for live native resources.
+Stop the server, pull the implementation branch and restart with `-Mode Demo`. The old offline records stay untouched in `data/organiser-demo/`. Live Demo and Pilot both use `data/account-pilot/`, so an existing real pilot is resumed rather than provisioned again. Simulated pending invitations never sent an email and must not be treated as native teams.
 
 ## Manual walkthrough
 
-1. **Monitors & Teams → Load bundled demo CSV → Create teams and invite CSV emails.** Both native-shaped teams appear immediately with **Pending invitations**. Their annotators are not yet ready for jobs; the organiser's existing Admin membership is retained.
+1. Connect the API token belonging to **tomas.bf.santos@gmail.com** and create/adopt the event groups. Then **Monitors & Teams → Load bundled demo CSV → Create teams and invite CSV emails.** Both real native teams appear immediately with **Pending invitations**. Their annotators are not yet ready for jobs; the organiser's existing Admin membership is retained.
 2. Inspect each member's status. Click **Refresh all invitations**: refreshing does not resend emails or create duplicate teams.
-3. In the offline demo, click **Simulate invitation acceptance** for each team. In Pilot mode, each actual annotator accepts in Supervisely, then the organiser clicks **Refresh all invitations**. Each team becomes **Ready** only after required memberships/roles are confirmed.
+3. Each actual annotator accepts the invitation in Supervisely, then the organiser clicks **Refresh all invitations**. If the app reports an invitation API rejection, use **Open native invitations**, select the named team and invite the same email there before refreshing. Each team becomes **Ready** only after required memberships/roles are confirmed.
 4. Open **Dataset**. Click **Load bundled CC0 bird photos**, or use **Upload dataset → Or select a complete dataset folder** and select this demo's `dataset/` folder. The README in the empty video branch is ignored. Both same-named image files retain their different relative paths.
 5. Select the photo source datasets and both ready teams. Use replication **1**, image effort **1** and batch effort **1** to divide the two photos evenly: **one unique photo per team**, zero workload spread. Use replication **2** instead if both teams should independently annotate both photos for comparison. Counts are illustrative inputs, never event-size assumptions.
 6. Choose the scoring policy/guide and **Save and freeze official rules**. Preview the distribution before applying it. Each team receives its own copied entities and native task ownership mapping.
-7. In **Monitoring**, select TEAM 1 and **Release this batch**. Repeat for TEAM 2. In real mode, each corresponding annotator opens its native Supervisely job, annotates and submits. In offline mode, **Simulate participant submission** supplies illustrative labels.
+7. In **Monitoring**, select TEAM 1 and **Release this batch**. Repeat for TEAM 2. Each corresponding annotator opens its native Supervisely labeling job, annotates and submits. The live demo does not supply example labels or simulate submission.
 8. Refresh/capture the submission. Load its image, judge quality and inspect standings. Try a correction/resubmission and a fully reviewed native acceptance. Pending review is distinct from a zero score.
-9. Close the demonstration and export records, including memberships, source mappings, annotations, rules and judgments. Reset the offline demo to rehearse again; no real native resources are deleted automatically.
+9. Close the demonstration and export records, including memberships, source mappings, annotations, rules and judgments. No real native resources are reset/deleted automatically.
 
 No video media is included. Production allocation keeps every video whole; there is no automatic clip/frame-range splitting. Online presence is intentionally omitted.
+
+## Offline development simulator (optional)
+
+`Start-App.ps1 -Mode Simulator` or `python -m monitoring.run --simulator` explicitly starts the former offline walkthrough. Only this mode has **Prepare working presentation**, simulated acceptance/submission and a backed-up reset. It creates no real teams/jobs and sends no invitations. Its records stay separate from the live demo. It is not the organiser's real-account demonstration.
 
 ## Photo provenance
 

@@ -11,7 +11,7 @@
 - Immutable captured submission payloads/metadata/digests, historical previews, rule freezing, whole/per-criterion/weighted scoring, configurable penalties, pending/NA handling, audited revisions, provisional standings and ties.
 - Native correction tasks with precise issue reports, submission/approval release gates and guarded native acceptance of fully judged unchanged captures.
 - Polling-based observed event closure, continued judging of captures after closure and reproducible JSON exports including annotation payloads and audit.
-- A persistent, resettable organiser simulator with one-click presentation preparation; the supplied two-team real-email CSV and two credited CC0 bird photographs in nested folders. A separate real-account pilot offers the same bundled inputs through actual authenticated actions. Local frontend assets are bundled; hosted sessions retain the native SDK shell.
+- A live Demo and Pilot using the same authenticated Supervisely workflow and saved setup, with the supplied two-team real-email CSV and two credited CC0 bird photographs in nested folders. An explicitly selected offline Simulator retains one-click presentation preparation for development only. Local frontend assets are bundled; hosted sessions retain the native SDK shell.
 - Production-only startup guards, database health probe, container recipe and a native release source packager. Deployment requires a validated instance version and your own published container image. GitHub Actions is manual-only; local validation is independent of its quota.
 
 ## Validation boundaries

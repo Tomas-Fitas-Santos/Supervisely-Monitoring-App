@@ -7,14 +7,14 @@ const assert = require('assert');
   page.on('pageerror', e => errors.push(String(e)));
   page.on('request', r => {if (!r.url().startsWith('http://127.0.0.1:8000') && !r.url().startsWith('data:')) external.push(r.url());});
   await page.goto('http://127.0.0.1:8000', {waitUntil:'networkidle'});
-  await page.getByText('Real-account pilot — connected Supervisely resources', {exact:true}).waitFor();
+  await page.getByText('Live sample demo — real Supervisely resources', {exact:true}).waitFor();
   await page.getByText('tomas.bf.santos@gmail.com', {exact:true}).waitFor();
   assert(await page.getByRole('tab').count() === 3);
   assert(await page.getByRole('button', {name:'Prepare working presentation',exact:true}).count() === 0);
   assert(await page.getByRole('combobox', {name:'Demo role',exact:true}).count() === 0);
   assert(await page.getByRole('button', {name:'Simulate participant submission',exact:true}).count() === 0);
   const status = await (await page.request.get('http://127.0.0.1:8000/healthz')).json();
-  assert.deepStrictEqual(status, {status:'ok',mode:'pilot'});
+  assert.deepStrictEqual(status, {status:'ok',mode:process.env.EXPECTED_APP_MODE});
   const denied = await page.request.post('http://127.0.0.1:8000/setup/action', {
     data:{state:{dashboard:{setup_action:'demo_prepare'}}, context:{}}
   });

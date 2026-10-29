@@ -4,12 +4,13 @@ A shared organiser/monitor app for a bird-annotation event. Participants work in
 
 **There are no fixed event totals.** Teams, source inventory, replication, frame requirements and batch effort are inputs. The included two teams (one monitor plus one annotator each) and two photos are test inputs, not estimates of event size. Ordinary event teams can still have two annotators.
 
-The same application has two delivery modes: a **production app** for authenticated Supervisely users and a **DEMO** for organiser presentations. A local real-account pilot runs the production integration against the supplied test accounts before hosted deployment. GitHub Actions is optional and manual-only; neither installation nor execution uses Actions.
+The **DEMO uses the same real Supervisely integration as Pilot**, with the supplied small roster and bird-image dataset. It creates real teams, sends real invitation requests, uploads real photos and releases real labeling jobs. Participants annotate and submit in Supervisely. Production hosts the application for multiple authenticated monitors. An explicitly named **Simulator** remains available for offline development only. GitHub Actions is optional and manual-only; neither installation nor execution uses Actions.
 
 | Start | Purpose | Supervisely operations | Storage |
 |---|---|---|---|
-| `python -m monitoring.run --demo` | Working organiser presentation, no token required | Simulated, with the supplied emails displayed as roster data | `data/organiser-demo/` |
-| `python -m monitoring.run --pilot` | Real-account rehearsal with the supplied two teams | Actual API/SDK operations after connecting in the app | `data/account-pilot/` |
+| `python -m monitoring.run --demo` | Live organiser demonstration with the supplied two teams/photos | Actual API/SDK operations after connecting in the app | `data/account-pilot/` |
+| `python -m monitoring.run --pilot` | Alias for the same live sample workflow | Same integration and saved setup as Demo | `data/account-pilot/` |
+| `python -m monitoring.run --simulator` | Offline development walkthrough | Simulated; no emails or real resources | `data/organiser-demo/` |
 | `python -m monitoring.run --production` | Shared production session inside Supervisely | Actual per-user authenticated operations | Persistent PostgreSQL |
 
 On Windows, `Start-App.ps1 -Mode Demo` and `Start-App.ps1 -Mode Pilot` handle the local environment and Windows libmagic dependency. Add `-Install` after pulling dependency changes. The default mode is Demo. [Production deployment](docs/production.md) includes the image, native release packaging, persistence and operational checks.
@@ -22,7 +23,7 @@ On Windows, `Start-App.ps1 -Mode Demo` and `Start-App.ps1 -Mode Pilot` handle th
 
 ## Run the organiser demonstration
 
-The simulator uses real **CC0 bird photographs**, the supplied real email addresses as roster data, simulated native IDs/logins and deliberately imperfect example labels. It creates no actual Supervisely accounts, teams or jobs. It runs on loopback in a separate persistent SQLite database. No API token or `.env` is needed. All frontend assets for local mode are bundled.
+Start the live demo, then connect the organiser account inside the app. Its API token authenticates real Supervisely operations; the sample emails alone are not credentials. No event `.env` is needed. The bundled CSV and two **CC0 bird photographs** are the sample inputs. No native IDs, invitation acceptances, submissions or annotations are invented.
 
 Windows PowerShell, Python 3.12:
 
@@ -35,7 +36,7 @@ py -3.12 -m venv .venv
 
 If the environment already exists, use just the last command. Open **http://127.0.0.1:8000**. Follow [the organiser demo walkthrough](examples/organiser-demo/README.md).
 
-Click **Prepare working presentation** to create TEAM 1 and TEAM 2, simulate invitation acceptance, distribute both photos to each team, freeze example rules and submit the first simulated batch. Open **Monitoring** to show image inspection, judging, standings and upcoming batches. The presentation shortcut uses replication 2 so both teams receive identical material. For the manual walkthrough, replication 1 divides the two photos evenly: one unique photo per team. If an older demo is loaded, use **Reset this demo** first; it preserves a backup.
+Follow the real-account steps below: create groups, load the CSV, create teams/invite emails, wait for actual acceptance, load the photos, freeze rules, distribute and release native jobs. Replication 1 gives one unique photo per team; replication 2 gives both photos independently to both teams. The live demo has no simulated acceptance/submission, role switch, one-click fake presentation or reset of native resources.
 
 Linux/macOS:
 
@@ -47,14 +48,16 @@ python3.12 -m venv .venv
 
 The Windows extra installation resolves `python-magic`'s missing native `libmagic` loader. Repeat it after reinstalling the main requirements on Windows.
 
-Demo files are in [examples/organiser-demo](examples/organiser-demo/): registration CSV, two small photos in nested folders with the same basename, an empty video branch, and provenance/license records. The two photos deliberately exercise path preservation. Example annotations are **not ground truth**.
+Demo files are in [examples/organiser-demo](examples/organiser-demo/): registration CSV, two small photos in nested folders with the same basename, an empty video branch, and provenance/license records. The two photos deliberately exercise path preservation. The live demo starts with unannotated images; the actual annotators provide the labels.
 
-The demo resumes its previous state on restart. **Reset this demo** backs up its results under `data/organiser-demo/backups/` before clearing the simulator. This action is unavailable in live mode.
+Demo and Pilot resume the same saved live event in `data/account-pilot/`; switching between these commands does not recreate teams. **Upgrading from the old offline Demo:** stop it, pull this branch and restart with `--demo`. Old simulated records remain untouched in `data/organiser-demo/` and cannot establish real invitations or task completion. Do not reset or delete your live resources.
 
-## Test the supplied real accounts
+For offline development only, explicitly start `Start-App.ps1 -Mode Simulator` or `python -m monitoring.run --simulator`. Only this mode has **Prepare working presentation**, **Simulate invitation acceptance**, **Simulate participant submission** and a backup/reset control. Its deliberately imperfect labels are not scientific ground truth.
+
+## Live demo: use the supplied real accounts
 
 ```powershell
-.\.venv\Scripts\python.exe -m monitoring.run --pilot
+.\.venv\Scripts\python.exe -m monitoring.run --demo
 ```
 
 Open **http://127.0.0.1:8000** and connect using the API token belonging to **tomas.bf.santos@gmail.com** on the same Supervisely instance as the participants. Create/adopt the two event groups. Click **Load bundled demo CSV**, then **Create teams and invite CSV emails**. The requested roster is:
@@ -78,7 +81,7 @@ A fresh local install initializes its database automatically. Connect the organi
 
 See [the real pilot guide](docs/real-pilot.md) for the required rehearsal and shared deployment.
 
-For simultaneous real monitors, deploy **one native multi-user Supervisely app session** with persistent PostgreSQL. Each request uses the current user's platform API credential, verifies the credential owner, and enforces app assignments. Organiser oversight/adjudication requires current monitoring-team Admin permission. Annotators are denied app access. Local mode represents the connected organiser; the demo role switch is unavailable for real events.
+For simultaneous real monitors, deploy **one native multi-user Supervisely app session** with persistent PostgreSQL. Each request uses the current user's platform API credential, verifies the credential owner, and enforces app assignments. Organiser oversight/adjudication requires current monitoring-team Admin permission. Annotators are denied app access. Local mode represents the connected organiser; the offline simulator role switch is unavailable in Demo, Pilot and real events.
 
 Without a hosted background polling credential, signed-in monitors refresh their own teams through a database lease once per interval; multiple tabs do not start separate polling loops. An optional deployment polling credential can refresh all participating teams and observe deadlines when no monitor browser is open. Hosted database access and optional server credentials are deployment infrastructure, separate from in-app event configuration.
 

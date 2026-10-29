@@ -212,7 +212,7 @@ def test_manager_cannot_enable_organiser_oversight_and_cached_admin_data_is_clea
 
 
 def test_health_reports_database_failure_without_exposing_connection_details(ui, monkeypatch):
-    monkeypatch.delenv('MONITORING_DEMO', raising=False)
+    monkeypatch.delenv('MONITORING_SIMULATOR', raising=False)
     assert ui.health() == {'status': 'ok', 'mode': 'production'}
     broken = Mock(side_effect=RuntimeError('postgresql://secret-password@private-host'))
     monkeypatch.setattr(ui, 'sessions', broken)
@@ -229,7 +229,7 @@ def test_live_mode_rejects_simulator_presentation_actions_before_mutation(ui, mo
     monkeypatch.setattr(ui.dashboard, 'display', Mock())
     monkeypatch.setattr(ui, 'identity', lambda request: (90, NS(api=Mock())))
     monkeypatch.setattr(ui.setup, 'authorize', lambda *args: None)
-    monkeypatch.delenv('MONITORING_DEMO', raising=False)
+    monkeypatch.delenv('MONITORING_SIMULATOR', raising=False)
     prepare = Mock()
     monkeypatch.setattr(monitoring.demo, 'prepare_presentation', prepare)
     assert ui.setup_action(NS(state=NS(state={'dashboard': {'setup_action': 'demo_prepare'}}))) == {'ok': False}

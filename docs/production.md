@@ -1,13 +1,14 @@
 # Production deployment and DEMO delivery
 
-Production and DEMO use the same domain services and three-tab interface. The production gateway calls Supervisely; the offline DEMO gateway simulates native resources. Their databases, credentials and startup paths are separate. The local real-account pilot exercises the production gateway with the supplied test teams before hosted deployment.
+Production and DEMO use the same domain services and three-tab interface. DEMO and Pilot both use the real production gateway with the supplied sample accounts/photos. They share their saved local setup and connect the organiser token in the app. Production uses native multi-user authentication and separate PostgreSQL storage. The explicitly named Simulator is an offline development tool, isolated from these live paths.
 
 ## Deliverables
 
 | Version | How to start | Intended use |
 |---|---|---|
-| DEMO | `Start-App.ps1 -Mode Demo -Install` or `python -m monitoring.run --demo` | Present a working workflow without a token. Click **Prepare working presentation**, then open Monitoring. |
-| Real-account rehearsal | `Start-App.ps1 -Mode Pilot -Install` or `python -m monitoring.run --pilot` | Connect the supplied organiser, invite the two actual annotator accounts to their separate teams, upload the bundled photos and test native tasks. |
+| DEMO | `Start-App.ps1 -Mode Demo -Install` or `python -m monitoring.run --demo` | Connect the organiser token; create real teams/invitations, upload the sample photos and release real native tasks. Participants annotate/submit in Supervisely. |
+| Real-account rehearsal | `Start-App.ps1 -Mode Pilot -Install` or `python -m monitoring.run --pilot` | Alias for the same live DEMO workflow, database and saved connection. Switching modes does not provision twice. |
+| Offline Simulator | `Start-App.ps1 -Mode Simulator` or `python -m monitoring.run --simulator` | Development only; no email delivery or native resources. |
 | Production | Native Supervisely session running `python -m monitoring.run --production` | Several authenticated monitors, one shared event, persistent PostgreSQL. No simulator controls or saved local token. |
 
 GitHub Actions runs only through **Run workflow**. Pulling, installing, building, testing and running these versions do not require an Actions subscription or quota.

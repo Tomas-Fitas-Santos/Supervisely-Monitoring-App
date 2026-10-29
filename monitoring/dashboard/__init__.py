@@ -14,7 +14,7 @@ class Dashboard(Widget):
     def get_json_data(self):
         return {'snapshot': {'teams': []}, 'message': '', 'error': False, 'links': [],
                 'connected': False, 'directory': {}, 'sources': {}, 'review_preview': None,
-                'competition': {}, 'registration_rows': [], 'unit_page': {}, 'leaderboard': [], 'demo': False, 'pilot': False,
+                'competition': {}, 'registration_rows': [], 'unit_page': {}, 'leaderboard': [], 'simulator': False, 'pilot': False,
                 'export_data': None, 'closed': False,
                 'inventory': [],
                 'can_setup': False, 'setup': {}, 'catalog': {}, 'upload_offset': 0, 'plan_id': None,

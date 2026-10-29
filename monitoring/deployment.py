@@ -9,7 +9,7 @@ def production_environment():
         raise WorkflowError('Production must run inside a native Supervisely application session. Use --pilot for a local real-account rehearsal.')
     if os.getenv('LOCAL_DEVELOPMENT', '').lower() == 'true':
         raise WorkflowError('Production cannot enable LOCAL_DEVELOPMENT.')
-    if any(os.getenv(k) == '1' for k in ('MONITORING_DEMO', 'MONITORING_PILOT')):
+    if any(os.getenv(k) == '1' for k in ('MONITORING_DEMO', 'MONITORING_SIMULATOR', 'MONITORING_PILOT', 'MONITORING_LIVE_DEMO')):
         raise WorkflowError('Production cannot enable simulator or local pilot controls.')
     os.environ['LOCAL_DEVELOPMENT'] = 'false'
 

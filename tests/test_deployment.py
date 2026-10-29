@@ -12,7 +12,7 @@ from monitoring.service import WorkflowError
 
 @pytest.fixture
 def environment(monkeypatch):
-    for key in ('TASK_ID', 'task_id', 'SLY_APP_TASK_ID', 'LOCAL_DEVELOPMENT', 'MONITORING_DEMO', 'MONITORING_PILOT'):
+    for key in ('TASK_ID', 'task_id', 'SLY_APP_TASK_ID', 'LOCAL_DEVELOPMENT', 'MONITORING_SIMULATOR', 'MONITORING_PILOT', 'MONITORING_DEMO', 'MONITORING_LIVE_DEMO'):
         monkeypatch.delenv(key, raising=False)
     return monkeypatch
 
@@ -22,7 +22,7 @@ def test_production_cannot_start_as_an_unauthenticated_local_server(environment)
         production_environment()
 
 
-@pytest.mark.parametrize('key,value', [('LOCAL_DEVELOPMENT', 'true'), ('MONITORING_DEMO', '1'), ('MONITORING_PILOT', '1')])
+@pytest.mark.parametrize('key,value', [('LOCAL_DEVELOPMENT', 'true'), ('MONITORING_SIMULATOR', '1'), ('MONITORING_PILOT', '1'), ('MONITORING_DEMO', '1'), ('MONITORING_LIVE_DEMO', '1')])
 def test_production_rejects_local_identity_modes(environment, key, value):
     environment.setenv('TASK_ID', '123')
     environment.setenv(key, value)
