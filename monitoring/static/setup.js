@@ -170,6 +170,7 @@ Vue.component('nightjar-management', {
         <button class="nj-primary" @click="createGroups" :disabled="disabled || !view.can_setup || !monitorGroupName.trim() || !annotatorGroupName.trim()">Initialize event</button>
       </template><p v-else>Open Monitors & Teams as the organiser to initialize the event.</p></div>
     <template v-if="section === 'roster'"><event-registrations v-if="view.can_setup && directory.ready" :view="view" :run="run" :disabled="disabled"></event-registrations>
+      <event-roster-assignment v-if="view.can_setup && directory.ready" :view="view" :run="run" :disabled="disabled"></event-roster-assignment>
       <div class="nj-metrics nj-three-metrics"><div><span>Monitors</span><strong>{{ monitors.length }}</strong></div><div><span>Participant teams</span><strong>{{ roster.length }}</strong></div><div><span>Teams without a monitor</span><strong>{{ unassignedPairs.length }}</strong></div></div>
       <div v-if="directory.ready && view.can_setup" class="nj-actions nj-toolbar"><button class="nj-primary" @click="showAddMonitor = !showAddMonitor" :disabled="disabled">Add monitor</button><button class="nj-primary" @click="showAddTeam = !showAddTeam" :disabled="disabled">Add team</button></div>
       <div v-if="showAddMonitor && view.can_setup" class="nj-panel"><h3>Add monitors</h3><p>Choose a registered user or enter registered logins, one per line.</p>
