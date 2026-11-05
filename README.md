@@ -1,20 +1,18 @@
 # Supervisely Monitoring App
 
-> **Roster and arrival check-in feature branch (November 5, 2026):**
-> this branch adds logical competition-pair monitor allocation, individual
-> arrival check-in, and CSV/.xlsx registration uploads. The UI now has four
-> tabs. See [roster and attendance details](docs/roster-attendance.md).
-> **Not yet full event release:** native onboarding still provisions a native
-> team per pair and the bundled live demo still has two one-annotator teams;
-> both require migration to the agreed one shared native team and one
-> two-person DEMO pair before end-to-end acceptance.
-
+> **New event workflow (feature branch).** Use one pre-existing Supervisely
+> team and workspace, real participant email invitations, a shared DEMO/PRODUCTION
+> folder-or-ZIP dataset importer, logical competition pairs, check-in, and
+> light/dark mode. See [structured dataset and job setup](docs/structured-dataset-and-jobs.md).
+> Native sequential Supervisely job activation and correction return still
+> require implementation and live verification. Prepared logical jobs are
+> not native labeling jobs.
 
 A shared organiser/monitor app for a bird-annotation event. Participants work in **native Supervisely**, using their own existing accounts. The app manages registrations, independent pair annotations, task release, submission captures, human judging and competition standings.
 
 **There are no fixed event totals.** Teams, source inventory, replication, frame requirements and batch effort are inputs. The included two teams (one monitor plus one annotator each) and two photos are test inputs, not estimates of event size. Ordinary event teams can still have two annotators.
 
-The **DEMO uses the same real Supervisely integration as Pilot**, with the supplied small roster and bird-image dataset. It creates real teams, sends real invitation requests, uploads real photos and releases real labeling jobs. Participants annotate and submit in Supervisely. Production hosts the application for multiple authenticated monitors. An explicitly named **Simulator** remains available for offline development only. GitHub Actions is optional and manual-only; neither installation nor execution uses Actions.
+The **DEMO and PRODUCTION use the same real email invitation and structured dataset upload code**. The DEMO roster is now one two-person pair. Native job release remains an integration gate. Participants annotate and submit in Supervisely. Production hosts the application for multiple authenticated monitors. An explicitly named **Simulator** remains available for offline development only. GitHub Actions is optional and manual-only; neither installation nor execution uses Actions.
 
 | Start | Purpose | Supervisely operations | Storage |
 |---|---|---|---|
@@ -30,6 +28,7 @@ On Windows, `Start-App.ps1 -Mode Demo` and `Start-App.ps1 -Mode Pilot` handle th
 | **Monitors & Teams** | Import Google Forms CSV responses, create native teams, invite by email, see individual Pending/Accepted states and assign monitors. Click a monitor to inspect or transfer assignments. |
 | **Participant Check-in** | Record and audit each participant's arrival. Search names, emails or competition teams; assigned monitors see only their own teams. |
 | **Dataset** | Upload a complete folder tree or select existing nested datasets. Set event rules, inspect source IDs, configure replication/effort, preview source coverage and distribute independent annotation copies. |
+| **Settings** | Verify Supervisely User ID, choose the existing event Team ID and Workspace ID; switch local authenticated account and use browser-local light/dark mode. |
 | **Monitoring** | Select a team; inspect current, submitted and upcoming batches; see member-level native tasks; capture submissions; browse images/required frames; judge quality; return corrections; complete accepted native tasks; export records and standings. |
 
 ## Run the organiser demonstration
