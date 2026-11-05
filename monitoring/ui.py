@@ -22,6 +22,8 @@ from .setup_gateway import SetupGateway
 from .connection import LocalConnection
 from .competition import Competition
 from .registration import Registrations
+from .event_settings import EventSettings, single_team
+from .shared_invitations import SharedTeamInvitations
 
 sly.env.enable_multiuser_app_mode()
 settings = Settings.load()
@@ -128,8 +130,13 @@ def identity(request):
 def connection_view(connected=False):
     config = event_config()
     from .pilot import accounts
+    with sessions() as session:
+        from .db import EventPreferences
+        prefs = session.get(EventPreferences, 1)
+        active_login = prefs.active_local_login if prefs and prefs.active_local_login else config.owner_login
+        active_uid = prefs.active_local_user_id if prefs and prefs.active_local_user_id else config.owner_id
     return {'local': settings.local, 'connected': connected, 'server_address': config.server_address or settings.server_address,
-            'login': config.owner_login or '', 'groups_ready': bool(config.monitoring_team_id and config.annotator_team_id),
+            'login': active_login or '', 'user_id': active_uid, 'groups_ready': bool(config.monitoring_team_id and config.annotator_team_id),
             'pilot_email': accounts()['organiser_email'] if os.getenv('MONITORING_PILOT') == '1' else ''}
 
 
@@ -144,7 +151,8 @@ def display_access(uid, gateway):
             pass
     data = DataJson()['dashboard']
     data.update(can_setup=can_setup, connected=gateway is not None,
-                directory=setup.directory() if gateway else {}, connection=connection_view(gateway is not None))
+                directory=setup.directory() if gateway else {}, connection=connection_view(gateway is not None),
+                event_settings=EventSettings(sessions).snapshot(uid))
     from .attendance import EventRoster
     data.update(competition=Competition(sessions).config(),
                 leaderboard=Competition(sessions).leaderboard() if gateway else [],
@@ -152,6 +160,17 @@ def display_access(uid, gateway):
                 attendance=EventRoster(sessions).overview(uid, can_setup),
                 simulator=os.getenv('MONITORING_SIMULATOR') == '1',
                 pilot=os.getenv('MONITORING_PILOT') == '1' and settings.local)
+    if can_setup and single_team(event_config()):
+        native = SharedTeamInvitations(sessions).summary()
+        for row in data['registration_rows']:
+            result = native.get(row['id'], {})
+            row.update(
+                shared_team_id=result.get('team_id'),
+                memberships=result.get('memberships', []),
+                membership_status=result.get('membership_status', 'not_invited'),
+                checked_at=result.get('checked_at'),
+                error=result.get('error') or row['error']
+            )
     from .db import EventClosure
     with sessions() as s:
         from .db import Simulation
@@ -184,7 +203,7 @@ def clear_access():
     DataJson()['dashboard'].update(setup={}, catalog={}, can_setup=False, plan_id=None, preview=None,
                                    assignment_plan_id=None, assignment_preview=[],
                                    directory={}, sources={}, connected=False, review_preview=None,
-                                   registration_rows=[], attendance={'teams': [], 'monitors': [], 'summary': {}},
+                                   registration_rows=[], event_settings={}, attendance={'teams': [], 'monitors': [], 'summary': {}},
                                    roster_plan_id=None, roster_balance_preview=None,
                                    unit_page={}, leaderboard=[], export_data=None,
                                    simulator=os.getenv('MONITORING_SIMULATOR') == '1',
@@ -211,7 +230,8 @@ def local_connect(values):
             candidate = connection
             url, new_engine, new_sessions = settings.database_url, engine, sessions
         api, user = candidate.save(values.get('server'), values.get('token'),
-                                   settings.monitoring_team_id if not synthetic else None)
+                                   settings.monitoring_team_id if not synthetic else None,
+                                   expected_user_id=values.get('user_id'))
         if synthetic:
             settings = replace(settings, database_url=url, monitoring_team_id=0)
             engine, sessions = new_engine, new_sessions
@@ -375,6 +395,49 @@ def action(request: Request):
                           'Action failed. Refresh and check the task status before retrying.', True)
 
 
+@app.get_server().post('/settings/action')
+def settings_action(request: Request):
+    """Verify existing native resources and account IDs, without creating them."""
+    from supervisely.app import DataJson
+    uid = None
+    try:
+        uid, gateway = identity(request)
+        if gateway is None:
+            raise WorkflowError('Connect to Supervisely before configuring the event.')
+        values = request_form(request)
+        operation = str(values.get('settings_action') or 'refresh')
+        event = EventSettings(sessions)
+        if operation == 'save_binding':
+            result = event.bind(
+                gateway, uid, values.get('team_id'), values.get('workspace_id'),
+                values.get('settings_revision'),
+                (settings.launch_team_id if not settings.local else None)
+            )
+            message = 'Existing event team and source workspace verified and saved.'
+        elif operation == 'add_monitor':
+            event.add_monitor(gateway, uid, values.get('monitor_user_id'),
+                              values.get('demo_dual_role') is True)
+            result = event.snapshot(uid)
+            message = 'Monitor account verified and registered for the event.'
+        elif operation == 'refresh':
+            result = event.snapshot(uid)
+            message = 'Settings refreshed.'
+        else:
+            raise WorkflowError('Unknown settings action.')
+        DataJson()['dashboard']['event_settings'] = result
+        display_access(uid, gateway)
+        dashboard.display(service.snapshot(uid), message)
+        return {'ok': True}
+    except WorkflowError as exc:
+        dashboard.display(service.snapshot(uid) if uid else {'teams': []}, str(exc), True)
+        return {'ok': False}
+    except Exception:
+        log.exception('Event settings action failed')
+        dashboard.display(service.snapshot(uid) if uid else {'teams': []},
+                          'Could not validate settings. No changes were confirmed.', True)
+        return {'ok': False}
+
+
 @app.get_server().post('/attendance/action')
 def attendance_action(request: Request):
     """Authenticated and pair-scoped event-arrival check-in."""
@@ -473,23 +536,49 @@ def setup_action(request: Request):
             registrations = Registrations(sessions)
             registrations.import_csv(uid, stream.getvalue(), {k:k for k in COLUMNS})
             row = next(r for r in registrations.rows() if r['team_name'].casefold() == f['name'].strip().casefold())
-            EmailOnboarding(sessions).provision(gateway, setup, uid, row['id'], f.get('monitor_id', 0))
-            message = 'Team saved and invitations requested. Check each membership before distributing tasks.'
+            if single_team(event_config()):
+                SharedTeamInvitations(sessions).invite(gateway, uid, row['id'])
+                message = 'Competition pair saved. Real email invitations requested for the shared Supervisely team.'
+            else:
+                raise WorkflowError('Configure the existing Supervisely team in Settings before inviting.')
         elif name == 'registration_resolve':
             Registrations(sessions).resolve(gateway, uid, f.get('registration_id'), f.get('login_overrides'))
             message = 'Account matching finished. Resolve any unmatched emails before provisioning.'
+        elif name == 'registration_provision_all' and single_team(event_config()):
+            result = SharedTeamInvitations(sessions).invite(gateway, uid)
+            message = (
+                f"Shared-team invitation results: {result['invited']} sent, "
+                f"{result['pending']} pending, {result['accepted']} accepted, "
+                f"{result['failed']} need attention."
+            )
         elif name == 'registration_provision_all':
+            raise WorkflowError('Configure one existing event team in Settings before inviting participants.')
+        elif name == 'legacy_registration_provision_all':
             registrations = Registrations(sessions)
             from .onboarding import EmailOnboarding
             for row in registrations.rows():
                 if row['monitor_email'] and row['membership_status'] != 'ready':
                     EmailOnboarding(sessions).provision(gateway, setup, uid, row['id'], row['monitor_id'])
             message = 'Teams created and invitations requested. Pending acceptance is normal; refresh invitations after members accept.'
+        elif name == 'registration_provision' and single_team(event_config()):
+            result = SharedTeamInvitations(sessions).invite(gateway, uid, f['registration_id'])
+            message = (
+                f"Shared-team email invitations: {result['invited']} sent; "
+                f"{result['pending']} awaiting acceptance; "
+                f"{result['accepted']} already accepted."
+            )
         elif name == 'registration_provision':
+            raise WorkflowError('Configure one existing event team in Settings before inviting participants.')
+        elif name == 'legacy_registration_provision':
             from .onboarding import EmailOnboarding
             EmailOnboarding(sessions).provision(gateway, setup, uid, f['registration_id'], f.get('monitor_id', 0))
             message = 'Team saved. Invitations are pending until accepted in Supervisely. Refresh invitations to confirm readiness.'
+        elif name == 'registration_refresh' and single_team(event_config()):
+            SharedTeamInvitations(sessions).refresh(gateway, uid)
+            message = 'Shared team memberships refreshed from Supervisely. No invitations resent.'
         elif name == 'registration_refresh':
+            raise WorkflowError('Configure one existing event team in Settings before refreshing invitations.')
+        elif name == 'legacy_registration_refresh':
             from .onboarding import EmailOnboarding
             EmailOnboarding(sessions).refresh(gateway, setup, uid, f.get('registration_id'))
             message = 'Native invitation acceptance and roles checked. Only ready teams can receive tasks.'
@@ -551,6 +640,8 @@ def setup_action(request: Request):
             data['export_data'] = Competition(sessions).export(uid, organiser=True)
             message = 'Event annotation snapshots, rules and judging history are ready to download.'
         elif name == 'groups':
+            raise WorkflowError('The event uses a pre-existing Supervisely team. Enter its ID in Settings.')
+        elif name == 'legacy_groups_disabled':
             existing_monitor = f.get('existing_monitor_group')
             if not settings.local:
                 existing_monitor = settings.launch_team_id or sly.env.team_id(raise_not_found=False)
