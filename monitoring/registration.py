@@ -234,7 +234,8 @@ class Registrations:
                     if 'participant_monitor' in roles else
                     'monitor' if 'monitor' in roles else 'participant'
                 )
-                native_role = 'manager' if event_role != 'participant' else 'annotator'
+                native_role = ('reviewer' if event_role == 'participant_monitor' else
+                               'manager' if event_role == 'monitor' else 'annotator')
                 current = s.get(EventInvitee, email)
                 if current:
                     requested_login = next(iter(data['logins']), '')
