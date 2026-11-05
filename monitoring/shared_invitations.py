@@ -264,7 +264,7 @@ class SharedTeamInvitations:
             if state == 'pending':
                 outcomes['pending'] += 1
                 continue
-            if state not in ('not_invited', 'invitation_error', 'not_found'):
+            if state not in ('not_invited', 'invitation_error'):
                 outcomes['failed'] += 1
                 continue
             with self.sessions.begin() as session:
