@@ -145,9 +145,11 @@ def display_access(uid, gateway):
     data = DataJson()['dashboard']
     data.update(can_setup=can_setup, connected=gateway is not None,
                 directory=setup.directory() if gateway else {}, connection=connection_view(gateway is not None))
+    from .attendance import EventRoster
     data.update(competition=Competition(sessions).config(),
                 leaderboard=Competition(sessions).leaderboard() if gateway else [],
                 registration_rows=Registrations(sessions).rows() if can_setup else [],
+                attendance=EventRoster(sessions).overview(uid, can_setup),
                 simulator=os.getenv('MONITORING_SIMULATOR') == '1',
                 pilot=os.getenv('MONITORING_PILOT') == '1' and settings.local)
     from .db import EventClosure
@@ -182,7 +184,9 @@ def clear_access():
     DataJson()['dashboard'].update(setup={}, catalog={}, can_setup=False, plan_id=None, preview=None,
                                    assignment_plan_id=None, assignment_preview=[],
                                    directory={}, sources={}, connected=False, review_preview=None,
-                                   registration_rows=[], unit_page={}, leaderboard=[], export_data=None,
+                                   registration_rows=[], attendance={'teams': [], 'monitors': [], 'summary': {}},
+                                   roster_plan_id=None, roster_balance_preview=None,
+                                   unit_page={}, leaderboard=[], export_data=None,
                                    simulator=os.getenv('MONITORING_SIMULATOR') == '1',
                                    pilot=os.getenv('MONITORING_PILOT') == '1' and settings.local,
                                    connection=connection_view(False))
@@ -371,6 +375,48 @@ def action(request: Request):
                           'Action failed. Refresh and check the task status before retrying.', True)
 
 
+@app.get_server().post('/attendance/action')
+def attendance_action(request: Request):
+    """Authenticated and pair-scoped event-arrival check-in."""
+    from supervisely.app import DataJson
+    from .attendance import EventRoster
+    uid = None
+    try:
+        uid, gateway = identity(request)
+        if gateway is None:
+            raise WorkflowError('Connect to Supervisely before checking in attendees.')
+        organiser = False
+        try:
+            setup.authorize(SetupGateway(gateway.api, sessions), uid)
+            organiser = True
+        except WorkflowError:
+            pass
+        values = request_form(request)
+        action_name = str(values.get('attendance_action') or 'refresh')
+        roster = EventRoster(sessions)
+        message = 'Arrival list refreshed.'
+        if action_name in ('checkin', 'undo'):
+            change = roster.set_checkin(
+                int(uid), values.get('registration_id'), values.get('member_email'),
+                action_name == 'checkin', values.get('checkin_note') or '', organiser=organiser,
+            )
+            message = ('Arrival recorded.' if action_name == 'checkin'
+                       else 'Arrival reversed with an audit record.') if change else 'No change: already recorded.'
+        elif action_name != 'refresh':
+            raise WorkflowError('Unknown attendance action.')
+        DataJson()['dashboard']['attendance'] = roster.overview(uid, organiser=organiser)
+        dashboard.display(service.snapshot(uid), message)
+        return {'ok': True}
+    except WorkflowError as exc:
+        dashboard.display(service.snapshot(uid) if uid else {'teams': []}, str(exc), True)
+        return {'ok': False}
+    except Exception:
+        log.exception('Attendance request failed')
+        dashboard.display(service.snapshot(uid) if uid else {'teams': []},
+                          'Could not update attendance. Reload the roster before retrying.', True)
+        return {'ok': False}
+
+
 @app.get_server().post('/setup/action')
 def setup_action(request: Request):
     from supervisely.app import DataJson
@@ -512,6 +558,39 @@ def setup_action(request: Request):
         elif name == 'member_remove':
             setup.remove_member(gateway, uid, key, f['member_user_id'])
             message = 'Person removed from the event roster.'
+        elif name == 'roster_balance_preview':
+            from .attendance import EventRoster
+            pid, preview = EventRoster(sessions).preview_balance(
+                uid, f['monitor_ids'], f.get('rebalance') is True)
+            data.update(roster_plan_id=pid, roster_balance_preview=preview)
+            message = ('Preview ready. Only pairs not yet provisioned in Supervisely can be reassigned.'
+                       if pid else 'No eligible monitor assignments need changing.')
+        elif name == 'roster_balance_apply':
+            from .attendance import EventRoster
+            from .db import SetupOperation
+            with sessions() as session:
+                plan = session.get(SetupOperation, str(f.get('roster_plan_id') or ''))
+                if not plan or plan.kind != 'roster_balance' or plan.state != 'planned':
+                    raise WorkflowError('Create a fresh balanced assignment preview.')
+                ids = {entry['monitor_id'] for entry in plan.details['rows']}
+            email_map = {}
+            for mid in ids:
+                profile = gateway.monitor(setup.monitoring_team_id, mid)
+                email = str(getattr(profile, 'email', '') or '').strip().casefold()
+                if email.count('@') != 1:
+                    raise WorkflowError(
+                        'The native monitor profile does not expose a verified email. '
+                        'Resolve that monitor before applying invitations and assignments.')
+                email_map[mid] = email
+            count = EventRoster(sessions).apply_balance(uid, f['roster_plan_id'], email_map)
+            data.update(roster_plan_id=None, roster_balance_preview=None)
+            message = f'{count} competition-team monitor assignments saved. No native jobs were changed.'
+        elif name == 'roster_assign':
+            from .attendance import EventRoster
+            profile = gateway.monitor(setup.monitoring_team_id, int(f['monitor_id']))
+            email = str(getattr(profile, 'email', '') or '').strip().casefold()
+            EventRoster(sessions).assign_one(uid, f['registration_id'], f['monitor_id'], email)
+            message = 'Competition-team monitor assignment saved before native provisioning.'
         elif name == 'balance_preview':
             pid, rows = setup.preview_monitor_assignments(gateway, uid, f['monitor_ids'])
             data.update(assignment_plan_id=pid, assignment_preview=rows)
