@@ -7,3 +7,14 @@
 
 .nj-legend{display:flex;flex-wrap:wrap;gap:14px;font-size:12px}.nj-legend span{display:inline-flex;align-items:center;gap:6px}.nj-legend i{width:12px;height:12px;border-radius:2px;display:inline-block}
 .nj-registration{border-top:1px solid #e0e6ed;margin-top:18px;padding-top:14px}.nj-unit-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px;margin:14px 0}.nj-unit{display:flex;flex-direction:column;align-items:flex-start;gap:6px;text-align:left;padding:12px!important;border:1px solid #d3dce6!important;background:#fff!important;border-radius:6px!important}.nj-unit.selected{border-color:#20a0ff!important;background:#eff9ff!important}.nj-app fieldset{border:0;padding:0;min-width:0}.nj-app fieldset:disabled{opacity:.8}.nj-app summary{cursor:pointer;font-weight:600}.nj-competition-review .nj-panel{margin-top:12px}.nj-app .nj-form-row>span{padding:8px;background:#f5f7fa;border-radius:4px}.nj-competition-review img{margin:12px 0}
+
+
+/* Event staffing and physical arrivals */
+.nj-monitor-loads{display:flex;flex-wrap:wrap;gap:10px;margin:12px 0 18px}
+.nj-load-item{display:flex;flex-direction:column;gap:4px;padding:10px 14px;background:#f4f7fb;border:1px solid #dfe6ee;border-radius:8px;min-width:140px}
+.nj-check-group{display:flex;flex-wrap:wrap;gap:15px;margin:14px 0}
+.nj-arrivals .nj-small-text{display:block;font-size:11px;color:#8492a6;margin-top:5px;overflow-wrap:anywhere}
+.nj-arrivals td{vertical-align:top}
+.nj-arrivals .nj-inline-actions input{min-width:150px;max-width:220px}
+.nj-event-roster .nj-metrics{margin:14px 0}
+@media(max-width:750px){.nj-arrivals .nj-inline-actions{flex-direction:column;align-items:stretch}}
