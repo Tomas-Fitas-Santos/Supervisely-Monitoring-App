@@ -113,7 +113,7 @@ class SharedTeamInvitations:
         matches = []
         for native in listing:
             email = normal_email_or_blank(native.get('email') or native.get('inviteEmail'))
-            uid = native.get('id') or native.get('userId')
+            uid = native.get('userId') or native.get('id')
             login = str(native.get('login') or '').strip().casefold()
             if (email == entry.email or
                     (entry.login and login == entry.login.casefold()) or
@@ -147,6 +147,13 @@ class SharedTeamInvitations:
         with self.sessions() as session:
             tid = self._event_team(session)
         listing = SetupGateway(gateway.api).invitation_members(tid)
+        try:
+            native_role_ids = {
+                str(role.id): str(role.role).lower()
+                for role in gateway.api.role.get_list()
+            }
+        except Exception:
+            native_role_ids = {}
         now_at = now()
         with self.sessions.begin() as session:
             config = session.get(EventConfig, 1)
@@ -163,8 +170,12 @@ class SharedTeamInvitations:
                             row.status = 'not_found'
                         row.checked_at = now_at
                         continue
-                    uid = native.get('id') or native.get('userId')
-                    role = str(native.get('role') or '').strip().casefold()
+                    uid = native.get('userId') or native.get('id')
+                    raw_role = native.get('role') or native.get('roleId') or ''
+                    if isinstance(raw_role, dict):
+                        raw_role = raw_role.get('role') or raw_role.get('name') or raw_role.get('id') or ''
+                    role = str(raw_role).strip().casefold()
+                    role = native_role_ids.get(role, role)
                     active = native.get('membership_active') is True
                     if native.get('disabled') or native.get('disabledAt'):
                         status = 'deactivated'
