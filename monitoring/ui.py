@@ -572,7 +572,7 @@ def setup_action(request: Request):
             data.update(job_plan_id=None, job_preview=None)
             message = (
                 f"{result['jobs']} logical labeling jobs prepared. "
-                'Only each team\\'s first job will be released at event start.'
+                "Only each team's first job will be released at event start."
             )
         elif name == 'registration_excel_preview':
             from .excel_import import excel_to_csv
