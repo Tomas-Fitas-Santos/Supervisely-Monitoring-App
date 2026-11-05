@@ -122,6 +122,10 @@ class Registrations:
             if not members:
                 raise WorkflowError(f'Row {number}: at least one participant is required.')
             manager = row['monitor_email'].casefold()
+            if row['monitor_login'] and not manager:
+                raise WorkflowError(
+                    f'Row {number}: monitor_login requires monitor_email.'
+                )
             if manager and (len(manager) > 254 or manager.count('@') != 1
                             or not all(manager.split('@', 1))
                             or any(c.isspace() for c in manager)):
@@ -140,10 +144,6 @@ class Registrations:
 
         with self.sessions.begin() as s:
             existing = list(s.scalars(select(Registration)))
-            all_old_emails = {
-                m['email'] for reg in existing for m in reg.members
-                if m.get('email')
-            }
             for key, name, members, manager, monitor_login in rows:
                 for other in existing:
                     if other.id != key and {m['email'] for m in other.members}.intersection(
@@ -174,6 +174,17 @@ class Registrations:
                                     'then import the updated roster.'
                                 )
                     for person, previous in zip(members, reg.members):
+                        if (person['login'] and previous.get('login') and
+                                person['login'] != previous.get('login')):
+                            pending = s.scalar(select(SharedInvitation).where(
+                                SharedInvitation.email == person['email'],
+                                SharedInvitation.status.in_(('pending', 'accepted', 'unknown'))
+                            ))
+                            if pending:
+                                raise WorkflowError(
+                                    f"{person['email']}: native account login is already "
+                                    'linked to an invitation. Review identity before changing.'
+                                )
                         previous['role'] = person['role']
                         if person['login']:
                             previous['login'] = person['login']
@@ -226,6 +237,17 @@ class Registrations:
                 native_role = 'manager' if event_role != 'participant' else 'annotator'
                 current = s.get(EventInvitee, email)
                 if current:
+                    requested_login = next(iter(data['logins']), '')
+                    if requested_login and current.login and requested_login != current.login:
+                        active_login = s.scalar(select(SharedInvitation).where(
+                            SharedInvitation.email == email,
+                            SharedInvitation.status.in_(('pending', 'accepted', 'unknown'))
+                        ))
+                        if active_login:
+                            raise WorkflowError(
+                                f'{email}: cannot replace a native account login after '
+                                'an invitation or acceptance without explicit review.'
+                            )
                     if current.native_role != native_role:
                         active = s.scalar(select(SharedInvitation).where(
                             SharedInvitation.email == email,
