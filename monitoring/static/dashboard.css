@@ -18,3 +18,53 @@
 .nj-arrivals .nj-inline-actions input{min-width:150px;max-width:220px}
 .nj-event-roster .nj-metrics{margin:14px 0}
 @media(max-width:750px){.nj-arrivals .nj-inline-actions{flex-direction:column;align-items:stretch}}
+
+
+/* Accessible browser-local light/dark mode (event data is unchanged). */
+.nj-app[data-theme="dark"]{
+  background:#111827;color:#e5edf5;color-scheme:dark;
+  min-height:100vh
+}
+.nj-app[data-theme="dark"] .nj-panel,
+.nj-app[data-theme="dark"] .nj-metrics>div,
+.nj-app[data-theme="dark"] .nj-sidebar,
+.nj-app[data-theme="dark"] .nj-empty,
+.nj-app[data-theme="dark"] .nj-batch-groups>section,
+.nj-app[data-theme="dark"] .nj-load-item{
+  background:#1e293b;border-color:#475569;color:#e5edf5
+}
+.nj-app[data-theme="dark"] button:not(.nj-primary),
+.nj-app[data-theme="dark"] input,
+.nj-app[data-theme="dark"] select,
+.nj-app[data-theme="dark"] textarea,
+.nj-app[data-theme="dark"] pre{
+  background:#273449;border-color:#52627a;color:#e5edf5
+}
+.nj-app[data-theme="dark"] button:not(.nj-primary):hover,
+.nj-app[data-theme="dark"] .nj-tabs .selected,
+.nj-app[data-theme="dark"] .nj-team.selected,
+.nj-app[data-theme="dark"] .nj-batches .selected,
+.nj-app[data-theme="dark"] .nj-unit.selected{
+  background:#12334a;border-color:#38bdf8;color:#7dd3fc
+}
+.nj-app[data-theme="dark"] .nj-team,
+.nj-app[data-theme="dark"] .nj-contribution,
+.nj-app[data-theme="dark"] .nj-registration,
+.nj-app[data-theme="dark"] .nj-review,
+.nj-app[data-theme="dark"] .nj-table td,
+.nj-app[data-theme="dark"] .nj-table th{
+  border-color:#475569
+}
+.nj-app[data-theme="dark"] .nj-muted,
+.nj-app[data-theme="dark"] .nj-header p,
+.nj-app[data-theme="dark"] .nj-refresh,
+.nj-app[data-theme="dark"] .nj-team-heading>div>span,
+.nj-app[data-theme="dark"] .nj-metrics span,
+.nj-app[data-theme="dark"] .nj-table th{color:#b6c5d7}
+.nj-app[data-theme="dark"] .nj-message{background:#17364d;border-color:#38617a;color:#e5edf5}
+.nj-app[data-theme="dark"] .nj-caution,
+.nj-app[data-theme="dark"] .nj-error{background:#44311e;color:#fcd59a}
+.nj-app[data-theme="dark"] .nj-badge.warning{background:#4e3b19;color:#fcd59a}
+.nj-app[data-theme="dark"] .nj-unit{background:#273449!important;border-color:#52627a!important;color:#e5edf5}
+.nj-app[data-theme="dark"] .nj-tabs{border-color:#475569}
+.nj-app[data-theme="dark"] a{color:#7dd3fc}
