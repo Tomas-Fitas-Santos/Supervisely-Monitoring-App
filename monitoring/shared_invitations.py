@@ -26,7 +26,11 @@ def normal_email(email):
 def normal_email_or_blank(value):
     if not value:
         return ''
-    return normal_email(value)
+    try:
+        return normal_email(value)
+    except WorkflowError:
+        # An unrelated native record may have a login rather than an email.
+        return ''
 
 
 class SharedTeamInvitations:
@@ -196,19 +200,26 @@ class SharedTeamInvitations:
                         f'reports {role or "unknown"}. An Admin must review the role.'
                         if status == 'role_mismatch' else ''
                     )
-                    if status == 'accepted' and uid and row.login:
+                    if uid:
                         member = session.get(EventMember, int(uid))
-                        group = ('monitors' if entry.event_role in
-                                 ('monitor', 'participant_monitor') else 'annotators')
-                        if member:
-                            member.group = group
-                            member.login = row.login
-                            member.name = str(native.get('name') or row.login)
-                        else:
-                            session.add(EventMember(
-                                user_id=int(uid), group=group, login=row.login,
-                                name=str(native.get('name') or row.login),
-                            ))
+                        authorised_monitor = (
+                            status == 'accepted' and entry.event_role in
+                            ('monitor', 'participant_monitor')
+                        )
+                        if status == 'accepted' or member:
+                            # A native downgrade or lost acceptance must revoke
+                            # event monitoring privileges on reconciliation.
+                            group = 'monitors' if authorised_monitor else 'annotators'
+                            if member:
+                                member.group = group
+                                if row.login:
+                                    member.login = row.login
+                                member.name = str(native.get('name') or row.login or member.name)
+                            elif row.login:
+                                session.add(EventMember(
+                                    user_id=int(uid), group=group, login=row.login,
+                                    name=str(native.get('name') or row.login),
+                                ))
                 except WorkflowError as exc:
                     row.status = 'identity_conflict'
                     row.error = str(exc)
@@ -221,10 +232,12 @@ class SharedTeamInvitations:
                 for person in reg.members:
                     email = normal_email_or_blank(person.get('email'))
                     checked = session.get(SharedInvitation, (tid, email))
-                    if checked and checked.status == 'accepted':
-                        person['user_id'] = checked.user_id
-                        person['login'] = checked.login or person.get('login', '')
-                        person['status'] = 'accepted'
+                    if checked:
+                        if checked.status == 'accepted':
+                            person['user_id'] = checked.user_id
+                            person['login'] = checked.login or person.get('login', '')
+                        if person.get('status') != checked.status:
+                            person['status'] = checked.status
                         updated = True
                 if updated:
                     flag_modified(reg, 'members')
