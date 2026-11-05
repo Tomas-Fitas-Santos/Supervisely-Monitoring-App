@@ -24,7 +24,7 @@ def _canonical_path(value):
     return '/'.join((parts[0].casefold(), *parts[1:]))
 
 
-def upload_frame_folder(setup, gateway, actor, operation_id, upload_ids, name, fps=12, meta=None):
+def upload_frame_folder(setup, gateway, actor, operation_id, upload_ids, name, fps=12, meta=None, expected_tree_hash=None):
     """Validates, pre-encodes and uploads with an explicit remote operation log."""
     if not upload_ids or len(upload_ids) != len(set(upload_ids)):
         raise WorkflowError('Select a unique set of staged dataset files.')
@@ -45,6 +45,8 @@ def upload_frame_folder(setup, gateway, actor, operation_id, upload_ids, name, f
             for item in uploads
         }
     manifest = validate_tree(list(paths.values()), require_both=True)
+    if not isinstance(expected_tree_hash, str) or expected_tree_hash != manifest['hash']:
+        raise WorkflowError('The selected folder changed after preview. Review the structure again.')
     records = {_canonical_path(path): key for key, path in paths.items()}
     if len(records) != len(upload_ids):
         raise WorkflowError('Two selected files have the same dataset-relative path.')
