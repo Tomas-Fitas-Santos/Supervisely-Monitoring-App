@@ -51,6 +51,7 @@ class EventRoster:
                 "id": row.id,
                 "monitor_id": row.monitor_id,
                 "team_id": row.team_id,
+                "effective_monitor_id": EventRoster._assigned_id(session, row),
                 "members": [p.get("email", "").strip().casefold() for p in row.members or []],
             })
         staff = [(m.user_id, m.group) for m in session.scalars(
@@ -129,7 +130,8 @@ class EventRoster:
                     "present": count,
                     "total": len(people),
                     "arrival_status": (
-                        "complete" if people and count == len(people)
+                        "incomplete_registration" if len(people) != 2
+                        else "complete" if count == 2
                         else "partial" if count else "not_arrived"
                     ),
                 })
@@ -167,8 +169,8 @@ class EventRoster:
             if not organiser and self._assigned_id(session, reg) != actor and not demo_member:
                 raise WorkflowError("Only the assigned monitor may check in this team.")
             record = session.get(ArrivalCheckin, (reg.id, email))
-            if record and record.present == present:
-                return False  # Idempotent double-click; no false duplicate audit.
+            if (record and record.present == present) or (record is None and not present):
+                return False  # Idempotent double-click or reversal of nonexistent arrival.
             if not present and not note:
                 raise WorkflowError("Provide a reason to undo an arrival check-in.")
             if record is None:
@@ -190,10 +192,13 @@ class EventRoster:
     def _validate_monitors(self, session, monitor_ids):
         if not isinstance(monitor_ids, list) or not monitor_ids:
             raise WorkflowError("Select at least one registered event monitor.")
-        if any(isinstance(value, bool) or str(value).strip() != str(int(value))
-               for value in monitor_ids):
-            raise WorkflowError("Invalid monitor identifier.")
-        selected = [int(i) for i in monitor_ids]
+        try:
+            if any(isinstance(value, bool) or str(value).strip() != str(int(value))
+                   for value in monitor_ids):
+                raise ValueError("not a canonical integer")
+            selected = [int(i) for i in monitor_ids]
+        except (TypeError, ValueError, OverflowError):
+            raise WorkflowError("Invalid monitor identifier.") from None
         if len(set(selected)) != len(selected):
             raise WorkflowError("Select each monitor once.")
         available = self._named_monitors(session)
