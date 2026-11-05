@@ -26,9 +26,9 @@ class SetupGateway(Gateway):
                     return result
                 page += 1
         all_members, accepted = listing(True), listing(False)
-        active_ids = {m.get('id') or m.get('userId') for m in accepted
+        active_ids = {m.get('userId') or m.get('id') for m in accepted
                       if m.get('activated') is not False and not m.get('disabled') and not m.get('disabledAt')}
-        return [dict(m, membership_active=(m.get('id') or m.get('userId')) in active_ids
+        return [dict(m, membership_active=(m.get('userId') or m.get('id')) in active_ids
                      and m.get('activated') is not False and not m.get('disabled') and not m.get('disabledAt'))
                 for m in all_members]
 
@@ -41,9 +41,8 @@ class SetupGateway(Gateway):
         """
         try:
             matches = [
-                u for u in self.api.user.get_list(filters=[
-                    {'field': 'email', 'operator': '=', 'value': email}
-                ]) if str(getattr(u, 'email', '') or '').strip().casefold() == email.casefold()
+                u for u in self.api.user.get_list()
+                if str(getattr(u, 'email', '') or '').strip().casefold() == email.casefold()
             ]
         except Exception:
             # Community/role restrictions may prohibit the directory lookup.
