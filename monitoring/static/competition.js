@@ -6,17 +6,71 @@ function registrationHeaders(text) {
   for(let i=0;i<end;i++){const c=text[i];if(c==='"'){if(quoted&&text[i+1]==='"'){value+='"';i++}else quoted=!quoted}else if(c===delimiter&&!quoted){fields.push(value.trim());value=''}else value+=c}fields.push(value.trim());return fields;
 }
 Vue.component('event-registrations', {
-  props:['view','run','disabled'],
-  data(){return{csv:'',headers:[],mapping:{},format:'pairs',message:'',monitorIds:{}}},
+  props:['view','run','disabled','form','post'],
+  data(){return{csv:'',headers:[],mapping:{},format:'pairs',message:'',monitorIds:{},xlsxBase64:'',sheets:[],sheetName:'',headerRow:1,loading:false}},
   methods:{
-    async file(e){try{this.csv=await e.target.files[0].text();this.headers=registrationHeaders(this.csv);
-      const fields=['team_name','monitor_email','member_1_email','member_2_email','member_1_name','member_2_name','member_1_login','member_2_login','participant_email','participant_name','participant_login'];this.format=this.headers.includes('participant_email')?'people':'pairs';this.mapping={};for(const field of fields)this.$set(this.mapping,field,this.headers.includes(field)?field:'');this.message='';}catch(e){this.message='Choose a UTF-8 CSV with one team per row.'}},
+    syncMapping() {
+      const fields=['team_name','monitor_email','member_1_email','member_2_email',
+        'member_1_name','member_2_name','member_1_login','member_2_login',
+        'participant_email','participant_name','participant_login'];
+      this.format=this.headers.includes('participant_email')?'people':'pairs';
+      this.mapping={};
+      for(const field of fields)
+        this.$set(this.mapping,field,this.headers.includes(field)?field:'');
+    },
+    async previewExcel() {
+      if(!this.xlsxBase64)return;
+      Object.assign(this.form,{
+        setup_action:'registration_excel_preview',xlsx_base64:this.xlsxBase64,
+        sheet_name:this.sheetName||null,header_row:Number(this.headerRow)||1
+      });
+      try {
+        const response=await this.post('/setup/action');
+        if(response?.ok!==true)throw new Error(this.view.message||'Could not preview the Excel workbook.');
+        this.csv=response.csv_text;this.headers=response.headers||[];
+        this.sheets=response.sheets||[];this.sheetName=response.sheet_name;
+        this.headerRow=response.header_row;
+        this.syncMapping();
+        this.message='Loaded '+this.sheetName+' using header row '+this.headerRow+'. Map the columns below, then import.';
+      }finally{
+        delete this.form.xlsx_base64;delete this.form.sheet_name;delete this.form.header_row;
+      }
+    },
+    async file(e){
+      const upload=e.target.files?.[0];if(!upload)return;
+      this.message='';this.loading=true;
+      try{
+        if(/\.xlsx$/i.test(upload.name)){
+          if(upload.size>3*1024*1024)throw new Error('Choose an Excel workbook smaller than 3 MiB.');
+          const bytes=new Uint8Array(await upload.arrayBuffer());
+          let binary='';
+          for(let i=0;i<bytes.length;i+=8192)
+            binary+=String.fromCharCode(...bytes.subarray(i,i+8192));
+          this.xlsxBase64=btoa(binary);this.sheetName='';this.headerRow=1;
+          await this.previewExcel();
+        }else{
+          this.xlsxBase64='';this.sheets=[];this.sheetName='';
+          this.csv=await upload.text();
+          this.headers=registrationHeaders(this.csv);
+          this.syncMapping();
+        }
+      }catch(error){
+        this.message=error.message||'Choose a valid UTF-8 CSV or .xlsx registration workbook.';
+        this.csv='';this.headers=[];
+      }finally{this.loading=false;}
+    },
     label(status){return {not_created:'Not created',pending:'Pending invitations',ready:'Ready',needs_attention:'Needs attention',accepted:'Accepted',not_invited:'Not invited',invitation_error:'Invitation error',role_mismatch:'Check role',unknown:'Unconfirmed',deactivated:'Deactivated',not_found:'Membership missing'}[status]||status},
     nativeInvite(row){return (this.view.connection.server_address||'').replace(/\/$/,'')+'/members/add'}
   },
   template:`<div class="nj-panel"><h3>Import team registrations</h3><p>Import team names and participant emails. A team can have one or two annotators; the event pairs normally have two. The monitor is separate. Create teams and send email invitations first, then wait for acceptance. No global account search is required.</p>
-    <div class="nj-actions"><label class="nj-field">Google Forms response export<input type="file" accept=".csv,text/csv" @change="file" :disabled="disabled"></label><button v-if="view.simulator || view.pilot" @click="run('demo_csv')" :disabled="disabled">Load bundled demo CSV</button></div>
-    <p v-if="message" class="nj-caution">{{message}}</p><div v-if="headers.length" class="nj-panel"><h4>Map CSV columns</h4><label>Response format<select v-model="format"><option value="pairs">One team per row</option><option value="people">One participant per row (two rows per team)</option></select></label><div class="nj-form-row"><label v-for="field in (format==='pairs'?['team_name','monitor_email','member_1_email','member_2_email','member_1_name','member_2_name']:['team_name','participant_email','participant_name'])" :key="field">{{field.replace(/_/g,' ')}}<select v-model="mapping[field]"><option value="">{{['team_name','member_1_email','participant_email'].includes(field)?'Required':'Optional'}}</option><option v-for="header in headers" :key="header">{{header}}</option></select></label></div><button class="nj-primary" @click="run('registration_import',{csv_text:csv,csv_mapping:Object.fromEntries(Object.entries(mapping).filter(([key])=>format==='pairs'?!key.startsWith('participant_'):!key.startsWith('member_')))})" :disabled="disabled || !mapping.team_name || (format==='pairs'?!mapping.member_1_email:!mapping.participant_email)">Validate and import registrations</button></div>
+    <div class="nj-actions"><label class="nj-field">Registration CSV or Excel workbook<input type="file" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" @change="file" :disabled="disabled || loading"></label><button v-if="view.simulator || view.pilot" @click="run('demo_csv')" :disabled="disabled">Load bundled demo CSV</button></div>
+    <div v-if="xlsxBase64 && sheets.length" class="nj-form-row">
+      <label>Excel worksheet<select v-model="sheetName" :disabled="disabled || loading">
+        <option v-for="sheet in sheets" :key="sheet" :value="sheet">{{sheet}}</option></select></label>
+      <label>Header row<input type="number" min="1" max="30" v-model.number="headerRow" :disabled="disabled || loading"></label>
+      <button @click="previewExcel" :disabled="disabled || loading">Reload worksheet preview</button>
+    </div>
+    <p v-if="message" class="nj-muted">{{message}}</p><div v-if="headers.length" class="nj-panel"><h4>Map CSV columns</h4><label>Response format<select v-model="format"><option value="pairs">One team per row</option><option value="people">One participant per row (two rows per team)</option></select></label><div class="nj-form-row"><label v-for="field in (format==='pairs'?['team_name','monitor_email','member_1_email','member_2_email','member_1_name','member_2_name']:['team_name','participant_email','participant_name'])" :key="field">{{field.replace(/_/g,' ')}}<select v-model="mapping[field]"><option value="">{{['team_name','member_1_email','participant_email'].includes(field)?'Required':'Optional'}}</option><option v-for="header in headers" :key="header">{{header}}</option></select></label></div><button class="nj-primary" @click="run('registration_import',{csv_text:csv,csv_mapping:Object.fromEntries(Object.entries(mapping).filter(([key])=>format==='pairs'?!key.startsWith('participant_'):!key.startsWith('member_')))})" :disabled="disabled || loading || !mapping.team_name || (format==='pairs'?!mapping.member_1_email:!mapping.participant_email)">Validate and import registrations</button></div>
     <div v-if="(view.registration_rows||[]).length" class="nj-actions"><button @click="run('registration_provision_all')" :disabled="disabled || !(view.registration_rows||[]).some(r=>r.monitor_email&&r.membership_status!=='ready')">Create teams and invite CSV emails</button><button @click="run('registration_refresh')" :disabled="disabled">Refresh all invitations</button></div>
     <div v-for="row in view.registration_rows||[]" :key="row.id" class="nj-registration"><div class="nj-section-heading"><strong>{{row.team_name}}</strong><span class="nj-badge" :class="{warning:row.membership_status!=='ready'}">{{label(row.membership_status)}}</span></div>
       <p>Monitor: {{row.monitor_email || 'Choose a registered monitor below'}} · Manager / job reviewer</p>
