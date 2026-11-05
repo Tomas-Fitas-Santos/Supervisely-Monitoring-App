@@ -200,6 +200,52 @@ class ArrivalCheckin(Base):
     note: Mapped[str] = mapped_column(Text, default='')
 
 
+class MediaSequence(Base):
+    """Original ordered frame manifest for an encoded native video."""
+    __tablename__ = 'media_sequences'
+    source_id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    source_folder: Mapped[str] = mapped_column(String(1000))
+    category: Mapped[str] = mapped_column(String(180))
+    title: Mapped[str] = mapped_column(String(180))
+    frame_paths: Mapped[list] = mapped_column(JSON)
+    frame_count: Mapped[int] = mapped_column(Integer)
+    fps: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[int] = mapped_column(default=now)
+
+
+class PreparedJob(Base):
+    """One logical team job, possibly multiple native media-type slices."""
+    __tablename__ = 'prepared_jobs'
+    __table_args__ = (UniqueConstraint('registration_id', 'position'),)
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    registration_id: Mapped[str] = mapped_column(ForeignKey('registrations.id'), index=True)
+    position: Mapped[int] = mapped_column(Integer)
+    plan_id: Mapped[str] = mapped_column(String(80))
+    assets: Mapped[list] = mapped_column(JSON)
+    state: Mapped[str] = mapped_column(String(35), default='prepared')
+    remote_job_ids: Mapped[list] = mapped_column(JSON, default=list)
+    revision: Mapped[int] = mapped_column(Integer, default=0)
+    submission_count: Mapped[int] = mapped_column(Integer, default=0)
+    review_note: Mapped[str] = mapped_column(Text, default='')
+    started_at: Mapped[int | None] = mapped_column(nullable=True)
+    updated_at: Mapped[int] = mapped_column(default=now)
+
+
+class JobPlan(Base):
+    """Immutable job configuration until event preparation is committed."""
+    __tablename__ = 'job_plans'
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    actor_id: Mapped[int] = mapped_column(Integer)
+    team_ids: Mapped[list] = mapped_column(JSON)
+    source_datasets: Mapped[list] = mapped_column(JSON)
+    inventory_hash: Mapped[str] = mapped_column(String(64))
+    settings: Mapped[dict] = mapped_column(JSON)
+    preview: Mapped[dict] = mapped_column(JSON)
+    assignments: Mapped[dict] = mapped_column(JSON)
+    state: Mapped[str] = mapped_column(String(25), default='preview')
+    created_at: Mapped[int] = mapped_column(default=now)
+
+
 class WorkUnit(Base):
     __tablename__ = 'work_units'
     __table_args__ = (UniqueConstraint('batch_id', 'entity_id', 'frame_index'),)
