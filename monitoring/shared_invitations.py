@@ -170,7 +170,11 @@ class SharedTeamInvitations:
                 try:
                     native = self._matches(listing, entry, row.user_id)
                     if native is None:
-                        if row.status in ('pending', 'accepted'):
+                        # An invitation can take time to appear in native
+                        # membership listings. Pending is never retried blindly.
+                        # A previously accepted identity disappearing is a
+                        # distinct access-review condition.
+                        if row.status == 'accepted':
                             row.status = 'not_found'
                         if row.user_id and row.user_id != config.owner_id:
                             former = session.get(EventMember, int(row.user_id))
