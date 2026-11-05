@@ -504,6 +504,15 @@ def setup_action(request: Request):
         authorized = True
         f = request_form(request)
         name = f.get('setup_action', 'catalog')
+        if single_team(event_config()) and name in (
+            'upload', 'preview', 'distribute', 'demo_sources',
+            'demo_setup', 'groups', 'members', 'team', 'register_team',
+            'balance_preview', 'balance_apply', 'assign', 'unassign'
+        ):
+            raise WorkflowError(
+                'This action belongs to the retired multiple-native-team workflow. '
+                'Use the shared-team dataset importer, job planner and monitor allocation.'
+            )
         key = f.get('operation_id')
         message = ''
         response = {'ok': True}
