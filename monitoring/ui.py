@@ -24,6 +24,7 @@ from .competition import Competition
 from .registration import Registrations
 from .event_settings import EventSettings, single_team
 from .shared_invitations import SharedTeamInvitations
+from .job_design import PreparedJobs
 
 sly.env.enable_multiuser_app_mode()
 settings = Settings.load()
@@ -158,6 +159,7 @@ def display_access(uid, gateway):
                 leaderboard=Competition(sessions).leaderboard() if gateway else [],
                 registration_rows=Registrations(sessions).rows() if can_setup else [],
                 attendance=EventRoster(sessions).overview(uid, can_setup),
+                prepared_jobs=PreparedJobs(sessions).overview(uid, organiser=can_setup),
                 simulator=os.getenv('MONITORING_SIMULATOR') == '1',
                 pilot=os.getenv('MONITORING_PILOT') == '1' and settings.local)
     if can_setup and single_team(event_config()):
@@ -205,6 +207,7 @@ def clear_access():
                                    directory={}, sources={}, connected=False, review_preview=None,
                                    registration_rows=[], event_settings={}, attendance={'teams': [], 'monitors': [], 'summary': {}},
                                    roster_plan_id=None, roster_balance_preview=None,
+                                   prepared_jobs=[], media_preview=None, job_plan_id=None, job_preview=None,
                                    unit_page={}, leaderboard=[], export_data=None,
                                    simulator=os.getenv('MONITORING_SIMULATOR') == '1',
                                    pilot=os.getenv('MONITORING_PILOT') == '1' and settings.local,
@@ -511,6 +514,64 @@ def setup_action(request: Request):
         elif name == 'rules':
             Competition(sessions).save_rules(uid, f['rules_revision'], f['rules'], f.get('freeze_rules') is True)
             message = 'Event rules frozen.' if f.get('freeze_rules') else 'Event rules saved.'
+        elif name == 'media_tree_preview':
+            from .media_manifest import validate_tree
+            manifest = validate_tree(f['relative_paths'], require_both=True)
+            data['media_preview'] = {
+                'hash': manifest['hash'], 'images': manifest['image_count'],
+                'videos': manifest['video_count'], 'frames': manifest['frame_count'],
+                'categories': manifest['category_count'],
+                'video_examples': [
+                    {'name':v['title'], 'category':v['category'],
+                     'frames':v['frame_count']} for v in manifest['videos'][:12]
+                ],
+            }
+            message = 'Dataset hierarchy verified. Confirm the preview before uploading.'
+        elif name == 'structured_upload':
+            from .structured_upload import upload_frame_folder
+            result = upload_frame_folder(
+                setup, gateway, uid, f['operation_id'],
+                f['upload_ids'], f['name'], f.get('fps', 12),
+                f.get('meta'), f.get('manifest_hash')
+            )
+            data['catalog'] = gateway.catalog(setup.monitoring_team_id)
+            data['media_preview'] = None
+            message = (
+                f"Uploaded {result['manifest']['image_count']} images and "
+                f"{result['manifest']['video_count']} complete videos from "
+                f"{result['manifest']['frame_count']} ordered frames."
+            )
+        elif name == 'job_preview':
+            from .setup import fingerprint
+            team_ids = f.get('registration_ids')
+            dataset_ids = f.get('dataset_ids')
+            if not dataset_ids or len(dataset_ids) != len(set(dataset_ids)):
+                raise WorkflowError('Choose the source image and video datasets.')
+            image_units = f.get('image_effort', 1)
+            assets, _ = gateway.inventory(
+                setup.monitoring_team_id, dataset_ids, int(image_units))
+            pid, preview = PreparedJobs(sessions).preview(
+                uid, team_ids, assets, dataset_ids,
+                f['job_config'], fingerprint(assets))
+            data.update(job_plan_id=pid, job_preview=preview)
+            message = 'Review the balanced logical job plan before preparing the event.'
+        elif name == 'job_apply':
+            from .setup import fingerprint
+            from .db import JobPlan
+            with sessions() as session:
+                plan = session.get(JobPlan, str(f.get('job_plan_id') or ''))
+                if not plan or plan.state != 'preview':
+                    raise WorkflowError('Preview job assignments before applying.')
+                dids, image_effort = plan.source_datasets, plan.settings.get('image_effort', 1)
+            fresh_assets, _ = gateway.inventory(
+                setup.monitoring_team_id, dids, int(image_effort))
+            result = PreparedJobs(sessions).apply(
+                uid, f['job_plan_id'], fingerprint(fresh_assets))
+            data.update(job_plan_id=None, job_preview=None)
+            message = (
+                f"{result['jobs']} logical labeling jobs prepared. "
+                'Only each team\\'s first job will be released at event start.'
+            )
         elif name == 'registration_excel_preview':
             from .excel_import import excel_to_csv
             response.update(excel_to_csv(f['xlsx_base64'], f.get('sheet_name'),
@@ -737,7 +798,7 @@ def setup_action(request: Request):
         data.update(setup=setup.snapshot(), directory=setup.directory(), connected=True,
                     can_setup=True, connection=connection_view(True))
         display_access(uid, gateway)
-        if name in ('groups', 'upload', 'catalog', 'distribute', 'demo_sources', 'demo_prepare', 'demo_setup'):
+        if name in ('groups', 'upload', 'structured_upload', 'catalog', 'distribute', 'demo_sources', 'demo_prepare', 'demo_setup'):
             data['sources'] = gateway.sources(setup.monitoring_team_id)
         dashboard.display(service.snapshot(uid), message)
         return response
