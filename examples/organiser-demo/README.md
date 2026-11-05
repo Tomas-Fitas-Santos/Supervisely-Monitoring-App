@@ -1,49 +1,77 @@
-# Two-team organiser demonstration
+# Live DEMO: one team, explicit CSV roles
 
-Use `Start-App.ps1 -Mode Demo -Install` on Windows, or `python -m monitoring.run --demo`, then open **http://127.0.0.1:8000**. Demo and Pilot are the **same live Supervisely workflow**, using the same saved database and connection. Connect the organiser token in the app. Teams, email invitation requests, uploads and labeling jobs are real. Only the roster and dataset are small sample inputs.
+The DEMO uses the real Supervisely API with **one pre-existing native team**
+and its **pre-existing workspace**. It does not create Supervisely teams.
+The organiser account is **tomas.dos.santos@tecnico.ulisboa.pt**;
+connect with the organiser account's own numeric Supervisely User ID and
+personal token. The organiser must already be an Admin of the chosen team.
+The organiser is not a participant in the DEMO pair.
 
-## Requested accounts
+## Role-aware DEMO roster
 
-| Team | Monitor / Manager responsibility | Annotator |
-|---|---|---|
-| TEAM 1 | tomas.bf.santos@gmail.com | tomas.gaming.21@gmail.com |
-| TEAM 2 | tomas.bf.santos@gmail.com | tomas.santos.work2002@gmail.com |
+[registrations.csv](registrations.csv) contains one two-person competition
+pair, `DEMO PAIR`. Each member has explicit role `participant_monitor`;
+this means each must receive the **Manager** native team role while also
+participating in labeling. The monitoring app registers accepted members with
+the app-level monitor role, and DEMO can assign one to supervise the pair.
 
-Each demo team has two people in total: one monitor and one annotator. The production registration flow also supports ordinary event teams with two annotators plus a separate monitor. The organiser account retains native Admin membership when it creates a team; it fulfils the Manager responsibility and is assigned as job reviewer. Native Admin is not downgraded.
+| Registered person | Event role | Requested native role |
+| --- | --- | --- |
+| tomas.gaming.21@gmail.com | Participant + monitor | manager |
+| tomas.santos.work2002@gmail.com | Participant + monitor | manager |
+| Organiser's Técnico account | Organiser | Existing admin (never changed) |
 
-The CSV includes `team_name`, `monitor_email` and `member_1_email`; the second annotator columns are blank. Usernames are not a prerequisite for email invitations. The offline simulator creates illustrative IDs/logins; real mode obtains them from native membership records.
+**Important:** Supervisely invites *existing account logins*, which may
+differ from their email addresses. If an email-only invitation returns 404,
+find each participant's **actual Supervisely login** under
+Supervisely → Team Members or that person's account profile, and populate
+`member_1_login` and `member_2_login` in the CSV. Do not guess the
+login from the email address. The app verifies a supplied login before
+sending the invitation, and rejects an exposed account-email mismatch.
 
-## Updating from the previous offline Demo
+## Steps
 
-Stop the server, pull the implementation branch and restart with `-Mode Demo`. The old offline records stay untouched in `data/organiser-demo/`. Live Demo and Pilot both use `data/account-pilot/`, so an existing real pilot is resumed rather than provisioned again. Simulated pending invitations never sent an email and must not be treated as native teams.
+1. Update the branch, then launch `Start-App.ps1 -Mode Demo`.
+2. Connect the organiser's Técnico account through the app.
+3. Open **Settings**, verify and save the existing Team ID and Workspace ID.
+4. Open **Monitors & Teams → Load bundled demo CSV**.
+   If actual Supervisely logins differ from emails, edit the local copy of
+   the CSV and choose that CSV file instead.
+5. Review each person's displayed **event role** and **native role**.
+   Click **Send invitations with CSV roles** only once.
+6. Each person accepts the real team invitation in Supervisely.
+   Click **Refresh accepted memberships** to verify identity and effective
+   native role. Pending invitations are not automatically resent.
+7. Confirm both participants are accepted as `manager` in Supervisely,
+   and both are registered as app monitors.
+8. Test attendance, source folder-or-ZIP staging, explicit Supervisely upload
+   and prepared job configuration.
 
-## Quick live setup
+`participant` requests native `annotator`. `monitor` requests native
+`manager` (from `monitor_email` for a separate supervisor).
+`participant_monitor` requests native `manager` and carries both
+event responsibilities. CSV cannot request native Admin, and re-import
+never silently changes a pending or accepted native role. Conflicts
+require deliberate Admin review.
 
-In **Monitors & Teams**, the **Set up the demo event** panel and manual **Initialize event** control stay visible before connection. Connect the organiser token above, then click **Set up sample event** to initialize groups, load the CSV, create the native teams/request invitations and upload the sample photos. The organiser appears immediately as a monitor. Inspect pending/errors below, have annotators accept in Supervisely, then configure distribution and release jobs. The shortcut does not accept invitations, freeze rules or fabricate submissions. Confirmed teams/uploads are reused on a repeat; unresolved writes still require inspection.
+No native pair-shared sequential labeling job activation/correction flow
+has been completed in this branch. The app-level prepared-job preview
+does not establish that two native accounts can simultaneously annotate
+one shared labeling job. Confirm that separately with a real pilot.
 
-## Manual walkthrough
+## Bundled media and provenance
 
-1. Connect the API token belonging to **tomas.bf.santos@gmail.com** and create/adopt the event groups. Then **Monitors & Teams → Load bundled demo CSV → Create teams and invite CSV emails.** Both real native teams appear immediately with **Pending invitations**. Their annotators are not yet ready for jobs; the organiser's existing Admin membership is retained.
-2. Inspect each member's status. Click **Refresh all invitations**: refreshing does not resend emails or create duplicate teams.
-3. Each actual annotator accepts the invitation in Supervisely, then the organiser clicks **Refresh all invitations**. If the app reports an invitation API rejection, use **Open native invitations**, select the named team and invite the same email there before refreshing. Each team becomes **Ready** only after required memberships/roles are confirmed.
-4. Open **Dataset**. Click **Load bundled CC0 bird photos**, or use **Upload dataset → Or select a complete dataset folder** and select this demo's `dataset/` folder. The README in the empty video branch is ignored. Both same-named image files retain their different relative paths.
-5. Select the photo source datasets and both ready teams. Use replication **1**, image effort **1** and batch effort **1** to divide the two photos evenly: **one unique photo per team**, zero workload spread. Use replication **2** instead if both teams should independently annotate both photos for comparison. Counts are illustrative inputs, never event-size assumptions.
-6. Choose the scoring policy/guide and **Save and freeze official rules**. Preview the distribution before applying it. Each team receives its own copied entities and native task ownership mapping.
-7. In **Monitoring**, select TEAM 1 and **Release this batch**. Repeat for TEAM 2. Each corresponding annotator opens its native Supervisely labeling job, annotates and submits. The live demo does not supply example labels or simulate submission.
-8. Refresh/capture the submission. Load its image, judge quality and inspect standings. Try a correction/resubmission and a fully reviewed native acceptance. Pending review is distinct from a zero score.
-9. Close the demonstration and export records, including memberships, source mappings, annotations, rules and judgments. No real native resources are reset/deleted automatically.
+The dataset includes two CC0 bird photographs, in different `images/`
+categories. Its `videos/` branch does not yet contain frame sequences;
+test the current folder-or-ZIP importer with a complete video-frame tree.
+The photos were resized to 960 pixels wide and JPEG recompressed. Exact
+sources and SHA-256 checksums are in
+[image-credits.json](image-credits.json).
 
-No video media is included. Production allocation keeps every video whole; there is no automatic clip/frame-range splitting. Online presence is intentionally omitted.
+- `dataset/images/sparrows/bird.jpg`: house sparrow by Mathias Appel, CC0,
+  https://commons.wikimedia.org/wiki/File:House_Sparrow(Passer_domesticus).jpg
+- `dataset/images/garden/bird.jpg`: house sparrow by Hobbyfotowiki, CC0,
+  https://commons.wikimedia.org/wiki/File:House_sparrow_(Passer_domesticus),_Amrum.jpg
 
-## Offline development simulator (optional)
-
-`Start-App.ps1 -Mode Simulator` or `python -m monitoring.run --simulator` explicitly starts the former offline walkthrough. Only this mode has **Prepare working presentation**, simulated acceptance/submission and a backed-up reset. It creates no real teams/jobs and sends no invitations. Its records stay separate from the live demo. It is not the organiser's real-account demonstration.
-
-## Photo provenance
-
-- `dataset/images/sparrows/bird.jpg`: house sparrow by Mathias Appel, CC0; https://commons.wikimedia.org/wiki/File:House_Sparrow(Passer_domesticus).jpg
-- `dataset/images/garden/bird.jpg`: house sparrow by Hobbyfotowiki, CC0; https://commons.wikimedia.org/wiki/File:House_sparrow_(Passer_domesticus),_Amrum.jpg
-
-Both were resized to 960 pixels wide and JPEG recompressed. `image-credits.json` contains source/download/license URLs and file SHA-256 checksums. License: https://creativecommons.org/publicdomain/zero/1.0/ . They are software demonstration inputs, not a representative scientific sample.
-
-See [real pilot](../../docs/real-pilot.md) and [email invitation integration](../../docs/email-invitations.md) for live checks. Offline success does not verify actual invitation delivery, permissions or licence/seat limits.
+For offline-only simulation run `Start-App.ps1 -Mode Simulator`; it has
+a different local database and does not send real invitations.
