@@ -9,3 +9,5 @@ local-manifest.json
 data/uploads/
 data/
 dist/
+DEMO_Bird_Dataset/
+Nightjar_Annnotations/
