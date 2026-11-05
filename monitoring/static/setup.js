@@ -38,7 +38,8 @@ Vue.component('nightjar-management', {
   },
   watch: { 'view.competition': {immediate:true,handler(c){if(!this.planningDefaultsLoaded && c?.rules){this.replicas=c.rules.replicas;this.imageUnits=c.rules.image_effort;this.batchUnits=c.rules.batch_effort;this.planningDefaultsLoaded=true}}}, busy(value) { this.$emit('busy', value); },
     locked(value) { if (!value && this.view.connected && (!this.loaded || (this.view.can_setup && !Array.isArray(this.catalog.users)))) this.reload(); },
-    'groups.workspace_id'(value) { if (!this.workspaceId && value) this.workspaceId = value; } },
+    'groups.workspace_id'(value) { if (!this.workspaceId && value) this.workspaceId = value; },
+    'view.event_settings.workspace_id'(value) { if (value && this.view.event_settings?.single_team) this.workspaceId = value; } },
   methods: {
     id() { return crypto.randomUUID().replace(/-/g, ''); },
     monitorName(id) { return id ? (this.monitors.find(u => u.id === id)?.name || 'Monitor ' + id) : 'Unassigned'; },
@@ -136,7 +137,10 @@ Vue.component('nightjar-management', {
         pilot: this.pilot, with_annotations: this.withAnnotations, allocation_options: {effort} });
     }
   },
-  mounted() { if (!this.locked && this.view.connected) this.reload(); if (this.groups.workspace_id) this.workspaceId = this.groups.workspace_id; },
+  mounted() { if (!this.locked && this.view.connected) this.reload();
+    if (this.view.event_settings?.single_team && this.view.event_settings.workspace_id)
+      this.workspaceId = this.view.event_settings.workspace_id;
+    else if (this.groups.workspace_id) this.workspaceId = this.groups.workspace_id; },
   template: `
   <section class="nj-management">
     <div class="nj-section-heading"><div><h2>{{ section === 'roster' ? 'Monitors & Teams' : 'Dataset' }}</h2>
@@ -145,32 +149,22 @@ Vue.component('nightjar-management', {
     <p v-if="!view.connected" class="nj-message">First connect your organiser account using the Supervisely server and API token above. Event setup becomes available after connection.</p>
     <p v-else-if="!view.can_setup" class="nj-message">You can view the event lists. The monitoring organiser manages people, assignments and dataset distribution.</p>
     <div v-if="clientError" class="nj-message nj-error" role="alert">{{ clientError }}</div>
-    <div v-if="view.pilot && section === 'roster'" class="nj-panel nj-demo-setup"><h3>Set up the demo event</h3>
-      <p>The sample uses TEAM 1 and TEAM 2, each with your organiser account as monitor and one annotator, plus two bundled bird photos.</p>
-      <ol><li>Connect the organiser account above.</li><li>Click Set up sample event to initialize the groups, load the CSV, create real teams/send invitations and upload the photos.</li><li>Annotators accept in Supervisely. Refresh invitations until both teams are Ready.</li><li>In Dataset, configure/freeze rules, preview and apply distribution. In Monitoring, release the real labeling jobs.</li></ol>
-      <button class="nj-primary" @click="prepareSample" :disabled="disabled || !view.can_setup || view.closed || !monitorGroupName.trim() || !annotatorGroupName.trim()">Set up sample event</button>
-      <p v-if="!view.connected" class="nj-muted">Connect account first to enable this button. Emails alone cannot authenticate real Supervisely operations.</p>
-      <p v-else-if="!view.can_setup" class="nj-muted">The event organiser needs native Admin permissions to perform setup.</p>
-      <p class="nj-muted">Existing confirmed teams and sample uploads are reused. Invitation acceptance, task submission and scoring are never simulated. You can also use the individual setup controls below.</p>
+    <div v-if="view.pilot && section === 'roster'" class="nj-panel"><h3>DEMO uses the same real email invitations</h3>
+      <p>Configure the existing Supervisely Team ID and Workspace ID in Settings.
+        The bundled sample roster contains one two-person competition pair.
+        Participants receive genuine Supervisely emails and accept them personally.</p>
     </div>
     <div v-if="blocked && view.can_setup" class="nj-panel nj-caution"><h3>Setup needs attention</h3><p>Check the operation history at the bottom of this tab before continuing.</p>
       <template v-if="(setup.operations || []).some(o => o.id === setup.blocked_by && o.state === 'needs_inspection')">
         <label>What did you verify in Supervisely?<textarea v-model="inspectionNote" rows="2" maxlength="2000"></textarea></label>
         <button @click="run('inspect', {operation_id: setup.blocked_by, inspection_note: inspectionNote})" :disabled="busy || locked || !inspectionNote.trim()">Record inspection and continue</button>
       </template></div>
-    <div v-if="!directory.ready" class="nj-panel"><h3>Start the event</h3>
-      <p>Create the event groups once. Then add monitors and teams here; manage source data in Dataset. Annotators work in the Supervisely web app.</p>
-      <template v-if="section === 'roster' && (view.can_setup || (view.connection.local && !view.connected))">
-        <details><summary>Choose existing Supervisely groups or change their names</summary><div class="nj-columns">
-          <div><label class="nj-field">Monitors group name<input v-model="monitorGroupName" maxlength="180"></label>
-            <label v-if="view.connection.local" class="nj-field">Monitors Supervisely team<select v-model="existingMonitorGroup"><option :value="null">Create a new team</option><option v-for="t in catalog.remote_teams || []" :key="t.id" :value="t.id">{{ t.name }}</option></select></label>
-            <p v-else class="nj-muted">Monitors use the team where this shared session is running.</p></div>
-          <div><label class="nj-field">Annotators group name<input v-model="annotatorGroupName" maxlength="180"></label>
-            <label class="nj-field">Annotators Supervisely team<select v-model="existingAnnotatorGroup"><option :value="null">Create a new team</option><option v-for="t in catalog.remote_teams || []" :key="t.id" :value="t.id">{{ t.name }}</option></select></label></div></div></details>
-        <button class="nj-primary" @click="createGroups" :disabled="disabled || !view.can_setup || !monitorGroupName.trim() || !annotatorGroupName.trim()">Initialize event</button>
-      </template><p v-else>Open Monitors & Teams as the organiser to initialize the event.</p></div>
+    <div v-if="!directory.ready" class="nj-panel"><h3>Connect the existing event team</h3>
+      <p>Open Settings to enter the already-created Supervisely Team ID and source Workspace ID.
+      The app will verify the IDs and will not create another team or workspace.</p></div>
     <template v-if="section === 'roster'"><event-registrations v-if="view.can_setup && directory.ready" :view="view" :run="run" :form="form" :post="post" :disabled="disabled"></event-registrations>
       <event-roster-assignment v-if="view.can_setup && directory.ready" :view="view" :run="run" :disabled="disabled"></event-roster-assignment>
+      <template v-if="!view.event_settings?.single_team">
       <div class="nj-metrics nj-three-metrics"><div><span>Monitors</span><strong>{{ monitors.length }}</strong></div><div><span>Participant teams</span><strong>{{ roster.length }}</strong></div><div><span>Teams without a monitor</span><strong>{{ unassignedPairs.length }}</strong></div></div>
       <div v-if="directory.ready && view.can_setup" class="nj-actions nj-toolbar"><button class="nj-primary" @click="showAddMonitor = !showAddMonitor" :disabled="disabled">Add monitor</button><button class="nj-primary" @click="showAddTeam = !showAddTeam" :disabled="disabled">Add team</button></div>
       <div v-if="showAddMonitor && view.can_setup" class="nj-panel"><h3>Add monitors</h3><p>Choose a registered user or enter registered logins, one per line.</p>
@@ -201,12 +195,13 @@ Vue.component('nightjar-management', {
       <details v-if="unassignedPairs.length && view.can_setup" class="nj-panel"><summary>Assign unassigned teams evenly across selected monitors</summary><label v-for="m in monitors" :key="m.id" class="nj-check"><input type="checkbox" v-model="candidateMonitorIds" :value="m.id">{{ m.name }}</label>
         <button @click="run('balance_preview', {monitor_ids: candidateMonitorIds})" :disabled="disabled || !candidateMonitorIds.length">Preview balanced assignments</button>
         <div v-if="view.assignment_plan_id"><p v-for="row in view.assignment_preview" :key="row.team_id">{{ row.team_name }} → {{ monitorName(row.monitor_id) }}</p><button class="nj-primary" @click="run('balance_apply', {assignment_plan_id: view.assignment_plan_id})" :disabled="disabled">Apply monitor assignments</button></div></details>
+      </template>
     </template>
     <template v-if="section === 'dataset' && directory.ready"><event-rules v-if="view.can_setup" :view="view" :run="run" :disabled="disabled"></event-rules><button v-if="(view.simulator || view.pilot) && view.can_setup" class="nj-primary" @click="run('demo_sources', {operation_id:id()})" :disabled="disabled">Load bundled CC0 bird photos</button><p v-if="view.pilot && view.can_setup" class="nj-muted">This uploads the bundled photos to your real Supervisely source workspace. Distribution and task release are separate actions below.</p>
       <div class="nj-panel"><h3>Event source datasets</h3><p class="nj-muted">These are the source files. Distribution creates independent annotation copies for the selected participant teams.</p>
         <div class="nj-table-scroll"><table class="nj-table"><thead><tr><th>Project / dataset</th><th>Type</th><th>Files</th></tr></thead><tbody><tr v-for="d in sources.datasets" :key="d.id"><td>{{ d.project }} / {{ d.name }}</td><td>{{ d.kind === 'images' ? 'Images' : 'Videos' }}</td><td>{{ d.items }}</td></tr></tbody></table></div><p v-if="!(sources.datasets || []).length">No source data yet. Upload files below, or import a dataset into the monitoring team in Supervisely and reload this list.</p></div>
       <div v-if="view.can_setup" class="nj-panel"><h3>Upload dataset</h3><p class="nj-muted">Upload raw images or videos. Select a group of files of the same type.</p>
-        <label class="nj-field">Source workspace<select v-model="workspaceId"><option :value="null">Choose a workspace</option><option v-for="w in sources.workspaces || []" :key="w.id" :value="w.id">{{ w.name }}</option></select></label>
+        <label class="nj-field">Source workspace (configured in Settings)<select v-model="workspaceId" :disabled="view.event_settings?.single_team"><option :value="null">Choose a workspace</option><option v-for="w in sources.workspaces || []" :key="w.id" :value="w.id">{{ w.name }}</option></select></label>
         <div class="nj-form-row"><label>Project name<input v-model="projectName" maxlength="180"></label><label>Media type<select v-model="kind" @change="files = []; if ($refs.mediaFiles) $refs.mediaFiles.value = ''"><option value="images">Images</option><option value="video">Videos</option><option value="mixed">Folder with images and videos</option></select></label></div>
         <label class="nj-field">Files<input ref="mediaFiles" type="file" multiple :accept="accept" @change="filesChanged"></label><p>{{ files.length }} media files selected.</p><label class="nj-field">Or select a complete dataset folder<input type="file" multiple webkitdirectory directory @change="filesChanged"></label>
         <details><summary>Annotation schema</summary><label class="nj-field">Optional Supervisely meta.json<input type="file" accept=".json" @change="metaChanged"></label><p class="nj-muted">Without a schema file, uploads use the bird box and four head-point pilot template. Edit the source schema in Supervisely before distribution if needed.</p></details>
