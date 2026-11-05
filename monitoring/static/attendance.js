@@ -29,8 +29,9 @@ Vue.component('event-roster-assignment', {
   },
   template: `<section class="nj-panel nj-event-roster">
     <h3>Competition teams and monitor allocation</h3>
-    <p class="nj-muted">All competition pairs are separate in this application, even though
-      the event uses one shared Supervisely team. Assignments refer to pairs, not native team IDs.</p>
+    <p class="nj-muted">Competition pairs are separate logical entities in the monitoring app.
+      This roster is ready for the planned single shared Supervisely team migration;
+      the existing native provisioning flow has not yet been migrated.</p>
     <div class="nj-metrics nj-three-metrics">
       <div><span>Registered pairs</span><strong>{{teams.length}}</strong></div>
       <div><span>Not provisioned</span><strong>{{eligible.length}}</strong></div>
