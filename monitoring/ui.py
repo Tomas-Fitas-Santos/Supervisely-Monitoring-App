@@ -611,15 +611,10 @@ def setup_action(request: Request):
             data.update(plan_id=None, preview=None, assignment_plan_id=None, assignment_preview=[], unit_page={}, review_preview=None, export_data=None, sources={}, inventory=[])
             message = 'Demo reset. Previous simulated results were backed up locally. Load the CSV to rehearse again.'
         elif name == 'demo_setup':
-            if not settings.local or os.getenv('MONITORING_PILOT') != '1' or os.getenv('MONITORING_SIMULATOR') == '1':
-                raise WorkflowError('Sample event setup is available only in the live Demo/Pilot.')
-            from .pilot import prepare_sample
-            prepare_sample(setup, gateway, uid, key, f.get('monitor_group_name', 'Demo Monitors'),
-                           f.get('annotator_group_name', 'Demo Annotators'),
-                           f.get('existing_monitor_group'), f.get('existing_annotator_group'))
-            message = ('Sample setup finished. Check each team below for invitation errors or pending acceptance. '
-                       'Annotators accept in Supervisely; then refresh invitations, configure distribution in Dataset '
-                       'and release jobs from Monitoring. The sample photos are uploaded; no work was simulated.')
+            raise WorkflowError(
+                'The old sample setup created separate native teams and is disabled. '
+                'Configure the existing event Team ID in Settings and import the DEMO roster.'
+            )
         elif name in ('demo_csv', 'demo_sources'):
             if not settings.local or not any(os.getenv(k) == '1' for k in ('MONITORING_SIMULATOR', 'MONITORING_PILOT')):
                 raise WorkflowError('Bundled inputs are available in local --demo, --pilot or --simulator mode.')
@@ -628,7 +623,7 @@ def setup_action(request: Request):
                 if os.getenv('MONITORING_SIMULATOR') == '1' and data.get('simulator_roster_outdated'):
                     raise WorkflowError('Reset this older demo with a backup before loading the new TEAM 1 / TEAM 2 roster.')
                 import_roster(sessions, uid)
-                message = 'TEAM 1 and TEAM 2 registrations loaded. Create teams and invite the CSV emails, then refresh after acceptance.'
+                message = 'One two-person DEMO pair imported. Send real invitations to the existing event team and refresh after email acceptance.'
             else:
                 upload_photos(setup, gateway, uid, f['operation_id'])
                 message = 'Bundled CC0 bird photos uploaded to the event source workspace.'
@@ -650,6 +645,8 @@ def setup_action(request: Request):
             data['catalog'] = gateway.catalog(setup.monitoring_team_id)
             message = 'Monitors and Annotators groups are ready. Add registered people to each group.'
         elif name == 'members':
+            raise WorkflowError('Use the shared-team email invitation workflow, not the legacy member-groups route.')
+        elif name == 'legacy_members_disabled':
             setup.add_members(gateway, uid, key, f['member_group'], f['member_logins'])
             data['catalog'] = gateway.catalog(setup.monitoring_team_id)
             message = 'People added to the event group.'
@@ -698,9 +695,13 @@ def setup_action(request: Request):
             data.update(assignment_plan_id=None, assignment_preview=[])
             message = 'Participant pairs assigned to their monitors.'
         elif name == 'team':
+            raise WorkflowError('Native team creation is disabled. Competition teams are logical pairs inside this app.')
+        elif name == 'legacy_team_disabled':
             tid = setup.create_team(gateway, uid, key, f['name'], f['logins'], f['monitor_id'], f.get('existing_team_id'))
             message = f'Participant pair {tid} registered. Assign a monitor below if you chose Assign later.'
         elif name == 'register_team':
+            raise WorkflowError('Native team creation is disabled; invite both pair members to the one event team.')
+        elif name == 'legacy_register_team_disabled':
             tid = setup.register_team(gateway, uid, key, f['name'], f['logins'], f.get('monitor_id'), f.get('existing_team_id'))
             data['catalog'] = gateway.catalog(setup.monitoring_team_id)
             message = f'Team {tid} added with both participants.'
