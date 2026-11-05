@@ -12,6 +12,7 @@ class Dashboard(Widget):
         JinjaWidgets().context['__widget_scripts__']['NightjarCompetition'] = './static/competition.js'
         JinjaWidgets().context['__widget_scripts__']['NightjarAttendance'] = './static/attendance.js'
         JinjaWidgets().context['__widget_scripts__']['NightjarSettings'] = './static/settings.js'
+        JinjaWidgets().context['__widget_scripts__']['NightjarStructuredDataset'] = './static/structured_dataset.js'
 
     def get_json_data(self):
         return {'snapshot': {'teams': []}, 'message': '', 'error': False, 'links': [],
