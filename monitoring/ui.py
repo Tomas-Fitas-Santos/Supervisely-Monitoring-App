@@ -440,6 +440,7 @@ def setup_action(request: Request):
         name = f.get('setup_action', 'catalog')
         key = f.get('operation_id')
         message = ''
+        response = {'ok': True}
         data = DataJson()['dashboard']
         if name == 'catalog':
             data['catalog'] = gateway.catalog(setup.monitoring_team_id)
@@ -447,6 +448,12 @@ def setup_action(request: Request):
         elif name == 'rules':
             Competition(sessions).save_rules(uid, f['rules_revision'], f['rules'], f.get('freeze_rules') is True)
             message = 'Event rules frozen.' if f.get('freeze_rules') else 'Event rules saved.'
+        elif name == 'registration_excel_preview':
+            from .excel_import import excel_to_csv
+            response.update(excel_to_csv(f['xlsx_base64'], f.get('sheet_name'),
+                                         f.get('header_row', 1)))
+            message = ('Excel worksheet loaded for header mapping. '
+                       'Validate and import the rows to save the roster.')
         elif name == 'registration_import':
             count = Registrations(sessions).import_csv(uid, f['csv_text'], f['csv_mapping'])
             message = f'{count} registration rows checked. Existing teams and invitation status were preserved.'
@@ -641,7 +648,7 @@ def setup_action(request: Request):
         if name in ('groups', 'upload', 'catalog', 'distribute', 'demo_sources', 'demo_prepare', 'demo_setup'):
             data['sources'] = gateway.sources(setup.monitoring_team_id)
         dashboard.display(service.snapshot(uid), message)
-        return {'ok': True}
+        return response
     except WorkflowError as exc:
         # Setup data is only sent after successful organiser authorization.
         if authorized:
