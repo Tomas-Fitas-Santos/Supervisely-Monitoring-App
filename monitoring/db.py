@@ -162,6 +162,20 @@ class TeamOnboarding(Base):
     checked_at: Mapped[int | None] = mapped_column(nullable=True)
 
 
+class ArrivalCheckin(Base):
+    """Individual event arrival; status changes are audited in audit_log."""
+    __tablename__ = 'arrival_checkins'
+    registration_id: Mapped[str] = mapped_column(
+        ForeignKey('registrations.id'), primary_key=True
+    )
+    member_email: Mapped[str] = mapped_column(String(254), primary_key=True)
+    present: Mapped[bool] = mapped_column(default=False)
+    checked_in_at: Mapped[int | None] = mapped_column(nullable=True)
+    actor_id: Mapped[int | None] = mapped_column(nullable=True)
+    updated_at: Mapped[int] = mapped_column(default=now)
+    note: Mapped[str] = mapped_column(Text, default='')
+
+
 class WorkUnit(Base):
     __tablename__ = 'work_units'
     __table_args__ = (UniqueConstraint('batch_id', 'entity_id', 'frame_index'),)
