@@ -181,3 +181,37 @@ def test_native_role_mismatch_blocks_readiness(sessions):
         assert not list(s.scalars(select(EventMember).where(EventMember.group == 'monitors')))
         assert all(s.get(SharedInvitation, (15, email)).status == 'role_mismatch'
                    for email in demo_accounts())
+
+
+def test_shared_team_rejects_roster_without_explicit_roles(sessions):
+    bind_event(sessions)
+    legacy = (
+        'team_name,member_1_email,member_2_email\n'
+        'PAIR A,a@example.org,b@example.org\n'
+    )
+    with pytest.raises(WorkflowError, match='explicitly declare'):
+        import_text(sessions, legacy)
+
+
+def test_separate_monitor_is_invited_with_manager_role(sessions):
+    text = (
+        'team_name,monitor_email,member_1_email,member_2_email,member_1_role,member_2_role\n'
+        'PAIR A,monitor@example.org,a@example.org,b@example.org,participant,participant\n'
+    )
+    import_text(sessions, text)
+    bind_event(sessions)
+    accounts = {
+        email: {'id': index, 'login': 'native-' + str(index), 'email': email,
+                'disabled': False}
+        for index, email in enumerate(
+            ['a@example.org', 'b@example.org', 'monitor@example.org'], 300)
+    }
+    api = FakeApi(accounts)
+    results = SharedTeamInvitations(sessions).invite(NS(api=api), 900)
+    assert results['invited'] == 3
+    roles = {next(u['email'] for u in accounts.values()
+                  if u['login'] == payload['login']): payload['roleId']
+             for payload in api.calls}
+    assert roles == {
+        'a@example.org': 5, 'b@example.org': 5, 'monitor@example.org': 3,
+    }
