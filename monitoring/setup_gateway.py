@@ -115,7 +115,8 @@ class SetupGateway(Gateway):
                     'Check the team Admin role, account state and native restrictions.'
                 ) from None
             raise  # Unknown remote outcome: retain the setup operation checkpoint.
-        return {'user_id': result.get('userId') or result.get('id')} if isinstance(result, dict) else {}
+        return {'user_id': result.get('userId') or result.get('id'),
+                'login': login} if isinstance(result, dict) else {'login': login}
 
     def visible_accounts(self):
         """Use accessible membership data; global listing is an optional capability."""
