@@ -170,6 +170,7 @@ def display_access(uid, gateway):
                 shared_team_id=result.get('team_id'),
                 memberships=result.get('memberships', []),
                 membership_status=result.get('membership_status', 'not_invited'),
+                ready=result.get('membership_status') == 'ready',
                 checked_at=result.get('checked_at'),
                 error=result.get('error') or row['error']
             )
