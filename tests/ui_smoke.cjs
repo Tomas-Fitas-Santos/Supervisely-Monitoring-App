@@ -9,7 +9,7 @@ global.crypto = require('crypto').webcrypto; global.FileReader = dom.window.File
 const Vue = require('vue/dist/vue.common.js');
 global.Vue = Vue; Vue.config.productionTip = false; Vue.config.devtools = false;
 const warnings = []; Vue.config.warnHandler = message => warnings.push(message);
-for (const name of ['connection.js','competition.js','attendance.js','setup.js','dashboard.js']) {
+for (const name of ['connection.js','competition.js','attendance.js','settings.js','setup.js','dashboard.js']) {
   eval(fs.readFileSync(path.join(__dirname, '..', 'monitoring', 'static', name), 'utf8'));
 }
 const people = [
@@ -54,7 +54,7 @@ function management(dashboard) { return dashboard.$children.find(c=>c.$options.n
 (async()=>{
   const admin=mount('#admin',90,true), monitor=mount('#monitor',91,false);await settle();
   const d=admin.$children[0], other=monitor.$children[0];
-  assert.deepStrictEqual(Array.from(admin.$el.querySelectorAll('[role="tab"]')).map(b=>b.textContent),['Monitors & Teams','Dataset','Participant Check-in','Monitoring']);
+  assert.deepStrictEqual(Array.from(admin.$el.querySelectorAll('[role="tab"]')).map(b=>b.textContent),['Monitors & Teams','Dataset','Participant Check-in','Monitoring','Settings']);
   assert(calls.some(c=>c.uid===90 && c.form.setup_action==='catalog'),'Initial catalogue must load after parent refresh unlocks.');
   let roster=management(d);assert(roster);assert(admin.$el.textContent.includes('All participant teams'));
   roster.chooseMonitor(monitors[0]);await settle();
