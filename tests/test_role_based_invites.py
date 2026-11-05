@@ -55,7 +55,7 @@ def test_demo_csv_explicitly_sets_both_people_as_monitors(sessions):
         assert [r.event_role for r in roles] == [
             'participant_monitor', 'participant_monitor'
         ]
-        assert all(r.native_role == 'manager' for r in roles)
+        assert all(r.native_role == 'reviewer' for r in roles)
 
 
 def test_explicit_staff_can_monitor_more_than_one_pair(sessions):
@@ -108,7 +108,7 @@ class FakeApi:
                 x for x in accounts.values() if x['login'] == login)),
         )
         self.role = NS(get_list=lambda: [
-            NS(id=3, role='manager'), NS(id=5, role='annotator')
+            NS(id=3, role='manager'), NS(id=4, role='reviewer'), NS(id=5, role='annotator')
         ])
 
     def post(self, operation, data, **kwargs):
@@ -132,13 +132,13 @@ def demo_accounts():
     }
 
 
-def test_native_invites_receive_declared_manager_roles(sessions):
+def test_native_invites_receive_declared_reviewer_roles(sessions):
     import_text(sessions, SAMPLE.read_text(encoding='utf-8'))
     bind_event(sessions)
     api = FakeApi(demo_accounts())
     result = SharedTeamInvitations(sessions).invite(NS(api=api), 900)
     assert result['invited'] == 2
-    assert [x['roleId'] for x in api.calls] == [3, 3]
+    assert [x['roleId'] for x in api.calls] == [4, 4]
     assert sorted(x['login'] for x in api.calls) == [
         'nightjar-gaming', 'nightjar-work'
     ]
@@ -153,7 +153,7 @@ def test_accepted_native_roles_register_both_as_event_monitors(sessions, monkeyp
     monkeypatch.setenv('MONITORING_PILOT', '1')
     native = [
         {'userId': account['id'], 'login': account['login'],
-         'email': account['email'], 'roleId': 3, 'activated': True}
+         'email': account['email'], 'roleId': 4, 'activated': True}
         for account in demo_accounts().values()
     ]
     api = FakeApi(demo_accounts(), native=native)
