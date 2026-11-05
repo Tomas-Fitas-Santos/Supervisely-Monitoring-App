@@ -1,138 +1,134 @@
-# Supervisely Monitoring App
+# Supervisely Monitoring App — Técnico Nightjar Annotatiathon
 
-> **New event workflow (feature branch).** Use one pre-existing Supervisely
-> team and workspace, real participant email invitations, a shared DEMO/PRODUCTION
-> folder-or-ZIP dataset importer, logical competition pairs, check-in, and
-> light/dark mode. See [structured dataset and job setup](docs/structured-dataset-and-jobs.md).
-> Native sequential Supervisely job activation and correction return still
-> require implementation and live verification. Prepared logical jobs are
-> not native labeling jobs.
+This development branch implements the local **DEMO** and the shared architecture
+for **PRODUCTION** using **one pre-existing native Supervisely team** and **one
+pre-existing workspace**. No native teams are created by the new workflow.
 
-A shared organiser/monitor app for a bird-annotation event. Participants work in **native Supervisely**, using their own existing accounts. The app manages registrations, independent pair annotations, task release, submission captures, human judging and competition standings.
+**Integration boundary:** dataset source uploads, invitation reconciliation and
+logical job preparation are implemented but require actual Supervisely
+integration validation. Native pair-shared sequential labeling-job activation,
+submission/correction return and end-to-end event scoring are not yet complete
+for the new single-team architecture. App-level prepared jobs are **not**
+native Supervisely labeling jobs.
 
-**There are no fixed event totals.** Teams, source inventory, replication, frame requirements and batch effort are inputs. The included two teams (one monitor plus one annotator each) and two photos are test inputs, not estimates of event size. Ordinary event teams can still have two annotators.
+## Windows quick start
 
-The **DEMO and PRODUCTION use the same real email invitation and structured dataset upload code**. The DEMO roster is now one two-person pair. Native job release remains an integration gate. Participants annotate and submit in Supervisely. Production hosts the application for multiple authenticated monitors. An explicitly named **Simulator** remains available for offline development only. GitHub Actions is optional and manual-only; neither installation nor execution uses Actions.
-
-| Start | Purpose | Supervisely operations | Storage |
-|---|---|---|---|
-| `python -m monitoring.run --demo` | Live organiser demonstration with the supplied two teams/photos | Actual API/SDK operations after connecting in the app | `data/account-pilot/` |
-| `python -m monitoring.run --pilot` | Alias for the same live sample workflow | Same integration and saved setup as Demo | `data/account-pilot/` |
-| `python -m monitoring.run --simulator` | Offline development walkthrough | Simulated; no emails or real resources | `data/organiser-demo/` |
-| `python -m monitoring.run --production` | Shared production session inside Supervisely | Actual per-user authenticated operations | Persistent PostgreSQL |
-
-On Windows, `Start-App.ps1 -Mode Demo` and `Start-App.ps1 -Mode Pilot` handle the local environment and Windows libmagic dependency. Add `-Install` after pulling dependency changes. The default mode is Demo. [Production deployment](docs/production.md) includes the image, native release packaging, persistence and operational checks.
-
-| Main tab | Workflow |
-|---|---|
-| **Monitors & Teams** | Import Google Forms CSV responses, create native teams, invite by email, see individual Pending/Accepted states and assign monitors. Click a monitor to inspect or transfer assignments. |
-| **Participant Check-in** | Record and audit each participant's arrival. Search names, emails or competition teams; assigned monitors see only their own teams. |
-| **Dataset** | Upload a complete folder tree or select existing nested datasets. Set event rules, inspect source IDs, configure replication/effort, preview source coverage and distribute independent annotation copies. |
-| **Settings** | Verify Supervisely User ID, choose the existing event Team ID and Workspace ID; switch local authenticated account and use browser-local light/dark mode. |
-| **Monitoring** | Select a team; inspect current, submitted and upcoming batches; see member-level native tasks; capture submissions; browse images/required frames; judge quality; return corrections; complete accepted native tasks; export records and standings. |
-
-## Run the organiser demonstration
-
-Start the live demo, then connect the organiser account inside the app. Its API token authenticates real Supervisely operations; the sample emails alone are not credentials. No event `.env` is needed. The bundled CSV and two **CC0 bird photographs** are the sample inputs. No native IDs, invitation acceptances, submissions or annotations are invented.
-
-Windows PowerShell, Python 3.12:
+Use Python 3.12 and a Git checkout of
+`feat/single-team-settings-theme-20261105`. From the repository root:
 
 ```powershell
-py -3.12 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe -m pip install --force-reinstall --no-deps -r requirements-windows.txt
-.\.venv\Scripts\python.exe -m monitoring.run --demo
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\Start-App.ps1 -Mode Demo -Install
 ```
 
-If the environment already exists, use just the last command. Open **http://127.0.0.1:8000**. Follow [the organiser demo walkthrough](examples/organiser-demo/README.md).
+Open **http://127.0.0.1:8000**. On later launches run
+`.\Start-App.ps1 -Mode Demo` without `-Install`.
+This is a **live API DEMO**, not offline simulation. The local SQLite database,
+encrypted connection and staging are in `data/account-pilot/`.
 
-In Monitors & Teams, **Set up the demo event** is visible from the start. Connect the organiser account above to enable **Set up sample event**: it creates/reuses event groups, imports the bundled CSV, creates the two native teams/requests invitations and uploads the sample photos. Check each membership, wait for actual acceptance, then freeze rules, distribute and release native jobs. **Initialize event** remains available for manual setup. Replication 1 gives one unique photo per team; replication 2 gives both photos independently to both teams. The live demo has no simulated acceptance/submission, role switch, one-click fake presentation or reset of native resources.
+**Requirements:** Python 3.12, the dependencies from `requirements.txt`
+(the launcher installs them), and `ffmpeg` and `ffprobe` for video-frame
+conversion. There is no Node build for normal local operation.
 
-Linux/macOS:
+For offline-only development, explicitly use
+`.\Start-App.ps1 -Mode Simulator`. The simulator has a separate database
+and sends no real invitations/uploads.
 
-```bash
-python3.12 -m venv .venv
-.venv/bin/python -m pip install -r requirements.txt
-.venv/bin/python -m monitoring.run --demo
-```
+## Sign in and configure
 
-The Windows extra installation resolves `python-magic`'s missing native `libmagic` loader. Repeat it after reinstalling the main requirements on Windows.
+Connect the organiser's **actual Supervisely numeric User ID**, personal
+API token and Supervisely server inside the web app. The configured DEMO
+organiser is `tomas.dos.santos@tecnico.ulisboa.pt`, not the older sample
+Gmail account. This account must already be an **Admin** of the native event
+team. No credentials are included in the repository.
 
-Demo files are in [examples/organiser-demo](examples/organiser-demo/): registration CSV, two small photos in nested folders with the same basename, an empty video branch, and provenance/license records. The two photos deliberately exercise path preservation. The live demo starts with unannotated images; the actual annotators provide the labels.
+Open **Settings**, verify the existing **Team ID** and its **Workspace ID**.
+The login form verifies that the token belongs to the supplied User ID.
 
-Demo and Pilot resume the same saved live event in `data/account-pilot/`; switching between these commands does not recreate teams. **Upgrading from the old offline Demo:** stop it, pull this branch and restart with `--demo`. Old simulated records remain untouched in `data/organiser-demo/` and cannot establish real invitations or task completion. Do not reset or delete your live resources.
+## CSV roles: one source of truth before inviting
 
-For offline development only, explicitly start `Start-App.ps1 -Mode Simulator` or `python -m monitoring.run --simulator`. Only this mode has **Prepare working presentation**, **Simulate invitation acceptance**, **Simulate participant submission** and a backup/reset control. Its deliberately imperfect labels are not scientific ground truth.
+Import the DEMO roster using **Monitors & Teams → Load bundled demo CSV**,
+or select the role-aware `.csv` or `.xlsx` workbook.
+The bundled file is `examples/organiser-demo/registrations.csv`.
 
-## Live demo: use the supplied real accounts
+The pair-row CSV uses `team_name`, `member_1_email`,
+`member_2_email`, optional native `member_1_login` and
+`member_2_login`, and explicit `member_1_role` and `member_2_role`.
+Each pair has two different participants.
 
-```powershell
-.\.venv\Scripts\python.exe -m monitoring.run --demo
-```
+| Declared event role | Native Supervisely role requested | In-app responsibility |
+| --- | --- | --- |
+| `participant` | `annotator` | Annotation work |
+| `monitor` (via `monitor_email`) | `manager` | Supervision |
+| `participant_monitor` | `reviewer` | Both labeling and reviewing/monitoring |
 
-Open **http://127.0.0.1:8000** and connect using the API token belonging to **tomas.bf.santos@gmail.com** on the same Supervisely instance as the participants. Create/adopt the two event groups. Click **Load bundled demo CSV**, then **Create teams and invite CSV emails**. The requested roster is:
+A **separate monitor** can be provided via `monitor_email` and
+`monitor_login`; the same staff monitor can supervise multiple logical
+pairs. The CSV may also use **one participant per row**, with
+`participant_email`, `participant_role` and `team_name`: two rows
+form one logical pair.
 
-| Team | Monitor / Manager responsibility | Annotator |
-|---|---|---|
-| TEAM 1 | tomas.bf.santos@gmail.com | tomas.gaming.21@gmail.com |
-| TEAM 2 | tomas.bf.santos@gmail.com | tomas.santos.work2002@gmail.com |
+The DEMO CSV contains **one competition pair** and both participants are
+`participant_monitor` (native `reviewer` role). The organiser remains
+the existing native **Admin**, and the CSV never elevates someone to Admin.
+The app stores the expected role *before* a native invitation is sent.
 
-Teams appear immediately with per-member invitation status. Sign in as each annotator and accept the native invitation. Click **Refresh all invitations**; both teams must say **Ready**. Your organiser retains native **Admin** membership when creating these teams and performs the Manager/reviewer responsibility; the app never demotes the team's required Admin. In Dataset, click **Load bundled CC0 bird photos** or upload your folder, freeze rules, then preview/apply distribution with replication **1** to give one photo to each team. Release each team's job from Monitoring. Each annotator works and submits in Supervisely; return here to capture and judge.
+**The native Supervisely invitation endpoint accepts existing account
+logins, which may differ from email addresses.** If email-only invitation
+fails with HTTP 404, confirm the participant's real login with Supervisely
+and populate the corresponding `*_login` CSV field. Do not guess it.
+A verified account-email mismatch is blocked. Users must have real
+accounts on the same Supervisely server. The server may send invitations
+by email, or may add accepted members directly depending on the instance.
 
-No native account IDs or logins are invented in this mode, and global account search is not a prerequisite. Native IDs are obtained from invitation responses and confirmed accepted team memberships. Refreshes do not resend pending invitations. Definite native rejections remain visible without blocking other setup; uncertain writes retain checkpoints for inspection. See [invitation API details and live-validation limits](docs/email-invitations.md) and the [real pilot](docs/real-pilot.md). This mode ignores legacy `.env` event IDs/tokens and uses its own encrypted connection and database.
+Click **Send invitations with CSV roles**, then ask users to accept any
+pending invitation in Supervisely. **Refresh accepted memberships** verifies
+both the real native membership and role; it does not resend invitations.
+Pending/unknown outcomes are not retried blindly. Pre-existing accepted
+roles are never silently changed on CSV reimport.
 
-## Run a real event
+## Interface
 
-```powershell
-.\.venv\Scripts\python.exe -m monitoring.run
-```
+- **Monitors & Teams**: role-aware CSV/Excel import; native invitations;
+  accepted/pending/error status; balanced or manual monitor assignment.
+- **Dataset**: browser folder or ZIP containing one named root with
+  `images/` and `videos/`; staging, validation, source upload after
+  confirmation; logical job distribution preview.
+- **Participant Check-in**: physical arrival tracked independently of
+  native acceptance, with an audited undo action.
+- **Monitoring**: legacy native-job monitoring and review components.
+  Their new single-team sequential-job integration is incomplete.
+- **Settings**: account/Team ID/Workspace ID configuration and monitor
+  registration. The main header provides light/dark mode.
 
-A fresh local install initializes its database automatically. Connect the organiser's Supervisely server and API token **inside the app**. Initialize the Monitors/Annotators groups, then use the three tabs. The connection is encrypted at rest; its local database and credential key belong together. Event people, IDs, assignments and rules do not belong in environment files.
-
-See [the real pilot guide](docs/real-pilot.md) for the required rehearsal and shared deployment.
-
-For simultaneous real monitors, deploy **one native multi-user Supervisely app session** with persistent PostgreSQL. Each request uses the current user's platform API credential, verifies the credential owner, and enforces app assignments. Organiser oversight/adjudication requires current monitoring-team Admin permission. Annotators are denied app access. Local mode represents the connected organiser; the offline simulator role switch is unavailable in Demo, Pilot and real events.
-
-Without a hosted background polling credential, signed-in monitors refresh their own teams through a database lease once per interval; multiple tabs do not start separate polling loops. An optional deployment polling credential can refresh all participating teams and observe deadlines when no monitor browser is open. Hosted database access and optional server credentials are deployment infrastructure, separate from in-app event configuration.
-
-## Registration and allocation
-
-- CSV accepts one team per row (one or two annotators, optional monitor_email), or two participant rows grouped by team name. Map the form columns. Monitors are separate from annotators and can supervise multiple teams; duplicate annotator emails and conflicting reimports are rejected.
-- Email onboarding creates the native team before waiting for invitations. Pending members, definitive invitation errors, accepted memberships and readiness are separate states. Raw native membership checks retain invitation information which the SDK UserInfo tuple omits. Accepted native IDs and correct roles are required before distribution/release. The Add team form uses the same email-invitation flow; legacy username-based backend operations remain available for existing integrations.
-- A pair currently has its own native Supervisely team and independent destination entities. The organiser retains administrative ownership. Verify team/seat quotas on the actual instance before provisioning the full roster.
-- Allocation is seeded, greedy effort balancing, with source-stratum tie balancing, configurable replication and an optional common scored challenge. Image effort and batch effort are estimates supplied/reviewed by the organiser; they are not measured annotation speed. Videos stay whole; multiple videos per pair are supported and alternate between the two members. Native video ownership can be handed over explicitly.
-- Previews show actual counts, effort spread, source coverage and required image/frame units. SDK copying is partitioned by source dataset, so actual batch counts can exceed the planner's initial packing groups. Source paths and original-to-copy IDs are retained.
-- Uploaded media is chunked through the authenticated request path. Folder upload handles the image/video branches together, preserves nested paths and rejects ambiguous paths. It accepts raw media, not arbitrary dataset ZIP formats. Existing Supervisely datasets are listed recursively.
-
-## Competition rules and review
-
-In **Dataset → Event rules**, choose whole-image/frame, per-criterion or weighted scoring; configure good/bad/missing values, enable or disable missing penalties, choose scored criteria, set required video frame stride and define the annotation/occlusion/empty-frame guide. Choose a common challenge if rankings should compare identical material. Save and freeze the policy before judging.
-
-Good/bad/missing/not applicable/pending are distinct. Pending work does not become a zero judgment. Missing penalties require an explicit human judgment on a captured required unit. The system does not infer penalties for unreleased work, or infer anatomical correctness from figure counts. Per-bird decisions are keyed to a submission, image/frame, bird identity and criterion, preventing repeated points for duplicate clicks. Changed captures do not reuse earlier judgments. Ties retain the same ranking position; standings remain provisional until closure and complete review.
-
-Native submission, structural presence/completeness, monitor judgment and native acceptance are separate states. The gallery has paginated filters and frozen-payload previews; live inspection/operational flags are collapsed separately. Review shortcuts are listed in the judging panel.
-
-Next-batch release can follow submission or explicit approval. Correction tasks stop the affected member's superseded job and reissue that member's complete task with an image/frame-specific report, preserving its denominator and existing annotations. Native acceptance requires every required unit/criterion judged good or not applicable and a check that the live annotations still match the judged capture. Unknown remote outcomes block further setup/release until inspection.
-
-## Captures, deadlines and recovery
-
-Captures store annotation JSON, metadata, a digest and the time the app observed the state. They are not guaranteed exact native submission-time snapshots. A deadline blocks new releases. Automatic closure requires a working organiser/service polling credential; otherwise the organiser closes the event explicitly. Closure stops current native tasks before capturing final observed annotations. It is not an atomic platform-wide, exact-deadline transaction. Review can continue on retained captures after closure.
-
-Exports include source mappings, captured annotations, rule version, assessments, correction lineage, closure and audit history. They do not contain API tokens or collect uncaptured work automatically. Keep real registration/export files private. Back up PostgreSQL and local encryption keys before event updates.
-
-This update adds tables through the existing initialization path without dropping previous tables or altering existing review columns. Legacy operational reviews remain intact and do not silently become competition scores without captured annotation evidence. Setup failures preserve resource checkpoints. Inspect **Operation history and recovery** before acknowledging a partial write; acknowledgment does not repair it or replay it. Automatic crash reconciliation of arbitrary partial native provisioning is not implemented.
+For the required media tree, complete-frame videos, conversion and
+job-planner limits, read
+[structured dataset and jobs](docs/structured-dataset-and-jobs.md).
+For a step-by-step live rehearsal, read
+[the current DEMO walkthrough](examples/organiser-demo/README.md).
 
 ## Verification
 
-```bash
-python -m pip install -r requirements-dev.txt
-python -m pytest -q
-npm install --prefix /tmp/monitor-ui --no-audit --no-fund vue@2.7.16 jsdom@26.1.0 playwright@1.56.1
-NODE_PATH=/tmp/monitor-ui/node_modules node tests/ui_smoke.cjs
-/tmp/monitor-ui/node_modules/.bin/playwright install chromium
-NODE_PATH=/tmp/monitor-ui/node_modules python tests/browser_demo.py
+Run the new read-only/local tests from the repository root:
+
+```powershell
+.\Start-App.ps1 -Mode Demo -Install
+# In a second PowerShell terminal:
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.\.venv\Scripts\python.exe -m pytest -q tests/test_role_based_invites.py tests/test_zip_dataset.py tests/test_job_design.py
 ```
 
-Node/Chromium are development-only checks; running the app needs no Node build. GitHub Actions checks are **manual-only** (`workflow_dispatch`), so pushes and pull requests do not consume Actions minutes. Run checks locally with the commands above. Set `TEST_DATABASE_URL` only to a **disposable** database: the Python tests drop its schema.
+These commands do **not** verify that your live instance accepts the
+invitation routes, that Reviewer-role users can label a pair-shared job, or
+that unfinished native sequential release works. Test real invited
+accounts separately before event deployment.
 
-Live instance permissions, invitation behavior, native correction/acceptance transitions, simultaneous platform sessions, API throughput and actual event-scale review capacity still require the real pilot. A read-only live check verified the supplied organiser identity, encrypted local connection, team visibility and setup authorisation; it did not create native resources or verify invitations/tasks. See [current capability status](docs/implementation-roadmap.md).
+Do not run tests against a production PostgreSQL database: the fixture
+drops/recreates its test schema if `TEST_DATABASE_URL` is set.
+Do not commit personal API tokens, production attendee lists or private
+annotation exports.
+
+`Start-App.ps1 -Mode Event` runs the local event command, whereas
+`python -m monitoring.run --production` requires a hosted authenticated
+multi-user context and PostgreSQL; the latter is not a production-ready
+single-team event release yet.
