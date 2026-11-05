@@ -69,7 +69,8 @@ Vue.component('nightjar-dashboard', {
       if (document.hidden || this.busy || this.setupBusy || !this.view.connected) return;
       if (this.tab === 'monitoring') this.send('refresh');
       else if (this.tab === 'roster' && this.view.can_setup &&
-               this.view.event_settings?.single_team)
+               this.view.event_settings?.single_team &&
+               (this.view.registration_rows || []).length)
         this.adminAction('registration_refresh');
     }, 60000);
   },
