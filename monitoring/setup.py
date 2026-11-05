@@ -625,6 +625,13 @@ class Setup:
                 raise WorkflowError('Filenames must be unique in the source dataset.')
             if any(Path(u.name).suffix.lower() not in EXTENSIONS[kind] for u in uploads):
                 raise WorkflowError('Select supported files of the chosen media type.')
+        from .event_settings import single_team
+        with self.sessions() as session:
+            config = session.get(EventConfig, 1)
+            if not single_team(config) or not config.source_workspace_id:
+                raise WorkflowError('Configure the existing event team and workspace in Settings before uploading.')
+            if positive(workspace_id, 'Workspace ID') != config.source_workspace_id:
+                raise WorkflowError('Dataset uploads must use the workspace configured in Settings.')
         workspace = gateway.api.workspace.get_info_by_id(positive(workspace_id, 'Workspace ID'))
         if not workspace or workspace.team_id != self.monitoring_team_id:
             raise WorkflowError('Upload destination must belong to the monitoring team.')
