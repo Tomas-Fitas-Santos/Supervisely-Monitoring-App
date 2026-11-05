@@ -103,7 +103,7 @@ def identity(request):
             native_role = str(getattr(member, 'role', '') or '').lower()
             if uid == config.owner_id and native_role != 'admin':
                 raise WorkflowError('The event organiser must retain native Supervisely Admin permission.')
-            if uid != config.owner_id and native_role not in ('admin', 'manager', 'developer'):
+            if uid != config.owner_id and native_role not in ('admin', 'manager', 'developer', 'reviewer'):
                 raise WorkflowError(
                     'This account no longer has the native staff role required to monitor. '
                     'An organiser must review the CSV and Supervisely team membership.'
