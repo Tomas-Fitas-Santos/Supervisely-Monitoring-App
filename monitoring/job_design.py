@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from sqlalchemy import select
 
-from .db import Audit, EventConfig, JobPlan, PreparedJob, Registration, SharedInvitation, now
+from .db import Audit, EventConfig, EventMember, JobPlan, PreparedJob, Registration, SharedInvitation, now
 from .event_settings import single_team
 from .service import WorkflowError
 
@@ -168,6 +168,14 @@ class PreparedJobs:
                 raise WorkflowError(
                     'Each selected competition pair needs two members and an assigned monitor.'
                 )
+            event = session.get(EventConfig, 1)
+            if not event or int(reg.monitor_id) != int(event.owner_id or 0):
+                staff = session.get(EventMember, int(reg.monitor_id))
+                if not staff or staff.group != 'monitors':
+                    raise WorkflowError(
+                        'The assigned monitor must have accepted the CSV-declared '
+                        'staff role before labeling jobs can be prepared.'
+                    )
             result.append(reg)
         return result
 
