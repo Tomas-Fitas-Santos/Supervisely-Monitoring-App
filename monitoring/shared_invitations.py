@@ -114,14 +114,15 @@ class SharedTeamInvitations:
             return result
 
     @staticmethod
-    def _matches(listing, entry, previous_user_id=None):
+    def _matches(listing, entry, previous_user_id=None, previous_login=None):
         matches = []
         for native in listing:
             email = normal_email_or_blank(native.get('email') or native.get('inviteEmail'))
             uid = native.get('userId') or native.get('id')
             login = str(native.get('login') or '').strip().casefold()
+            expected_login = str(entry.login or previous_login or '').strip().casefold()
             if (email == entry.email or
-                    (entry.login and login == entry.login.casefold()) or
+                    (expected_login and login == expected_login) or
                     (previous_user_id and str(uid) == str(previous_user_id))):
                 if email and email != entry.email:
                     raise WorkflowError(
@@ -169,7 +170,7 @@ class SharedTeamInvitations:
                     row = SharedInvitation(team_id=tid, email=entry.email)
                     session.add(row)
                 try:
-                    native = self._matches(listing, entry, row.user_id)
+                    native = self._matches(listing, entry, row.user_id, row.login)
                     if native is None:
                         # An invitation can take time to appear in native
                         # membership listings. Pending is never retried blindly.
@@ -324,6 +325,7 @@ class SharedTeamInvitations:
                 row.status = 'pending'
                 row.invited_at = now()
                 row.user_id = reply.get('user_id') or row.user_id
+                row.login = reply.get('login') or row.login
                 row.error = ''
                 session.add(Audit(team_id=tid, batch_id='', actor_id=int(actor),
                     action='shared_email_invited',
