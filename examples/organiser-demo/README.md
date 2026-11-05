@@ -11,14 +11,14 @@ The organiser is not a participant in the DEMO pair.
 
 [registrations.csv](registrations.csv) contains one two-person competition
 pair, `DEMO PAIR`. Each member has explicit role `participant_monitor`;
-this means each must receive the **Manager** native team role while also
+this means each must receive the **Reviewer** native team role while also
 participating in labeling. The monitoring app registers accepted members with
 the app-level monitor role, and DEMO can assign one to supervise the pair.
 
 | Registered person | Event role | Requested native role |
 | --- | --- | --- |
-| tomas.gaming.21@gmail.com | Participant + monitor | manager |
-| tomas.santos.work2002@gmail.com | Participant + monitor | manager |
+| tomas.gaming.21@gmail.com | Participant + monitor | reviewer |
+| tomas.santos.work2002@gmail.com | Participant + monitor | reviewer |
 | Organiser's Técnico account | Organiser | Existing admin (never changed) |
 
 **Important:** Supervisely invites *existing account logins*, which may
@@ -42,14 +42,14 @@ sending the invitation, and rejects an exposed account-email mismatch.
 6. Each person accepts the real team invitation in Supervisely.
    Click **Refresh accepted memberships** to verify identity and effective
    native role. Pending invitations are not automatically resent.
-7. Confirm both participants are accepted as `manager` in Supervisely,
+7. Confirm both participants are accepted as `reviewer` in Supervisely,
    and both are registered as app monitors.
 8. Test attendance, source folder-or-ZIP staging, explicit Supervisely upload
    and prepared job configuration.
 
 `participant` requests native `annotator`. `monitor` requests native
 `manager` (from `monitor_email` for a separate supervisor).
-`participant_monitor` requests native `manager` and carries both
+`participant_monitor` requests native `reviewer` (labeling and review) and carries both
 event responsibilities. CSV cannot request native Admin, and re-import
 never silently changes a pending or accepted native role. Conflicts
 require deliberate Admin review.
