@@ -124,6 +124,21 @@ class EventPreferences(Base):
     membership_synced_at: Mapped[int | None] = mapped_column(nullable=True)
 
 
+class EventInvitee(Base):
+    """CSV-declared identity and role in the one shared Supervisely event team.
+
+    Event role and requested native team role are distinct. Multiple logical
+    competition pairs can reference the same monitor email, while participants
+    remain unique to one pair. Re-import never silently modifies a native role.
+    """
+    __tablename__ = "event_invitees"
+    email: Mapped[str] = mapped_column(String(254), primary_key=True)
+    login: Mapped[str] = mapped_column(String(180), default='')
+    event_role: Mapped[str] = mapped_column(String(30))
+    native_role: Mapped[str] = mapped_column(String(30))
+    registration_ids: Mapped[list] = mapped_column(JSON, default=list)
+
+
 class SharedInvitation(Base):
     """One native invitation per email in one configured event-wide team."""
     __tablename__ = 'shared_invitations'
