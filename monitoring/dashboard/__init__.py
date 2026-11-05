@@ -20,6 +20,7 @@ class Dashboard(Widget):
                 'connected': False, 'directory': {}, 'sources': {}, 'review_preview': None,
                 'competition': {}, 'registration_rows': [], 'attendance': {'teams': [], 'monitors': [], 'summary': {}},
                 'roster_plan_id': None, 'roster_balance_preview': None, 'event_settings': {},
+                'prepared_jobs': [], 'media_preview': None, 'job_plan_id': None, 'job_preview': None,
                 'unit_page': {}, 'leaderboard': [], 'simulator': False, 'pilot': False,
                 'export_data': None, 'closed': False,
                 'inventory': [],
