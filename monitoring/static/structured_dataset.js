@@ -23,6 +23,15 @@ Vue.component('event-structured-upload', {
     changeFiles(e) {
       this.newSelection();
       this.files=Array.from(e.target.files||[]);
+      if(this.mode==='folder'){
+        // Finder and Windows Explorer may add desktop-only metadata.
+        this.files=this.files.filter(f=>{
+          const parts=(f.webkitRelativePath||f.name).split('/');
+          const leaf=parts[parts.length-1];
+          return !parts.includes('__MACOSX') && !['.DS_Store','Thumbs.db'].includes(leaf)
+            && !leaf.startsWith('._');
+        });
+      }
       if(this.mode==='zip'){
         if(this.files.length!==1||!/\.zip$/i.test(this.files[0].name)){
           this.error='Select one .zip file containing the named dataset folder.';
