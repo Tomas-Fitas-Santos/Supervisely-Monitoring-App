@@ -6,7 +6,7 @@ No method in this module creates a native team or workspace.
 from sqlalchemy import select
 
 from .db import (
-    Audit, Batch, EventConfig, EventMember, EventPreferences,
+    Audit, Batch, EventConfig, EventInvitee, EventMember, EventPreferences,
     Registration, SharedInvitation, SourceOrigin, Team, now,
 )
 from .service import WorkflowError
@@ -161,15 +161,31 @@ class EventSettings:
         if not member or getattr(member, 'disabled', False):
             raise WorkflowError('Monitor is not an active member of the event team.')
         role = str(getattr(member, 'role', '') or '').lower()
-        if role not in ('admin', 'manager', 'developer') and not demo_dual_role:
-            raise WorkflowError(
-                'Monitor requires a native staff role. An annotator can be an '
-                'event monitor only in the explicit DEMO dual-role workflow.'
-            )
+        # The CSV and native invitation reconciliation define who may monitor.
+        # A reviewer is eligible ONLY when the roster explicitly declares
+        # participant_monitor, preserving the ability to annotate assigned work.
+        with self.sessions() as session:
+            invitation = session.scalar(select(SharedInvitation).where(
+                SharedInvitation.team_id == team_id,
+                SharedInvitation.user_id == user_id,
+                SharedInvitation.status == 'accepted',
+            ))
+            target = session.get(EventInvitee, invitation.email) if invitation else None
+            if not target or target.event_role not in ('monitor', 'participant_monitor'):
+                raise WorkflowError(
+                    'This user is not an accepted CSV-declared monitor. '
+                    'Import the role-aware roster and refresh memberships first.'
+                )
+            if role != target.native_role and not (
+                    role == 'admin' and user_id == config.owner_id):
+                raise WorkflowError(
+                    'The native Supervisely role does not match the CSV '
+                    'monitor role. Review it in Supervisely before registering.'
+                )
         if demo_dual_role:
             import os
-            if os.getenv('MONITORING_PILOT') != '1':
-                raise WorkflowError('DEMO dual-role monitoring is not enabled in PRODUCTION.')
+            if os.getenv('MONITORING_PILOT') != '1' or target.event_role != 'participant_monitor':
+                raise WorkflowError('DEMO dual-role monitoring requires participant_monitor in the CSV.')
         login = str(getattr(member, 'login', '') or '').strip()
         if not login:
             raise WorkflowError('Cannot verify native account login for this User ID.')
