@@ -32,19 +32,63 @@ class SetupGateway(Gateway):
                      and m.get('activated') is not False and not m.get('disabled') and not m.get('disabledAt'))
                 for m in all_members]
 
-    def invite_email(self, team_id, email, role):
-        """Same members.add route used by the SDK, with an email identifier.
+    def _verified_login_for_email(self, email):
+        """Use a native login only if the server exposes a matching registered email.
 
-        Community invitation acceptance is asynchronous. Do not look up the
-        email through users.list and do not infer membership from this response.
+        The members.add API accepts *login*, which can differ from email.
+        An inaccessible user directory is not evidence that an account is absent.
+        Never guess a login from the email local part or invite another identity.
         """
         try:
-            result = self.api.post('members.add', {'teamId': int(team_id), 'login': email,
+            matches = [
+                u for u in self.api.user.get_list(filters=[
+                    {'field': 'email', 'operator': '=', 'value': email}
+                ]) if str(getattr(u, 'email', '') or '').strip().casefold() == email.casefold()
+            ]
+        except Exception:
+            # Community/role restrictions may prohibit the directory lookup.
+            # Retain the original email identifier for instances supporting it.
+            return email
+        if len(matches) > 1:
+            raise InvitationRejected(
+                'Several Supervisely users share this registered email. '
+                'Resolve the account identity before sending an invitation.'
+            )
+        if not matches:
+            return email
+        if getattr(matches[0], 'disabled', False):
+            raise InvitationRejected(
+                'This email belongs to a disabled Supervisely account.'
+            )
+        return str(matches[0].login) or email
+
+    def invite_email(self, team_id, email, role):
+        """Request a real native team invitation for a registered email identity.
+
+        The official members.add endpoint requires a user login. Resolve the
+        exact login from the verified registered email when permission permits;
+        never infer acceptance from the invitation response.
+        """
+        login = self._verified_login_for_email(email)
+        try:
+            result = self.api.post('members.add', {'teamId': int(team_id), 'login': login,
                                                   'roleId': self.role_id(role)}, retries=1).json()
         except Exception as exc:
             status = getattr(getattr(exc, 'response', None), 'status_code', None)
-            if status in (400, 401, 402, 403, 404, 409, 422):
-                raise InvitationRejected(f'Supervisely rejected the invitation (HTTP {status}). Check email, native Admin permissions, plan/seat limits and email-invitation support on this instance.') from None
+            if status == 404:
+                raise InvitationRejected(
+                    'Supervisely returned HTTP 404 for the participant identifier. '
+                    'This endpoint invites an existing Supervisely login, which '
+                    'may differ from the registered email. Verify that the '
+                    'participant has an account on this same server. You can '
+                    'invite their exact login through native Team members, then '
+                    'click Refresh accepted memberships here.'
+                ) from None
+            if status in (400, 401, 402, 403, 409, 422):
+                raise InvitationRejected(
+                    f'Supervisely rejected the invitation (HTTP {status}). '
+                    'Check the team Admin role, account state and native restrictions.'
+                ) from None
             raise  # Unknown remote outcome: retain the setup operation checkpoint.
         return {'user_id': result.get('userId') or result.get('id')} if isinstance(result, dict) else {}
 
