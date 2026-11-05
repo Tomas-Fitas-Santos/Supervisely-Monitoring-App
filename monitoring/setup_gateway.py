@@ -92,8 +92,12 @@ class SetupGateway(Gateway):
         else:
             login = self._verified_login_for_email(email)
         try:
+            native_role_id = self.role_id(role)
+        except WorkflowError as exc:
+            raise InvitationRejected(str(exc)) from None
+        try:
             result = self.api.post('members.add', {'teamId': int(team_id), 'login': login,
-                                                  'roleId': self.role_id(role)}, retries=1).json()
+                                                  'roleId': native_role_id}, retries=1).json()
         except Exception as exc:
             status = getattr(getattr(exc, 'response', None), 'status_code', None)
             if status == 404:
