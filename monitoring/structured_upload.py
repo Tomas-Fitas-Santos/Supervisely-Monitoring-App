@@ -1,144 +1,217 @@
-"""Import selected images and frame-sequence videos into the configured workspace.
+"""One structured dataset importer for browser folder and ZIP uploads.
 
-Uses the same staging and native upload path as ordinary source uploads.
-Every frame sequence is encoded as a *complete* MP4 before remote writes.
+Both inputs yield the same canonical images/videos manifests and the same
+Supervisely source projects. An explicit preview precedes remote mutation.
 """
-import hashlib
 from pathlib import Path, PurePosixPath
+import shutil
 import tempfile
 
-from sqlalchemy import select, update
+from sqlalchemy import update
 
 from .db import EventConfig, MediaSequence, SourceOrigin, Upload, UploadedPath
 from .event_settings import single_team
 from .media_manifest import encode_video, validate_tree
 from .service import WorkflowError
-from .setup import pilot_meta, positive
+from .setup import pilot_meta
+from .zip_dataset import extract_zip, inspect_zip
 
 
-def _canonical_path(value):
-    raw = value.replace('\\', '/')
-    parts = PurePosixPath(raw).parts
+def _staged(setup, actor, upload_ids):
+    if (not isinstance(upload_ids, list) or not upload_ids or
+            len(set(upload_ids)) != len(upload_ids)):
+        raise WorkflowError('Select unique staged dataset files.')
+    with setup.sessions() as session:
+        uploads = [session.get(Upload, uid) for uid in upload_ids]
+        if any(not item or item.actor_id != actor or item.offset != item.size
+               or item.consumed for item in uploads):
+            raise WorkflowError(
+                'One or more uploaded files are incomplete, consumed or belong to another user.')
+        files = [(item, (session.get(UploadedPath, item.id).path
+                        if session.get(UploadedPath, item.id) else item.name))
+                 for item in uploads]
+    return files
+
+
+def _rebuild(setup, item, tmp):
+    destination = Path(tmp) / (item.id + Path(item.name).suffix.lower())
+    position = 0
+    with destination.open('xb') as output:
+        while position < item.size:
+            part = setup.upload_dir / item.id / str(position)
+            if not part.is_file():
+                raise WorkflowError('A staged dataset chunk is missing.')
+            content = part.read_bytes()
+            if not content or position + len(content) > item.size:
+                raise WorkflowError('A staged dataset chunk is corrupt.')
+            output.write(content)
+            position += len(content)
+    return destination
+
+
+def _canonical(path):
+    parts = PurePosixPath(str(path).replace('\\', '/')).parts
+    if not parts:
+        raise WorkflowError('Dataset file does not have a relative path.')
     if parts[0].casefold() not in ('images', 'videos'):
         parts = parts[1:]
+    if not parts:
+        raise WorkflowError('The dataset root cannot itself be a media file.')
     return '/'.join((parts[0].casefold(), *parts[1:]))
 
 
-def upload_frame_folder(setup, gateway, actor, operation_id, upload_ids, name, fps=12, meta=None, expected_tree_hash=None):
-    """Validates, pre-encodes and uploads with an explicit remote operation log."""
-    if not upload_ids or len(upload_ids) != len(set(upload_ids)):
-        raise WorkflowError('Select a unique set of staged dataset files.')
-    if not isinstance(name, str) or not name.strip() or len(name) > 180:
-        raise WorkflowError('Enter a source project name.')
-    with setup.sessions() as session:
-        config = session.get(EventConfig, 1)
-        if not single_team(config) or not config.source_workspace_id:
-            raise WorkflowError('Configure your existing team and workspace in Settings.')
-        workspace_id, team_id = config.source_workspace_id, config.monitoring_team_id
-        uploads = [session.get(Upload, key) for key in upload_ids]
-        if any(not item or item.actor_id != actor or item.offset != item.size or item.consumed
-               for item in uploads):
-            raise WorkflowError('The dataset contains unfinished or already-used staged uploads.')
-        paths = {
-            item.id: ((session.get(UploadedPath, item.id).path
-                       if session.get(UploadedPath, item.id) else item.name))
-            for item in uploads
+def _snapshot(setup, actor, ids, mode, staging_directory, *, extract=False,
+              expected_hash=None, expected_archive_sha=None):
+    records = _staged(setup, actor, ids)
+    if mode == 'zip':
+        if len(records) != 1 or Path(records[0][1]).suffix.casefold() != '.zip':
+            raise WorkflowError('Select exactly one .zip dataset archive.')
+        archive_file = _rebuild(setup, records[0][0], staging_directory)
+        if extract:
+            if not expected_hash or not expected_archive_sha:
+                raise WorkflowError('Preview the archive before confirming upload.')
+            manifest, paths = extract_zip(
+                archive_file, Path(staging_directory) / 'archive-extracted',
+                expected_archive_sha, expected_hash)
+            return manifest, paths, {
+                'archive_sha256': expected_archive_sha,
+                'unpacked_bytes': sum(p.stat().st_size for p in paths.values()),
+            }
+        checked = inspect_zip(archive_file)
+        return checked['manifest'], {}, {
+            'archive_sha256': checked['archive_sha256'],
+            'unpacked_bytes': checked['unpacked_bytes'],
         }
-    manifest = validate_tree(list(paths.values()), require_both=True)
-    if not isinstance(expected_tree_hash, str) or expected_tree_hash != manifest['hash']:
-        raise WorkflowError('The selected folder changed after preview. Review the structure again.')
-    records = {_canonical_path(path): key for key, path in paths.items()}
-    if len(records) != len(upload_ids):
-        raise WorkflowError('Two selected files have the same dataset-relative path.')
+    if mode != 'folder':
+        raise WorkflowError('Choose Folder or ZIP for dataset upload.')
+    if any(Path(path).suffix.casefold() == '.zip' for _, path in records):
+        raise WorkflowError('Folder mode cannot include ZIP files.')
+    manifest = validate_tree([path for _, path in records], require_both=True)
+    if extract:
+        if expected_hash != manifest['hash']:
+            raise WorkflowError('Selected folder changed since preview.')
+        paths = {}
+        for item, path in records:
+            canonical = _canonical(path)
+            if canonical in paths:
+                raise WorkflowError('Two selected files share the same relative path.')
+            paths[canonical] = _rebuild(setup, item, staging_directory)
+        return manifest, paths, {'archive_sha256': None, 'unpacked_bytes':
+                                  sum(path.stat().st_size for path in paths.values())}
+    return manifest, {}, {'archive_sha256': None, 'unpacked_bytes':
+                          sum(item.size for item, _ in records)}
 
-    # Do not create a remote project until every source file is reconstructed
-    # and every video frame sequence has been encoded and frame-count-checked.
-    with tempfile.TemporaryDirectory(prefix='nightjar-event-media-') as tmp:
-        temp = Path(tmp)
-        local = {}
-        for item in uploads:
-            folder = setup.upload_dir / item.id
-            destination = temp / (item.id + Path(item.name).suffix.lower())
-            offset = 0
-            with destination.open('wb') as output:
-                while offset < item.size:
-                    block = folder / str(offset)
-                    if not block.exists():
-                        raise WorkflowError('Staged dataset file is incomplete.')
-                    data = block.read_bytes()
-                    if not data or offset + len(data) > item.size:
-                        raise WorkflowError('Corrupt staged dataset chunk.')
-                    output.write(data)
-                    offset += len(data)
-            local[_canonical_path(paths[item.id])] = destination
-        remote = [
-            (row['path'], local[row['path']]) for row in manifest['images']
-        ]
-        original_sequences = {}
-        for index, sequence in enumerate(manifest['videos']):
-            title = sequence['title']
-            generated = f"videos/{sequence['category']}/{title}.mp4"
-            if generated.casefold() in {name.casefold() for name, _ in remote}:
-                raise WorkflowError('The generated video path conflicts with an image path.')
-            destination = temp / f'video-{index:06d}.mp4'
-            encode_video([local[p] for p in sequence['frames']], destination, fps=fps)
-            remote.append((generated, destination))
-            original_sequences[generated] = sequence
-        import supervisely as sly
-        try:
-            meta = sly.ProjectMeta.from_json(meta or pilot_meta()).to_json()
-        except Exception:
-            raise WorkflowError('Invalid Supervisely annotation metadata.') from None
-        workspace = gateway.api.workspace.get_info_by_id(positive(workspace_id, 'Workspace ID'))
-        if not workspace or workspace.team_id != team_id:
-            raise WorkflowError('Configured workspace no longer belongs to the event team.')
-        details = {
-            'name': name.strip(), 'source_count':len(remote),
+
+def preview_staged(setup, actor, ids, mode):
+    with tempfile.TemporaryDirectory(prefix='nightjar-inspect-') as tmp:
+        manifest, _, extra = _snapshot(setup, actor, ids, mode, tmp)
+    return {
+        'hash': manifest['hash'],
+        'images': manifest['image_count'], 'videos': manifest['video_count'],
+        'frames': manifest['frame_count'],
+        'categories': manifest['category_count'],
+        'video_examples': [
+            {'name': row['title'], 'category': row['category'],
+             'frames': row['frame_count']}
+            for row in manifest['videos'][:12]],
+        'archive_sha256': extra['archive_sha256'],
+        'unpacked_bytes': extra['unpacked_bytes'],
+        'mode': mode,
+    }
+
+
+def _publish(setup, gateway, actor, operation_id, staged_ids, name, fps, meta,
+             manifest, paths, workspace_id, team_id, temp_dir, mode):
+    if not isinstance(name, str) or not name.strip() or len(name) > 180:
+        raise WorkflowError('Choose a name for the Supervisely source dataset.')
+    try:
+        fps = int(fps)
+    except (TypeError, ValueError):
+        raise WorkflowError('Frame rate must be between 1 and 60.') from None
+    if not 1 <= fps <= 60:
+        raise WorkflowError('Frame rate must be between 1 and 60.')
+    remote = [(row['path'], paths[row['path']]) for row in manifest['images']]
+    video_mapping = {}
+    for i, video in enumerate(manifest['videos']):
+        generated = f"videos/{video['category']}/{video['title']}.mp4"
+        output = Path(temp_dir) / f'encoded-video-{i:05d}.mp4'
+        encode_video([paths[frame] for frame in video['frames']], output, fps=fps)
+        remote.append((generated, output))
+        video_mapping[generated] = video
+
+    import supervisely as sly
+    try:
+        meta = sly.ProjectMeta.from_json(meta or pilot_meta()).to_json()
+    except Exception:
+        raise WorkflowError('Invalid Supervisely annotation schema.') from None
+    try:
+        native = gateway.api.workspace.get_info_by_id(workspace_id)
+    except Exception:
+        raise WorkflowError('Configured destination workspace is inaccessible.') from None
+    if not native or native.team_id != team_id:
+        raise WorkflowError('Configured workspace does not belong to the shared event team.')
+
+    with setup.operation(actor, operation_id, 'structured_dataset_upload', {
+            'mode':mode, 'tree_hash':manifest['hash'],
             'image_count':manifest['image_count'],
             'video_count':manifest['video_count'],
-            'original_frame_count':manifest['frame_count'],
-            'tree_hash':manifest['hash'], 'fps':int(fps),
-        }
-        with setup.operation(actor, operation_id, 'structured_dataset_upload', details) as checkpoint:
-            # Mark inputs consumed before an irreversible remote write.
-            with setup.sessions.begin() as session:
-                for item in uploads:
-                    changed = session.execute(update(Upload).where(
-                        Upload.id == item.id, Upload.consumed.is_(False)
-                    ).values(consumed=True))
-                    if changed.rowcount != 1:
-                        raise WorkflowError('A staged file was already consumed by another upload.')
-            result = gateway.upload(
-                team_id, workspace_id, name.strip(), 'mixed',
-                remote, meta, checkpoint
-            )
-            records_by_path = {row['relative_path']: row for row in result['sources']}
-            with setup.sessions.begin() as session:
-                for row in result['sources']:
-                    session.merge(SourceOrigin(**row))
-                for generated, sequence in original_sequences.items():
-                    uploaded = records_by_path.get(generated)
-                    if not uploaded:
-                        raise WorkflowError(
-                            'A converted source video is missing from the upload response.'
-                        )
-                    session.add(MediaSequence(
-                        source_id=uploaded['source_id'],
-                        source_folder=sequence['source_folder'],
-                        category=sequence['category'],
-                        title=sequence['title'],
-                        frame_paths=sequence['frames'],
-                        frame_count=sequence['frame_count'],
-                        fps=int(fps),
-                    ))
-            checkpoint({'committed_source_assets':len(result['sources'])})
-        # Never delete staging data after an uncertain remote operation.
-        for item in uploads:
-            import shutil
-            shutil.rmtree(setup.upload_dir / item.id, ignore_errors=True)
-    return {**result, 'manifest':{
+            'frame_count':manifest['frame_count'],
+            'fps':fps}) as checkpoint:
+        with setup.sessions.begin() as session:
+            for uid in staged_ids:
+                updated = session.execute(update(Upload).where(
+                    Upload.id == uid, Upload.actor_id == actor,
+                    Upload.consumed.is_(False)).values(consumed=True))
+                if updated.rowcount != 1:
+                    raise WorkflowError('A staged dataset file was already used.')
+        uploaded = gateway.upload(team_id, workspace_id, name.strip(),
+                                  'mixed', remote, meta, checkpoint)
+        source_map = {r['relative_path']: r for r in uploaded['sources']}
+        with setup.sessions.begin() as session:
+            for source in uploaded['sources']:
+                session.merge(SourceOrigin(**source))
+            for generated, video in video_mapping.items():
+                source = source_map.get(generated)
+                if not source:
+                    raise WorkflowError('Native video upload did not return a source ID.')
+                session.merge(MediaSequence(
+                    source_id=source['source_id'],
+                    source_folder=video['source_folder'],
+                    category=video['category'], title=video['title'],
+                    frame_paths=video['frames'],
+                    frame_count=video['frame_count'], fps=fps,
+                ))
+        checkpoint({'committed_source_assets':len(uploaded['sources'])})
+    for uid in staged_ids:
+        shutil.rmtree(setup.upload_dir / uid, ignore_errors=True)
+    return {**uploaded, 'manifest': {
         'image_count':manifest['image_count'],
         'video_count':manifest['video_count'],
         'frame_count':manifest['frame_count'],
         'tree_hash':manifest['hash'],
+        'mode':mode,
     }}
+
+
+def upload_structured(setup, gateway, actor, operation_id, upload_ids,
+                      mode, name, fps, meta, expected_tree_hash,
+                      expected_archive_sha256=None):
+    with setup.sessions() as session:
+        config = session.get(EventConfig, 1)
+        if not single_team(config) or not config.source_workspace_id:
+            raise WorkflowError('Configure the existing team and workspace in Settings.')
+        team_id = config.monitoring_team_id
+        workspace_id = config.source_workspace_id
+    if not isinstance(expected_tree_hash, str) or len(expected_tree_hash) != 64:
+        raise WorkflowError('Inspect the dataset before confirming upload.')
+    # Check path and archive hash again before any remote upload.
+    with tempfile.TemporaryDirectory(prefix='nightjar-dataset-') as tmp:
+        manifest, paths, _ = _snapshot(
+            setup, actor, upload_ids, mode, tmp,
+            extract=True, expected_hash=expected_tree_hash,
+            expected_archive_sha=expected_archive_sha256
+        )
+        return _publish(
+            setup, gateway, actor, operation_id, upload_ids, name, fps, meta,
+            manifest, paths, workspace_id, team_id, tmp, mode
+        )
