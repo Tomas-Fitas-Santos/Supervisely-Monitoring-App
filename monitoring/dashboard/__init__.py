@@ -10,11 +10,14 @@ class Dashboard(Widget):
         JinjaWidgets().context['__widget_scripts__']['NightjarSetup'] = './static/setup.js'
         JinjaWidgets().context['__widget_scripts__']['NightjarConnection'] = './static/connection.js'
         JinjaWidgets().context['__widget_scripts__']['NightjarCompetition'] = './static/competition.js'
+        JinjaWidgets().context['__widget_scripts__']['NightjarAttendance'] = './static/attendance.js'
 
     def get_json_data(self):
         return {'snapshot': {'teams': []}, 'message': '', 'error': False, 'links': [],
                 'connected': False, 'directory': {}, 'sources': {}, 'review_preview': None,
-                'competition': {}, 'registration_rows': [], 'unit_page': {}, 'leaderboard': [], 'simulator': False, 'pilot': False,
+                'competition': {}, 'registration_rows': [], 'attendance': {'teams': [], 'monitors': [], 'summary': {}},
+                'roster_plan_id': None, 'roster_balance_preview': None,
+                'unit_page': {}, 'leaderboard': [], 'simulator': False, 'pilot': False,
                 'export_data': None, 'closed': False,
                 'inventory': [],
                 'can_setup': False, 'setup': {}, 'catalog': {}, 'upload_offset': 0, 'plan_id': None,
