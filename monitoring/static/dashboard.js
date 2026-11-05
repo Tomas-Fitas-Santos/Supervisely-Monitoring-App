@@ -3,7 +3,7 @@ Vue.component('nightjar-dashboard', {
   props: ['view', 'form', 'post'],
   data() {
     return { selectedTeam: null, selectedBatch: null, search: '', attentionOnly: false,
-      entity: null, frame: 0, note: '', decision: 'accepted', busy: false, timer: null, tab: 'roster', setupBusy: false, clientError: '', showOriginal: false, demoMonitorId: 900, organiserView: false };
+      entity: null, frame: 0, note: '', decision: 'accepted', busy: false, timer: null, tab: 'roster', setupBusy: false, clientError: '', showOriginal: false, demoMonitorId: 900, organiserView: false, theme: 'light' };
   },
   computed: {
     teams() { return this.view.snapshot.teams || []; },
@@ -37,6 +37,10 @@ Vue.component('nightjar-dashboard', {
     batchStatus(b) { return b.state === 'approved' ? 'Approved' : b.submitted ? 'Submitted for review' : b.state === 'active' ? 'In progress' : b.state === 'locked' ? 'Not released' : 'Release needs reconciliation'; },
     participantName(uid) { const u = (this.view.directory?.annotators || []).find(u => u.id === uid); return u ? u.name + ' (' + u.login + ')' : 'Participant ' + uid; },
     async changeTab(tab) { if (this.busy || this.setupBusy) return; this.tab = tab; this.clientError = ''; if (tab === 'monitoring') await this.send('refresh'); },
+    toggleTheme() {
+      this.theme = this.theme === 'dark' ? 'light' : 'dark';
+      try { localStorage.setItem('nightjar-theme', this.theme); } catch (_) {}
+    },
     async reload() { if (this.tab === 'monitoring' || !this.view.connected) return this.send('refresh'); if (this.busy || this.setupBusy) return; this.busy = true; try { Object.assign(this.form, {setup_action:'overview'}); await this.post('/setup/action'); } catch (e) { this.clientError = 'Could not reload the event. Try again.'; } finally { this.busy = false; } },
     reviewAs(decision) { this.decision = decision; if (decision === 'accepted' && !this.note.trim()) this.note = this.batch.kind === 'video' ? 'Reviewed frame ' + Number(this.frame) + '.' : 'Reviewed image.'; return this.send('review'); },
     chooseReview(r) { this.entity = r.entity_id; this.frame = r.frame_index >= 0 ? r.frame_index : 0; this.note = r.note; },
@@ -54,26 +58,38 @@ Vue.component('nightjar-dashboard', {
     }
   },
   mounted() {
-    this.send('refresh').then(() => { if (this.view.connected && !this.view.can_setup) this.tab = 'monitoring'; });
+    try {this.theme = localStorage.getItem('nightjar-theme') === 'dark' ? 'dark' : 'light';}
+    catch (_) {this.theme = 'light';}
+    this.send('refresh').then(() => {
+      if (this.view.connected && !this.view.can_setup) this.tab = 'monitoring';
+      if (this.view.connected && this.view.can_setup && !this.view.event_settings?.single_team)
+        this.tab = 'settings';
+    });
     this.timer = setInterval(() => { if (!document.hidden && !this.busy && this.tab === 'monitoring') this.send('refresh'); }, 60000);
   },
   beforeDestroy() { clearInterval(this.timer); },
   template: `
-  <main class="nj-app">
+  <main class="nj-app" :data-theme="theme">
     <header class="nj-header"><div><div class="nj-eyebrow">TÉCNICO · NIGHTJAR ANNOTATIATHON</div><h1>{{view.competition && view.competition.rules ? view.competition.rules.name : 'Annotation event'}}</h1><p>Organize people, prepare data and review annotation progress.</p></div>
-      <div class="nj-refresh"><span>Updated {{ time(view.snapshot.refreshed_at) }}</span><button @click="reload" :disabled="busy || setupBusy">{{ tab === 'monitoring' ? 'Refresh monitoring' : 'Refresh event' }}</button></div></header>
-    <nightjar-connection v-if="!view.simulator && view.connection && view.connection.local" :connection="view.connection" @connected="send('refresh').then(() => { if (view.can_setup) tab = 'roster'; })"></nightjar-connection>
+      <div class="nj-refresh"><span>Updated {{ time(view.snapshot.refreshed_at) }}</span>
+      <button @click="toggleTheme" :aria-label="theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'">
+        {{theme === 'dark' ? '☀ Light mode' : '☾ Dark mode'}}
+      </button>
+      <button @click="reload" :disabled="busy || setupBusy">{{ tab === 'monitoring' ? 'Refresh monitoring' : 'Refresh event' }}</button></div></header>
+    <nightjar-connection v-if="!view.simulator && view.connection && view.connection.local && (!view.connected || tab === 'settings')" :connection="view.connection" @connected="send('refresh').then(() => { if (view.can_setup) tab = 'roster'; })"></nightjar-connection>
     <div v-if="view.simulator" class="nj-panel nj-caution"><strong>Offline simulator — no real Supervisely resources</strong><p>The photos and supplied roster emails are real. Native account IDs, logins, jobs and example labels are simulated; no network requests are sent to Supervisely. Use --demo for the live sample demonstration. This simulator uses a separate database.</p><p v-if="view.simulator_roster_outdated" class="nj-caution">This saved demo uses an older roster. Reset this demo with a backup to load the requested TEAM 1 and TEAM 2.</p><label>View as<select aria-label="Demo role" v-model="demoMonitorId" @change="selectedTeam=null;selectedBatch=null;send('refresh')"><option :value="900">Demo organiser</option><option :value="901">Demo monitor (simulated)</option></select></label><button v-if="view.can_setup && !(view.directory.teams||[]).length && !(view.registration_rows||[]).length" class="nj-primary" @click="adminAction('demo_prepare')" :disabled="busy || setupBusy">Prepare working presentation</button><button v-if="view.can_setup" @click="adminAction('demo_reset')" :disabled="busy || setupBusy">Reset this demo (previous results are backed up)</button></div>
-    <div v-if="view.pilot" class="nj-panel nj-caution"><strong>Live sample demo — real Supervisely resources</strong><p>Connect the organiser account, load the sample CSV, create teams and invite their members. After the annotators accept in Supervisely, refresh invitations. In Dataset, load the bundled bird photos and distribute them. In Monitoring, release the real labeling jobs. Participants annotate and submit in Supervisely; return here to review their work. Demo and Pilot share this live workflow and saved setup.</p></div>
+    <div v-if="view.pilot" class="nj-panel nj-caution"><strong>Live DEMO — real Supervisely invitations</strong><p>Configure the pre-existing event team and workspace in Settings, then import the demo registration Excel/CSV. Email invitations, acceptance checks and membership status work exactly as in PRODUCTION. The previous sample setup shortcut is disabled.</p></div>
     <p v-if="view.closed" class="nj-caution">Event closed: current native jobs have been stopped. Review and final scoring can continue.</p>
     <nav class="nj-tabs" aria-label="Main app tabs" role="tablist">
       <button role="tab" :aria-selected="tab === 'roster'" :disabled="busy || setupBusy" :class="{selected: tab === 'roster'}" @click="changeTab('roster')">Monitors & Teams</button>
       <button role="tab" :aria-selected="tab === 'dataset'" :disabled="busy || setupBusy" :class="{selected: tab === 'dataset'}" @click="changeTab('dataset')">Dataset</button>
       <button role="tab" :aria-selected="tab === 'checkin'" :disabled="busy || setupBusy" :class="{selected: tab === 'checkin'}" @click="changeTab('checkin')">Participant Check-in</button>
-      <button role="tab" :aria-selected="tab === 'monitoring'" :disabled="busy || setupBusy" :class="{selected: tab === 'monitoring'}" @click="changeTab('monitoring')">Monitoring</button></nav>
+      <button role="tab" :aria-selected="tab === 'monitoring'" :disabled="busy || setupBusy" :class="{selected: tab === 'monitoring'}" @click="changeTab('monitoring')">Monitoring</button>
+      <button role="tab" :aria-selected="tab === 'settings'" :disabled="busy || setupBusy" :class="{selected: tab === 'settings'}" @click="changeTab('settings')">Settings</button></nav>
     <div v-if="view.message" class="nj-message" :class="{'nj-error': view.error}" role="status">{{ view.message }}</div><div v-if="clientError" class="nj-message nj-error" role="alert">{{ clientError }}</div>
     <keep-alive><nightjar-management v-if="(tab === 'roster' || tab === 'dataset') && (view.connected || view.connection.local)" :key="tab" :section="tab" :view="view" :form="form" :post="post" :locked="busy" @busy="setupBusy = $event"></nightjar-management></keep-alive>
     <event-attendance v-if="tab === 'checkin' && view.connected" :view="view" :form="form" :post="post" :locked="busy || setupBusy"></event-attendance>
+    <event-settings v-if="tab === 'settings' && view.connected" :view="view" :form="form" :post="post" :locked="busy || setupBusy"></event-settings>
     <section v-if="tab !== 'monitoring' && !view.connected && !view.connection.local" class="nj-empty"><h2>Connect to start your event</h2><p>Open this shared session through your Supervisely monitoring team.</p></section>
     <template v-if="tab === 'monitoring'"><div v-if="view.competition && view.competition.rules" class="nj-panel"><h3>Competition standings</h3><label v-if="view.can_setup" class="nj-check"><input type="checkbox" v-model="organiserView" @change="selectedTeam=null;selectedBatch=null;send('refresh')">Organiser oversight: inspect all teams and adjudicate judgments</label><p class="nj-muted">{{view.competition.rules.mode}} scoring · {{view.competition.rules.ranking}} ranking. Pending judgments are excluded. Standings are provisional until closure and complete judging.</p><div class="nj-table-scroll"><table class="nj-table"><thead><tr><th>Rank</th><th>Team</th><th>Points</th><th>Good / bad / missing</th><th>Pending</th><th>Accuracy</th></tr></thead><tbody><tr v-for="row in view.leaderboard || []" :key="row.team_id"><td>{{row.provisional?'—':row.position}}</td><td>{{row.team}}</td><td>{{row.points}}</td><td>{{row.good}} / {{row.bad}} / {{row.missing}}</td><td>{{row.pending}}</td><td>{{row.accuracy===null?'—':(100*row.accuracy).toFixed(1)+'%'}}</td></tr></tbody></table></div><div v-if="view.can_setup" class="nj-actions"><button @click="adminAction('export_all')" :disabled="busy || setupBusy">Download complete event records</button><button @click="adminAction('close_event')" :disabled="busy || setupBusy || view.closed || !view.competition.frozen">Close event: stop jobs and capture final state</button></div></div>
       <div class="nj-section-heading"><div><h2>Monitoring</h2><p class="nj-muted">Select one of your assigned teams, inspect its current or submitted batches, and review images or video frames.</p></div></div>
