@@ -114,6 +114,30 @@ class EventConfig(Base):
     local_token: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
+class EventPreferences(Base):
+    """Per-event binding revision and currently authenticated local user."""
+    __tablename__ = 'event_preferences'
+    id: Mapped[int] = mapped_column(primary_key=True)
+    revision: Mapped[int] = mapped_column(default=0)
+    active_local_user_id: Mapped[int | None] = mapped_column(nullable=True)
+    active_local_login: Mapped[str | None] = mapped_column(String(180), nullable=True)
+    membership_synced_at: Mapped[int | None] = mapped_column(nullable=True)
+
+
+class SharedInvitation(Base):
+    """One native invitation per email in one configured event-wide team."""
+    __tablename__ = 'shared_invitations'
+    team_id: Mapped[int] = mapped_column(primary_key=True)
+    email: Mapped[str] = mapped_column(String(254), primary_key=True)
+    status: Mapped[str] = mapped_column(String(30), default='not_invited')
+    user_id: Mapped[int | None] = mapped_column(nullable=True)
+    login: Mapped[str | None] = mapped_column(String(180), nullable=True)
+    effective_role: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    error: Mapped[str] = mapped_column(Text, default='')
+    invited_at: Mapped[int | None] = mapped_column(nullable=True)
+    checked_at: Mapped[int | None] = mapped_column(nullable=True)
+
+
 class EventMember(Base):
     __tablename__ = "event_members"
     user_id: Mapped[int] = mapped_column(primary_key=True)
@@ -265,5 +289,7 @@ def initialize(engine):
             session.add(SetupState(id=1))
         if not session.get(EventConfig, 1):
             session.add(EventConfig(id=1))
+        if not session.get(EventPreferences, 1):
+            session.add(EventPreferences(id=1))
         if not session.get(CompetitionConfig, 1):
             session.add(CompetitionConfig(id=1, rules={}))
