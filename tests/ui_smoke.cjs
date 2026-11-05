@@ -9,7 +9,7 @@ global.crypto = require('crypto').webcrypto; global.FileReader = dom.window.File
 const Vue = require('vue/dist/vue.common.js');
 global.Vue = Vue; Vue.config.productionTip = false; Vue.config.devtools = false;
 const warnings = []; Vue.config.warnHandler = message => warnings.push(message);
-for (const name of ['connection.js','competition.js','setup.js','dashboard.js']) {
+for (const name of ['connection.js','competition.js','attendance.js','setup.js','dashboard.js']) {
   eval(fs.readFileSync(path.join(__dirname, '..', 'monitoring', 'static', name), 'utf8'));
 }
 const people = [
@@ -54,7 +54,7 @@ function management(dashboard) { return dashboard.$children.find(c=>c.$options.n
 (async()=>{
   const admin=mount('#admin',90,true), monitor=mount('#monitor',91,false);await settle();
   const d=admin.$children[0], other=monitor.$children[0];
-  assert.deepStrictEqual(Array.from(admin.$el.querySelectorAll('[role="tab"]')).map(b=>b.textContent),['Monitors & Teams','Dataset','Monitoring']);
+  assert.deepStrictEqual(Array.from(admin.$el.querySelectorAll('[role="tab"]')).map(b=>b.textContent),['Monitors & Teams','Dataset','Participant Check-in','Monitoring']);
   assert(calls.some(c=>c.uid===90 && c.form.setup_action==='catalog'),'Initial catalogue must load after parent refresh unlocks.');
   let roster=management(d);assert(roster);assert(admin.$el.textContent.includes('All participant teams'));
   roster.chooseMonitor(monitors[0]);await settle();
@@ -75,6 +75,8 @@ function management(dashboard) { return dashboard.$children.find(c=>c.$options.n
   dataset.selectedDatasets=[50];dataset.selectedTeams=[101];dataset.imageUnits=1;dataset.batchUnits=2;await dataset.plan();
   assert(calls.some(c=>c.form.setup_action==='preview' && c.form.dataset_ids[0]===50));
   await d.changeTab('roster');await settle();assert(management(d)===roster,'Roster selections must survive tab switches.');assert(roster.selectedMonitor===90);
+  await d.changeTab('checkin');await settle();
+  assert(admin.$el.textContent.includes('Participant check-in'));
   await d.changeTab('monitoring');await settle();
   assert(d.workingBatches.length===1 && d.submittedBatches.length===1 && d.upcomingBatches.length===1);
   assert(admin.$el.textContent.includes('Current batches'));assert(admin.$el.textContent.includes('Submitted batches'));assert(admin.$el.textContent.includes('Upcoming batches'));
@@ -90,5 +92,5 @@ function management(dashboard) { return dashboard.$children.find(c=>c.$options.n
   assert(roster.selectedMonitor===90 && management(other).selectedMonitor===null,'Browsers must retain independent selections.');
   assert(warnings.length===0,warnings.join('\n'));
   admin.$destroy();monitor.$destroy();
-  console.log('Three-tab UI: directory, assignments, participant entry, upload/distribution, batch groups, frame review and browser isolation passed.');
+  console.log('Four-tab UI: directory, assignments, participant entry, upload/distribution, batch groups, frame review and browser isolation passed.');
 })().catch(error=>{console.error(error);process.exit(1)});
