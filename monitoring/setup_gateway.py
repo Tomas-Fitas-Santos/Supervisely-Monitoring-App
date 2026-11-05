@@ -62,14 +62,36 @@ class SetupGateway(Gateway):
             )
         return str(matches[0].login) or email
 
-    def invite_email(self, team_id, email, role):
+    def invite_email(self, team_id, email, role, login=None):
         """Request a real native team invitation for a registered email identity.
 
         The official members.add endpoint requires a user login. Resolve the
         exact login from the verified registered email when permission permits;
         never infer acceptance from the invitation response.
         """
-        login = self._verified_login_for_email(email)
+        if login:
+            # The organiser supplied a native login explicitly in the roster.
+            # Check the profile before writing; never guess it from an email.
+            login = str(login).strip()
+            try:
+                person = self.api.user.get_info_by_login(login)
+            except Exception:
+                raise InvitationRejected(
+                    'The CSV Supervisely login could not be verified. Confirm '
+                    'that this account exists on the current server.'
+                ) from None
+            if not person or getattr(person, 'disabled', False):
+                raise InvitationRejected(
+                    'The CSV Supervisely login is unavailable or disabled.'
+                )
+            email_on_profile = str(getattr(person, 'email', '') or '').strip().casefold()
+            if email_on_profile and email_on_profile != str(email).strip().casefold():
+                raise InvitationRejected(
+                    'The CSV login belongs to an account with a different registered '
+                    'email. Correct the roster before sending invitations.'
+                )
+        else:
+            login = self._verified_login_for_email(email)
         try:
             result = self.api.post('members.add', {'teamId': int(team_id), 'login': login,
                                                   'roleId': self.role_id(role)}, retries=1).json()
