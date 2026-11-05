@@ -78,7 +78,8 @@ class SharedTeamInvitations:
                             next((p.get('role', 'participant') for p in reg.members
                                   if normal_email_or_blank(p.get('email')) == email), 'monitor'))
                     native_role = (target.native_role if target else
-                                   'manager' if role != 'participant' else 'annotator')
+                                   'reviewer' if role == 'participant_monitor' else
+                                   'manager' if role == 'monitor' else 'annotator')
                     members.append({
                         'email': email,
                         'login': target.login if target else '',
