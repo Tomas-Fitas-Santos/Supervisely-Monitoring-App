@@ -514,25 +514,27 @@ def setup_action(request: Request):
         elif name == 'rules':
             Competition(sessions).save_rules(uid, f['rules_revision'], f['rules'], f.get('freeze_rules') is True)
             message = 'Event rules frozen.' if f.get('freeze_rules') else 'Event rules saved.'
-        elif name == 'media_tree_preview':
-            from .media_manifest import validate_tree
-            manifest = validate_tree(f['relative_paths'], require_both=True)
-            data['media_preview'] = {
-                'hash': manifest['hash'], 'images': manifest['image_count'],
-                'videos': manifest['video_count'], 'frames': manifest['frame_count'],
-                'categories': manifest['category_count'],
-                'video_examples': [
-                    {'name':v['title'], 'category':v['category'],
-                     'frames':v['frame_count']} for v in manifest['videos'][:12]
-                ],
-            }
-            message = 'Dataset hierarchy verified. Confirm the preview before uploading.'
+        elif name == 'media_staged_preview':
+            from .structured_upload import preview_staged
+            preview = preview_staged(
+                setup, uid, f['upload_ids'], f['source_mode'])
+            data['media_preview'] = preview
+            message = (
+                f"Preview: {preview['images']} images, {preview['videos']} complete "
+                f"videos ({preview['frames']} frames) in {preview['categories']} categories. "
+                "Confirm to upload these sources to Supervisely."
+            )
         elif name == 'structured_upload':
-            from .structured_upload import upload_frame_folder
-            result = upload_frame_folder(
+            from .structured_upload import upload_structured
+            if (not data.get('media_preview')
+                    or data['media_preview']['hash'] != f.get('manifest_hash')
+                    or data['media_preview']['mode'] != f.get('source_mode')):
+                raise WorkflowError(
+                    'Preview this exact dataset before confirming its Supervisely upload.')
+            result = upload_structured(
                 setup, gateway, uid, f['operation_id'],
-                f['upload_ids'], f['name'], f.get('fps', 12),
-                f.get('meta'), f.get('manifest_hash')
+                f['upload_ids'], f['source_mode'], f['name'], f.get('fps', 12),
+                f.get('meta'), f.get('manifest_hash'), f.get('archive_sha256')
             )
             data['catalog'] = gateway.catalog(setup.monitoring_team_id)
             data['media_preview'] = None
