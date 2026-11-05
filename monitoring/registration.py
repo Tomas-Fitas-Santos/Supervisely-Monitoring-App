@@ -3,8 +3,9 @@ import csv
 import hashlib
 import io
 from sqlalchemy import select
-from .db import Audit, EventInvitee, Registration, SharedInvitation, Team, TeamOnboarding
+from .db import Audit, EventConfig, EventInvitee, Registration, SharedInvitation, Team, TeamOnboarding
 from .service import WorkflowError
+from .event_settings import single_team
 
 COLUMNS = ['team_name', 'member_1_email', 'member_2_email', 'member_1_name', 'member_2_name',
            'member_1_login', 'member_2_login', 'member_1_role', 'member_2_role',
@@ -64,8 +65,19 @@ class Registrations:
         Native Admin is NEVER granted by CSV.
         """
         headers, raw = self.columns(text)
+        with self.sessions() as session:
+            strict_roles = single_team(session.get(EventConfig, 1))
         if not isinstance(mapping, dict) or set(mapping) - set(COLUMNS + PERSON_COLUMNS):
             raise WorkflowError('Invalid CSV column mapping.')
+        if strict_roles:
+            role_fields = ('participant_role',) if mapping.get('participant_email') else (
+                'member_1_role', 'member_2_role'
+            )
+            if any(mapping.get(field) not in headers for field in role_fields):
+                raise WorkflowError(
+                    'The one-team event CSV must explicitly declare every '
+                    'participant role before any invitation is sent.'
+                )
         if mapping.get('participant_email'):
             if mapping.get('team_name') not in headers or mapping['participant_email'] not in headers:
                 raise WorkflowError('Map the team and participant email columns.')
@@ -119,8 +131,11 @@ class Registrations:
                     'login': row[f'member_{i}_login'], 'role': role,
                     'user_id': None, 'status': 'unresolved',
                 })
-            if not members:
-                raise WorkflowError(f'Row {number}: at least one participant is required.')
+            if not members or (strict_roles and len(members) != 2):
+                raise WorkflowError(
+                    f'Row {number}: every competition pair must contain '
+                    'exactly two distinct participants.'
+                )
             manager = row['monitor_email'].casefold()
             if row['monitor_login'] and not manager:
                 raise WorkflowError(
