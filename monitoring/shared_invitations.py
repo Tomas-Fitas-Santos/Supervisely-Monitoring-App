@@ -172,6 +172,10 @@ class SharedTeamInvitations:
                     if native is None:
                         if row.status in ('pending', 'accepted'):
                             row.status = 'not_found'
+                        if row.user_id and row.user_id != config.owner_id:
+                            former = session.get(EventMember, int(row.user_id))
+                            if former and former.group == 'monitors':
+                                former.group = 'annotators'
                         row.checked_at = now_at
                         continue
                     uid = native.get('userId') or native.get('id')
@@ -223,6 +227,10 @@ class SharedTeamInvitations:
                 except WorkflowError as exc:
                     row.status = 'identity_conflict'
                     row.error = str(exc)
+                    if row.user_id and row.user_id != config.owner_id:
+                        former = session.get(EventMember, int(row.user_id))
+                        if former and former.group == 'monitors':
+                            former.group = 'annotators'
                 row.checked_at = now_at
 
             # Reflect verified native account identity in the logical pair,
