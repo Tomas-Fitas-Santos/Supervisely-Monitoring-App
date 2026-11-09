@@ -1,2 +1,2 @@
-team_name,monitor_email,member_1_name,member_1_email,member_1_login,member_2_name,member_2_email,member_2_login
-DEMO PAIR,,Participant 1,tomas.gaming.21@gmail.com,,Participant 2,tomas.santos.work2002@gmail.com,
+team_name,monitor_email,monitor_login,member_1_name,member_1_email,member_1_login,member_1_role,member_2_name,member_2_email,member_2_login,member_2_role
+DEMO PAIR,,,Participant 1,tomas.gaming.21@gmail.com,,participant_monitor,Participant 2,tomas.santos.work2002@gmail.com,,participant_monitor

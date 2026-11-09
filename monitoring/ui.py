@@ -99,6 +99,15 @@ def identity(request):
     if config.monitoring_team_id:
         gateway.member(config.monitoring_team_id, uid)
         member = api.user.get_member_info_by_id(config.monitoring_team_id, uid)
+        if single_team(config):
+            native_role = str(getattr(member, 'role', '') or '').lower()
+            if uid == config.owner_id and native_role != 'admin':
+                raise WorkflowError('The event organiser must retain native Supervisely Admin permission.')
+            if uid != config.owner_id and native_role not in ('admin', 'manager', 'developer', 'reviewer'):
+                raise WorkflowError(
+                    'This account no longer has the native staff role required to monitor. '
+                    'An organiser must review the CSV and Supervisely team membership.'
+                )
         with sessions() as s:
             roster_member = s.get(EventMember, uid)
             if roster_member and roster_member.group == 'annotators':
@@ -170,6 +179,7 @@ def display_access(uid, gateway):
                 shared_team_id=result.get('team_id'),
                 memberships=result.get('memberships', []),
                 membership_status=result.get('membership_status', 'not_invited'),
+                ready=result.get('membership_status') == 'ready',
                 checked_at=result.get('checked_at'),
                 error=result.get('error') or row['error']
             )

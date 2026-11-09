@@ -81,7 +81,8 @@ class EventRoster:
             # This does not grant them native Supervisely permissions.
             for reg in session.scalars(select(Registration)):
                 for person in EventRoster._people(reg):
-                    if person.get("user_id") and person.get("status") in ("accepted", "verified", "matched"):
+                    if (person.get("user_id") and person.get("status") == "accepted"
+                            and person.get("role") == "participant_monitor"):
                         pid = int(person["user_id"])
                         monitors.setdefault(pid, {
                             "id": pid, "name": person.get("name") or person["email"],
@@ -102,7 +103,8 @@ class EventRoster:
                 assigned = self._assigned_id(session, reg)
                 members = self._people(reg)
                 demo_member = self._demo_dual_role() and any(
-                    int(m.get("user_id") or 0) == int(actor) for m in members
+                    (m.get("role") == "participant_monitor" and m.get("status") == "accepted"
+                     and int(m.get("user_id") or 0) == int(actor)) for m in members
                 )
                 if not organiser and assigned != actor and not demo_member:
                     continue
@@ -164,7 +166,8 @@ class EventRoster:
             if email not in {p["email"].strip().casefold() for p in members}:
                 raise WorkflowError("Participant is not registered for this team.")
             demo_member = self._demo_dual_role() and any(
-                int(m.get("user_id") or 0) == actor for m in members
+                (m.get("role") == "participant_monitor" and m.get("status") == "accepted"
+                 and int(m.get("user_id") or 0) == actor) for m in members
             )
             if not organiser and self._assigned_id(session, reg) != actor and not demo_member:
                 raise WorkflowError("Only the assigned monitor may check in this team.")

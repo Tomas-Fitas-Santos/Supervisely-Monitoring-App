@@ -83,21 +83,20 @@ Vue.component('event-settings', {
         the workspace is blocked after dataset import or distribution.</p>
     </div>
     <div class="nj-panel">
-      <h3>Register monitoring staff</h3>
-      <p class="nj-muted">Invite the monitor to the same team and wait for them to
-        accept. Then enter their verified Supervisely User ID to grant app-level
-        monitoring access. All app roles remain limited by native permissions.</p>
+      <h3>CSV-declared monitoring staff</h3>
+      <p class="nj-muted">Import roles in Monitors &amp; Teams first. The app invites each
+        CSV-declared monitor with the corresponding native role and registers
+        monitoring access after acceptance. The control below can reconcile
+        an already accepted CSV-declared monitor by their real User ID;
+        it does not elevate someone who is missing from the roster.</p>
       <div class="nj-form-row">
         <label>Monitor User ID
           <input v-model="monitorId" type="number" min="1" step="1"
             :disabled="busy||locked||!isAdmin" autocomplete="off"></label>
       </div>
-      <label v-if="view.pilot" class="nj-check">
-        <input type="checkbox" v-model="demoDualRole" :disabled="busy||locked">
-        DEMO only: permit an accepted annotator to appear on the monitoring roster
-      </label>
+
       <button v-if="isAdmin" @click="addMonitor"
-        :disabled="busy||locked||!nativeReady||!monitorId">Register monitor</button>
+        :disabled="busy||locked||!nativeReady||!monitorId">Reconcile registered monitor</button>
     </div>
     <p class="nj-muted">Theme is selected in the main header and is stored locally
       in this browser. It does not change event records or account permissions.</p>

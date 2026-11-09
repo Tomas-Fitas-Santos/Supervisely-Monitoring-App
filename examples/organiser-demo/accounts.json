@@ -1,8 +1,8 @@
 {
-  "organiser_email": "tomas.bf.santos@gmail.com",
+  "organiser_email": "tomas.dos.santos@tecnico.ulisboa.pt",
   "participant_emails": [
     "tomas.gaming.21@gmail.com",
     "tomas.santos.work2002@gmail.com"
   ],
-  "note": "Both genuine Supervisely participant accounts belong to one logical DEMO competition pair within one pre-created native Supervisely team. Invites must be sent by email and accepted individually. Both may be approved as DEMO monitors only after native membership and permissions are verified. No API keys are stored here."
+  "note": "Organiser is authenticated using the personal Supervisely User ID and API token for the Técnico account. Both real participant emails belong to one logical DEMO pair inside one pre-existing native team. Native invitations require real registered Supervisely identities and may require account logins rather than email identifiers, depending on the instance. No API keys are stored here."
 }

@@ -3,11 +3,32 @@ import csv
 import hashlib
 import io
 from sqlalchemy import select
-from .db import Audit, Registration, Team, TeamOnboarding
+from .db import Audit, EventConfig, EventInvitee, Registration, SharedInvitation, Team, TeamOnboarding
 from .service import WorkflowError
+from .event_settings import single_team
 
-COLUMNS = ['team_name', 'member_1_email', 'member_2_email', 'member_1_name', 'member_2_name', 'member_1_login', 'member_2_login', 'monitor_email']
-PERSON_COLUMNS = ['team_name', 'participant_email', 'participant_name', 'participant_login']
+COLUMNS = ['team_name', 'member_1_email', 'member_2_email', 'member_1_name', 'member_2_name',
+           'member_1_login', 'member_2_login', 'member_1_role', 'member_2_role',
+           'monitor_email', 'monitor_login']
+PERSON_COLUMNS = ['team_name', 'participant_email', 'participant_name', 'participant_login',
+                  'participant_role']
+
+ROLE_ALIASES = {
+    'participant': 'participant', 'annotator': 'participant',
+    'participant_monitor': 'participant_monitor', 'participant+monitor': 'participant_monitor',
+    'annotator+monitor': 'participant_monitor', 'both': 'participant_monitor',
+}
+
+
+def participant_role(raw, required=False):
+    role = str(raw or '').strip().casefold().replace(' ', '_')
+    if not role and not required:
+        return 'participant'  # Legacy files without a role column.
+    if role not in ROLE_ALIASES:
+        raise WorkflowError('Use participant or participant_monitor for every pair member. '
+                            'Use monitor_email for monitor-only staff.')
+    return ROLE_ALIASES[role]
+
 
 
 class Registrations:
@@ -36,15 +57,33 @@ class Registrations:
         return reader.fieldnames, rows
 
     def import_csv(self, actor, text, mapping):
+        """Import declared event roles before any native invitations are sent.
+
+        The pair row lists two participants, who can independently have
+        monitoring duties (participant_monitor). The optional monitor_email
+        identifies a separate monitor, reusable across multiple pairs.
+        Native Admin is NEVER granted by CSV.
+        """
         headers, raw = self.columns(text)
+        with self.sessions() as session:
+            strict_roles = single_team(session.get(EventConfig, 1))
         if not isinstance(mapping, dict) or set(mapping) - set(COLUMNS + PERSON_COLUMNS):
             raise WorkflowError('Invalid CSV column mapping.')
+        if strict_roles:
+            role_fields = ('participant_role',) if mapping.get('participant_email') else (
+                'member_1_role', 'member_2_role'
+            )
+            if any(mapping.get(field) not in headers for field in role_fields):
+                raise WorkflowError(
+                    'The one-team event CSV must explicitly declare every '
+                    'participant role before any invitation is sent.'
+                )
         if mapping.get('participant_email'):
             if mapping.get('team_name') not in headers or mapping['participant_email'] not in headers:
                 raise WorkflowError('Map the team and participant email columns.')
             grouped = {}
             for row in raw:
-                name = row.get(mapping['team_name'], '').strip()
+                name = str(row.get(mapping['team_name'], '') or '').strip()
                 grouped.setdefault(name, []).append(row)
             converted = []
             for name, people in grouped.items():
@@ -52,63 +91,206 @@ class Registrations:
                     raise WorkflowError(f'Team {name or "(unnamed)"} must have exactly two participant rows.')
                 item = {'team_name': name}
                 for i, person in enumerate(people, 1):
-                    for field in ('email', 'name', 'login'):
+                    for field in ('email', 'name', 'login', 'role'):
                         item[f'member_{i}_{field}'] = person.get(mapping.get(f'participant_{field}', ''), '')
                 converted.append(item)
-            raw, headers, mapping = converted, COLUMNS, {field:field for field in COLUMNS}
+            role_mapped = bool(mapping.get('participant_role') in headers)
+            raw, headers = converted, COLUMNS
+            mapping = {field: field for field in COLUMNS
+                       if not field.endswith('_role') or role_mapped}
         for field in COLUMNS[:2]:
             if mapping.get(field) not in headers:
-                raise WorkflowError('Map the team name and first participant email column; the second participant is optional.')
-        mapped_required = [mapping[field] for field in COLUMNS[:3] if mapping.get(field)]
-        if len(set(mapped_required)) != len(mapped_required):
-            raise WorkflowError('Map different columns for team name and the two emails.')
-        rows, seen, emails = [], set(), set()
+                raise WorkflowError('Map the team name and first participant email column.')
+        used = [mapping[f] for f in COLUMNS if mapping.get(f) in headers]
+        if len(set(used)) != len(used):
+            raise WorkflowError('Map each CSV column to only one field.')
+
+        rows, names, participant_emails = [], set(), set()
         for number, raw_row in enumerate(raw, 2):
-            row = {field: str(raw_row.get(mapping.get(field, ''), '')).strip() for field in COLUMNS}
+            row = {field: str(raw_row.get(mapping.get(field, ''), '') or '').strip()
+                   for field in COLUMNS}
             name = row['team_name']
-            if not name or len(name) > 180 or name.casefold() in seen:
+            if not name or len(name) > 180 or name.casefold() in names:
                 raise WorkflowError(f'Row {number}: missing or duplicate team name.')
-            seen.add(name.casefold())
+            names.add(name.casefold())
             members = []
             for i in (1, 2):
                 email = row[f'member_{i}_email'].casefold()
                 if i == 2 and not email:
                     continue
-                if len(email) > 254 or email.count('@') != 1 or not email.split('@', 1)[0] or not email.rsplit('@', 1)[1] or any(c.isspace() for c in email) or email in emails:
-                    raise WorkflowError(f'Row {number}: invalid email or a participant appears in multiple teams.')
-                emails.add(email)
-                members.append({'email': email, 'name': row[f'member_{i}_name'],
-                                'login': row[f'member_{i}_login'], 'user_id': None, 'status': 'unresolved'})
-            key = hashlib.sha256(name.casefold().encode()).hexdigest()
+                if (len(email) > 254 or email.count('@') != 1 or
+                        not all(email.split('@', 1)) or any(c.isspace() for c in email) or
+                        email in participant_emails):
+                    raise WorkflowError(f'Row {number}: invalid or duplicate participant email.')
+                participant_emails.add(email)
+                role_col = f'member_{i}_role'
+                role_declared = bool(mapping.get(role_col) in headers)
+                role = participant_role(row[role_col], required=role_declared)
+                members.append({
+                    'email': email, 'name': row[f'member_{i}_name'],
+                    'login': row[f'member_{i}_login'], 'role': role,
+                    'user_id': None, 'status': 'unresolved',
+                })
+            if not members or (strict_roles and len(members) != 2):
+                raise WorkflowError(
+                    f'Row {number}: every competition pair must contain '
+                    'exactly two distinct participants.'
+                )
             manager = row['monitor_email'].casefold()
-            if manager and (manager.count('@') != 1 or any(c.isspace() for c in manager) or not all(manager.split('@'))
-                            or len(manager) > 254 or manager in {m['email'] for m in members}):
-                raise WorkflowError(f'Row {number}: use a valid monitor email distinct from the annotators.')
-            rows.append((key, name, members, manager))
-        if {manager for _, _, _, manager in rows if manager}.intersection(emails):
-            raise WorkflowError('A monitor cannot also be registered as an annotator in this event.')
+            if row['monitor_login'] and not manager:
+                raise WorkflowError(
+                    f'Row {number}: monitor_login requires monitor_email.'
+                )
+            if manager and (len(manager) > 254 or manager.count('@') != 1
+                            or not all(manager.split('@', 1))
+                            or any(c.isspace() for c in manager)):
+                raise WorkflowError(f'Row {number}: invalid monitor email.')
+            if manager in {m['email'] for m in members} and not any(
+                    m['email'] == manager and m['role'] == 'participant_monitor'
+                    for m in members):
+                raise WorkflowError(
+                    f'Row {number}: the same person can be a participant and monitor '
+                    'only with member role participant_monitor.'
+                )
+            rows.append((
+                hashlib.sha256(name.casefold().encode()).hexdigest(),
+                name, members, manager, row['monitor_login'],
+            ))
+
         with self.sessions.begin() as s:
             existing = list(s.scalars(select(Registration)))
-            existing_participants = {m['email'] for r in existing for m in r.members}
-            existing_managers = {p.manager_email for p in s.scalars(select(TeamOnboarding)) if p.manager_email}
-            if existing_managers.intersection(emails) or existing_participants.intersection(manager for _,_,_,manager in rows if manager):
-                raise WorkflowError('Monitors and annotators must use separate event accounts.')
-            for key, name, members, manager in rows:
-                for previous in existing:
-                    if previous.id != key and {m['email'] for m in previous.members}.intersection(m['email'] for m in members):
-                        raise WorkflowError('An email is already registered to another event team.')
-                record = s.get(Registration, key)
-                if record:
-                    if [m['email'] for m in record.members] != [m['email'] for m in members]:
-                        raise WorkflowError('This team name has different registered members. Resolve the roster explicitly.')
-                    onboarding = s.get(TeamOnboarding, key)
-                    if manager and onboarding and not record.team_id and onboarding.manager_email != manager:
-                        raise WorkflowError('This registration has a different monitor email. Use the explicit monitor assignment controls.')
-                    continue  # Idempotent import preserves resolution and team ownership.
-                s.add(Registration(id=key, team_name=name, members=members))
-                s.flush()
-                s.add(TeamOnboarding(registration_id=key, manager_email=manager))
-            s.add(Audit(team_id=0, batch_id='', actor_id=actor, action='registrations_imported', details={'teams': len(rows)}))
+            for key, name, members, manager, monitor_login in rows:
+                for other in existing:
+                    if other.id != key and {m['email'] for m in other.members}.intersection(
+                            m['email'] for m in members):
+                        raise WorkflowError('A participant is already registered to another pair.')
+                reg = s.get(Registration, key)
+                if reg:
+                    if [m['email'] for m in reg.members] != [m['email'] for m in members]:
+                        raise WorkflowError('This team name has different members. Resolve its roster explicitly.')
+                    onboard = s.get(TeamOnboarding, key)
+                    if onboard and onboard.manager_email and manager and onboard.manager_email != manager:
+                        raise WorkflowError('This pair has a different monitor. Reassign it explicitly.')
+                    # Keep native resolution and prior invitation evidence.
+                    changed = [m['role'] != previous.get('role', 'participant')
+                               for m, previous in zip(members, reg.members)]
+                    if any(changed):
+                        for person, previous in zip(members, reg.members):
+                            if person['role'] == previous.get('role', 'participant'):
+                                continue
+                            prior = s.scalar(select(SharedInvitation).where(
+                                SharedInvitation.email == person['email'],
+                                SharedInvitation.status.in_(('pending', 'accepted', 'unknown'))
+                            ))
+                            if prior:
+                                raise WorkflowError(
+                                    f"{person['email']}: native invitation already exists. "
+                                    'Change the native team role with explicit Admin review, '
+                                    'then import the updated roster.'
+                                )
+                    for person, previous in zip(members, reg.members):
+                        if (person['login'] and previous.get('login') and
+                                person['login'] != previous.get('login')):
+                            pending = s.scalar(select(SharedInvitation).where(
+                                SharedInvitation.email == person['email'],
+                                SharedInvitation.status.in_(('pending', 'accepted', 'unknown'))
+                            ))
+                            if pending:
+                                raise WorkflowError(
+                                    f"{person['email']}: native account login is already "
+                                    'linked to an invitation. Review identity before changing.'
+                                )
+                        previous['role'] = person['role']
+                        if person['login']:
+                            previous['login'] = person['login']
+                    from sqlalchemy.orm.attributes import flag_modified
+                    flag_modified(reg, 'members')
+                    if onboard and manager and not onboard.manager_email:
+                        onboard.manager_email = manager
+                else:
+                    s.add(Registration(id=key, team_name=name, members=members))
+                    s.flush()
+                    s.add(TeamOnboarding(registration_id=key, manager_email=manager))
+
+            # Compute one requested native role per email across all pairs.
+            requested = {}
+            for reg in s.scalars(select(Registration)):
+                for person in reg.members:
+                    email = person['email']
+                    role = person.get('role', 'participant')
+                    entry = requested.setdefault(email, {
+                        'roles': set(), 'logins': set(), 'registration_ids': set(),
+                    })
+                    entry['roles'].add(role)
+                    if person.get('login'):
+                        entry['logins'].add(person['login'])
+                    entry['registration_ids'].add(reg.id)
+                onboard = s.get(TeamOnboarding, reg.id)
+                if onboard and onboard.manager_email:
+                    email = onboard.manager_email
+                    entry = requested.setdefault(email, {
+                        'roles': set(), 'logins': set(), 'registration_ids': set(),
+                    })
+                    entry['roles'].add('monitor')
+                    entry['registration_ids'].add(reg.id)
+            for key, name, members, manager, login in rows:
+                if manager and login:
+                    requested[manager]['logins'].add(login)
+            for email, data in requested.items():
+                roles = data['roles']
+                if 'monitor' in roles and 'participant' in roles:
+                    raise WorkflowError(
+                        f'{email}: use participant_monitor to declare both roles.')
+                if len(data['logins']) > 1:
+                    raise WorkflowError(
+                        f'{email}: conflicting Supervisely logins in the CSV.')
+                event_role = (
+                    'participant_monitor'
+                    if 'participant_monitor' in roles else
+                    'monitor' if 'monitor' in roles else 'participant'
+                )
+                native_role = ('reviewer' if event_role == 'participant_monitor' else
+                               'manager' if event_role == 'monitor' else 'annotator')
+                current = s.get(EventInvitee, email)
+                if current:
+                    requested_login = next(iter(data['logins']), '')
+                    if requested_login and current.login and requested_login != current.login:
+                        active_login = s.scalar(select(SharedInvitation).where(
+                            SharedInvitation.email == email,
+                            SharedInvitation.status.in_(('pending', 'accepted', 'unknown'))
+                        ))
+                        if active_login:
+                            raise WorkflowError(
+                                f'{email}: cannot replace a native account login after '
+                                'an invitation or acceptance without explicit review.'
+                            )
+                    if current.native_role != native_role:
+                        active = s.scalar(select(SharedInvitation).where(
+                            SharedInvitation.email == email,
+                            SharedInvitation.status.in_(('pending', 'accepted', 'unknown'))
+                        ))
+                        if active:
+                            raise WorkflowError(
+                                f'{email}: cannot silently change an existing '
+                                'invitation or accepted native role. Review it first.'
+                            )
+                    current.event_role = event_role
+                    current.native_role = native_role
+                    current.registration_ids = sorted(data['registration_ids'])
+                    if data['logins']:
+                        current.login = next(iter(data['logins']))
+                else:
+                    s.add(EventInvitee(
+                        email=email,
+                        login=next(iter(data['logins']), ''),
+                        event_role=event_role, native_role=native_role,
+                        registration_ids=sorted(data['registration_ids']),
+                    ))
+            s.add(Audit(
+                team_id=0, batch_id='', actor_id=actor,
+                action='registrations_imported',
+                details={'teams': len(rows), 'declared_invitees':len(requested)},
+            ))
         return len(rows)
 
     def rows(self):

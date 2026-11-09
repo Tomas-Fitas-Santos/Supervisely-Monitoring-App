@@ -26,27 +26,97 @@ class SetupGateway(Gateway):
                     return result
                 page += 1
         all_members, accepted = listing(True), listing(False)
-        active_ids = {m.get('id') or m.get('userId') for m in accepted
+        active_ids = {m.get('userId') or m.get('id') for m in accepted
                       if m.get('activated') is not False and not m.get('disabled') and not m.get('disabledAt')}
-        return [dict(m, membership_active=(m.get('id') or m.get('userId')) in active_ids
+        return [dict(m, membership_active=(m.get('userId') or m.get('id')) in active_ids
                      and m.get('activated') is not False and not m.get('disabled') and not m.get('disabledAt'))
                 for m in all_members]
 
-    def invite_email(self, team_id, email, role):
-        """Same members.add route used by the SDK, with an email identifier.
+    def _verified_login_for_email(self, email):
+        """Use a native login only if the server exposes a matching registered email.
 
-        Community invitation acceptance is asynchronous. Do not look up the
-        email through users.list and do not infer membership from this response.
+        The members.add API accepts *login*, which can differ from email.
+        An inaccessible user directory is not evidence that an account is absent.
+        Never guess a login from the email local part or invite another identity.
         """
         try:
-            result = self.api.post('members.add', {'teamId': int(team_id), 'login': email,
-                                                  'roleId': self.role_id(role)}, retries=1).json()
+            matches = [
+                u for u in self.api.user.get_list()
+                if str(getattr(u, 'email', '') or '').strip().casefold() == email.casefold()
+            ]
+        except Exception:
+            # Community/role restrictions may prohibit the directory lookup.
+            # Retain the original email identifier for instances supporting it.
+            return email
+        if len(matches) > 1:
+            raise InvitationRejected(
+                'Several Supervisely users share this registered email. '
+                'Resolve the account identity before sending an invitation.'
+            )
+        if not matches:
+            return email
+        if getattr(matches[0], 'disabled', False):
+            raise InvitationRejected(
+                'This email belongs to a disabled Supervisely account.'
+            )
+        return str(matches[0].login) or email
+
+    def invite_email(self, team_id, email, role, login=None):
+        """Request a real native team invitation for a registered email identity.
+
+        The official members.add endpoint requires a user login. Resolve the
+        exact login from the verified registered email when permission permits;
+        never infer acceptance from the invitation response.
+        """
+        if login:
+            # The organiser supplied a native login explicitly in the roster.
+            # Check the profile before writing; never guess it from an email.
+            login = str(login).strip()
+            try:
+                person = self.api.user.get_info_by_login(login)
+            except Exception:
+                raise InvitationRejected(
+                    'The CSV Supervisely login could not be verified. Confirm '
+                    'that this account exists on the current server.'
+                ) from None
+            if not person or getattr(person, 'disabled', False):
+                raise InvitationRejected(
+                    'The CSV Supervisely login is unavailable or disabled.'
+                )
+            email_on_profile = str(getattr(person, 'email', '') or '').strip().casefold()
+            if email_on_profile and email_on_profile != str(email).strip().casefold():
+                raise InvitationRejected(
+                    'The CSV login belongs to an account with a different registered '
+                    'email. Correct the roster before sending invitations.'
+                )
+        else:
+            login = self._verified_login_for_email(email)
+        try:
+            native_role_id = self.role_id(role)
+        except WorkflowError as exc:
+            raise InvitationRejected(str(exc)) from None
+        try:
+            result = self.api.post('members.add', {'teamId': int(team_id), 'login': login,
+                                                  'roleId': native_role_id}, retries=1).json()
         except Exception as exc:
             status = getattr(getattr(exc, 'response', None), 'status_code', None)
-            if status in (400, 401, 402, 403, 404, 409, 422):
-                raise InvitationRejected(f'Supervisely rejected the invitation (HTTP {status}). Check email, native Admin permissions, plan/seat limits and email-invitation support on this instance.') from None
+            if status == 404:
+                raise InvitationRejected(
+                    'Supervisely returned HTTP 404 for the participant identifier. '
+                    'This endpoint invites an existing Supervisely login, which '
+                    'may differ from the registered email. Verify that the '
+                    'participant has an account on this same server. You can '
+                    'invite their exact login through native Team members, then '
+                    'click Refresh accepted memberships here.'
+                ) from None
+            if status in (400, 401, 402, 403, 409, 422):
+                raise InvitationRejected(
+                    f'Supervisely rejected the invitation (HTTP {status}). '
+                    'Check the team Admin role, account state and native restrictions.'
+                ) from None
             raise  # Unknown remote outcome: retain the setup operation checkpoint.
-        return {'user_id': result.get('userId') or result.get('id')} if isinstance(result, dict) else {}
+        return {'user_id': result.get('userId') or result.get('id'),
+                'login': login} if isinstance(result, dict) else {'login': login}
 
     def visible_accounts(self):
         """Use accessible membership data; global listing is an optional capability."""
