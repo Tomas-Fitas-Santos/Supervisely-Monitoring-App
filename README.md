@@ -184,11 +184,23 @@ invitation status after people accept in Supervisely. Uncertain invitation
 results require inspection before retrying.
 
 Supervisely account logins may differ from registered email addresses.
-**A username is not required for invitations.** The app sends the exact
-reviewed roster email directly to Supervisely's `members.add` endpoint in
-the parameter named `login`, with the CSV-defined native `roleId`. This
-matches the expected email-first workflow; email acceptance still depends on
-the actual Supervisely instance. The SDK formally names the field *login*.
+**A username is not required in the CSV.** The app first checks
+whether its authorised Supervisely user directory contains exactly one
+account with the registered roster email, and uses that account's *actual
+username* with `members.add.login` and the CSV-defined `roleId`.
+This follows Supervisely's documented API contract. If global directory
+access is unavailable or no exact email is visible, the app sends the exact
+roster email in the login field **once**, because some instances support it.
+It does not guess a username from the email prefix or automatically try a
+second invitation on failure. You may explicitly provide an exact verified
+username in the roster as a fallback.
+
+**HTTP 404 / Page not found:** This is an ambiguous native API
+response: it can indicate a missing route, server/SDK compatibility issue
+or an unknown account identifier. It is **not evidence that the registered
+email is invalid**. The error now reports which identifier was attempted
+and directs the organiser to check the Supervisely server and real username.
+There is no automatic retry by another identifier.
 
 **Correct invitation errors:** The app makes one native request with
 `raise_error=True`, preserving the actual HTTP rejection rather than hiding
