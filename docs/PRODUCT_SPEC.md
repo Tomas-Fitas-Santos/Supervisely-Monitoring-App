@@ -6,6 +6,15 @@ Support approximately 131 two-person annotation teams, roughly nine monitors, an
 ## Staff application
 Professional browser login; organiser, monitor, reception, activity, distribution and read-only permissions may be combined. Individual sessions, fine-grained server-side authorization, audit log and responsive screens. Only authenticated staff access the administration and competition workspaces.
 
+## Authentication and Supervisely settings (agreed)
+- Staff sign into the **Annotatiathon application**, not Supervisely, using their event staff account. Neither the login page nor normal monitor/reception views ask for a Supervisely API key, user ID, Team ID or Workspace ID.
+- A distinct, **organiser-only Settings → Supervisely Connection** page configures the Supervisely server URL, native Team ID and source Workspace ID. The working baseline team is 125980; workspace selection remains editable.
+- The settings page displays **Test connection**, verified organiser account, accessible native role, workspace-to-team relationship, last successful synchronisation and a clear error state.
+- Native membership changes, dataset upload, job creation, annotation retrieval and other Supervisely operations require authorised server-side Supervisely API credentials. A single organiser-managed credential is entered/rotated in the secure Settings page **only when needed**, never by each monitor. The credential is never included in normal UI payloads, logs, exports or public configuration.
+- The backend must encrypt stored service credentials using an application encryption key outside the database; allow replacing/revoking them. Local deployments can alternatively use a secret supplied through the process environment. The UI only shows whether a credential is configured, never its value.
+- Workspace and Team IDs are validated by the actual Supervisely API before being marked verified. Other IDs (project, dataset, video, labeling job) are discovered and recorded automatically during operations rather than requested from users during login.
+- Configuration can be saved independently of roster, media and competition setup. Missing credentials do not block logistics; Supervisely-dependent actions show what still needs configuration.
+
 ## Logistics (agreed)
 - Roster CSV import populates PostgreSQL. Edit, add, deactivate and search participants/monitors. Teams have two participants; monitors are pinned first in team views. Sorting includes names and check-in order.
 - Fast QR-assisted or name/email/team lookup check-in; staff confirms identity. Duplicate scans do not duplicate attendance. No Supervisely identity capture at check-in.

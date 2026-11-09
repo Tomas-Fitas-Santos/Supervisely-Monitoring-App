@@ -7,6 +7,14 @@
 - **Background processing:** durable Postgres-backed worker/outbox for upload, reconciliation, native job release, completeness checks, sampling, exports and bulk awards. Separate worker processes can share the local machine.
 - **Supervisely adapter:** isolated API layer for Team 125980; Supervisely remains authoritative for native membership, uploaded media, labeling job states and actual annotations.
 
+## Authentication vs external integration
+- **Authentication for the event app is independent from Supervisely:** staff use local application identities and sessions; access is authorised by app roles.
+- **Native Supervisely access is a separate organiser-managed integration:** server address, native team ID and workspace ID are stored in PostgreSQL; verified connection state is displayed through read-only responses.
+- API credentials are needed for privileged Supervisely API operations; configure them once using an organiser-only settings flow after app authentication. Encrypt credentials at rest with a key stored outside PostgreSQL, or supply via a process secret. Never return them to the browser after creation.
+- No integration-settings mutation endpoint is exposed before server-side authentication, CSRF protection, audit logging, and encrypted credential storage are implemented.
+- Operational IDs such as projects, videos, and jobs are persisted from verified API results. The user should not manually enter IDs unrelated to initial connection.
+- The local app works for roster, check-in, tickets, and activities even when the Supervisely integration is disconnected.
+
 ## Non-negotiable boundaries
 - Ordinary check-in, ticket issuance and activities never call Supervisely.
 - Roster email does not equal a verified Supervisely login; invited-but-not-accepted differs from joined.
