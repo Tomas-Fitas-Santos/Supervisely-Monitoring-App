@@ -131,29 +131,83 @@ class EventPeople:
             'needs_review': needs_review,
         }
 
+    @staticmethod
+    def _decode_csv(csv_text, tab):
+        """Validate a source-format CSV for one roster sheet (no headers guessed)."""
+        if tab not in ('Monitors', 'Participants'):
+            raise WorkflowError('Choose whether this CSV contains Monitors or Participants.')
+        if not isinstance(csv_text, str) or not csv_text or len(csv_text.encode('utf-8')) > 2 * 1024 * 1024:
+            raise WorkflowError('Choose a UTF-8 roster CSV below 2 MiB.')
+        try:
+            reader = csv.DictReader(io.StringIO(csv_text.lstrip('\ufeff'), newline=''),
+                                    restkey='_extra_columns')
+            headers = reader.fieldnames or []
+            required = ({'monitor_email', 'event_role'} if tab == 'Monitors' else
+                        {'team_name', 'participant_name', 'participant_email',
+                         'participant_role'})
+            if (len(headers) > 60 or not required.issubset(set(headers)) or
+                    len(headers) != len(set(headers)) or any(not h for h in headers)):
+                raise WorkflowError(tab + ' CSV has missing, duplicate or invalid column headers.')
+            parsed = []
+            for index, row in enumerate(reader, 2):
+                if index > 10001:
+                    raise WorkflowError('Roster CSV exceeds the 10,000-row limit.')
+                if row.get('_extra_columns'):
+                    raise WorkflowError(f'{tab} CSV row {index}: unexpected extra columns.')
+                values = {key: _string(value) for key, value in row.items()
+                          if key != '_extra_columns'}
+                if any(values.values()):
+                    parsed.append((tab, index, values))
+        except csv.Error:
+            raise WorkflowError('Cannot read this UTF-8 roster CSV.') from None
+        if not parsed:
+            raise WorkflowError('CSV needs a header and at least one roster row.')
+        return parsed
+
     def import_workbook(self, actor, encoded):
         source = [self._source(*item) for item in self._decode_workbook(encoded)]
+        return self._import_sources(actor, source, {'Monitors', 'Participants'})
+
+    def import_csv(self, actor, csv_text, tab):
+        source = [self._source(*item)
+                  for item in self._decode_csv(csv_text, tab)]
+        return self._import_sources(actor, source, {tab})
+
+    def _import_sources(self, actor, source, changed_sheets):
         duplicate = defaultdict(set)
         for person in source:
             if person['email']:
                 duplicate[person['email']].add(person['source_sheet'])
         conflicts = {email for email, sheets in duplicate.items() if len(sheets) > 1}
+        # Incremental CSV uploads must still reject cross-sheet account
+        # duplicates. A monitor/participant role must not silently differ.
+        with self.sessions() as session:
+            existing = {p.email: p.source_sheet for p in session.scalars(
+                select(EventRosterRecord)) if p.email and
+                p.source_sheet not in changed_sheets and
+                p.event_role != 'inactive'}
+        conflicts.update(p['email'] for p in source if p['email'] in existing
+                         and existing[p['email']] != p['source_sheet'])
         for person in source:
             if person['email'] in conflicts:
                 person['needs_review'] = True
 
         with self.sessions.begin() as session:
             config = session.get(EventConfig, 1)
+            for prev in session.scalars(select(EventRosterRecord)):
+                if prev.email in conflicts and prev.source_sheet not in changed_sheets:
+                    prev.needs_review = True
             # Re-import is authoritative for the external monitor allowlist:
             # identities absent from the new sheet lose login permission.
             current_ids = {item['record_id'] for item in source
                            if item['source_sheet'] == 'Monitors'}
-            for old in session.scalars(select(EventRosterRecord).where(
-                    EventRosterRecord.source_sheet == 'Monitors')):
-                if (old.record_id not in current_ids and
-                        (old.source_fields or {}).get('imported_via') != 'supervisely'):
-                    old.event_role = 'inactive'
-                    old.needs_review = True
+            if 'Monitors' in changed_sheets:
+                for old in session.scalars(select(EventRosterRecord).where(
+                        EventRosterRecord.source_sheet == 'Monitors')):
+                    if (old.record_id not in current_ids and
+                            (old.source_fields or {}).get('imported_via') != 'supervisely'):
+                        old.event_role = 'inactive'
+                        old.needs_review = True
             for item in source:
                 previous = session.get(EventRosterRecord, item['record_id'])
                 if previous:
@@ -169,7 +223,7 @@ class EventPeople:
                     previous.updated_at = now()
                 else:
                     session.add(EventRosterRecord(**item))
-                if item['source_sheet'] != 'Monitors':
+                if not item['email'] or item['needs_review']:
                     continue
                 email = item['email']
                 existing = session.get(EventInvitee, email)
@@ -177,7 +231,10 @@ class EventPeople:
                     # Login is not necessarily email; native owner permissions are
                     # verified elsewhere. This file never grants native Admin.
                     pass
-                supplied_login = _string(item['source_fields'].get('supervisely_login', ''))
+                supplied_login = _string(item['source_fields'].get(
+                    'supervisely_login', '') or item['source_fields'].get(
+                    'participant_login', '') or item['source_fields'].get(
+                    'monitor_login', ''))
                 if len(supplied_login) > 180:
                     raise WorkflowError('Supervisely account login exceeds 180 characters.')
                 if existing:
@@ -187,7 +244,7 @@ class EventPeople:
                             SharedInvitation.status.in_(('pending','accepted','unknown'))))
                         if pending_login:
                             raise WorkflowError(
-                                'The monitor login is linked to a native invitation. '
+                                'This account login is linked to a native invitation. '
                                 'Review membership before changing it.')
                         existing.login = supplied_login
                     if existing.event_role != item['event_role']:
@@ -196,7 +253,7 @@ class EventPeople:
                             SharedInvitation.status.in_(('pending', 'accepted', 'unknown'))
                         ))
                         if native:
-                            raise WorkflowError('An already invited monitor has a different role. '
+                            raise WorkflowError('An already invited account has a different role. '
                                                 'Review native permissions before re-importing.')
                         existing.event_role = item['event_role']
                         existing.native_role = (
@@ -210,8 +267,9 @@ class EventPeople:
                                      else 'annotator'), registration_ids=[], login=supplied_login))
             session.add(Audit(
                 team_id=0, batch_id='', actor_id=int(actor),
-                action='roster_workbook_imported',
-                details={'monitors':sum(v['source_sheet']=='Monitors' for v in source),
+                action='roster_source_imported',
+                details={'source_sheets':sorted(changed_sheets),
+                         'monitors':sum(v['source_sheet']=='Monitors' for v in source),
                          'participants':sum(v['source_sheet']=='Participants' for v in source),
                          'review_required':sum(v['needs_review'] for v in source),
                          'email_overlap':len(conflicts)}))
