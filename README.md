@@ -24,9 +24,12 @@ The active source branch is `feat/video-only-event-ops-20261109`; the repository
    confirms the registrations and required consent. Existing competition pairs
    and monitor assignments remain unchanged. Alternatively, import the official
    two-sheet workbook and **Prepare complete eligible pairs**.
-5. For any people not yet invited, select the exact eligible roster rows and
-   choose **Invite selected (N)**; a confirmation shows the recipients. No
-   bulk invitation is automatic.
+5. For uninvited accounts, choose one Supervisely role, select up to
+   **50** eligible people, and click **Copy N emails for ROLE**. Paste the
+   comma-separated emails into Supervisely **Invite Team members**, choose
+   that role, and send the invitation there. Return and click **Refresh
+   participants & monitors from Supervisely**. Use **Select next 50** for
+   the next batch; copying does not prove an invitation was sent.
 6. Continue to **Dataset**, **Event rules**, **Check-in** and **Monitoring**.
 
 ### Windows local administration (real team, no sample data)
@@ -162,20 +165,42 @@ one native invitation.
 | Participant and monitor | Reviewer |
 | Event admin | Existing Admin; never granted through a CSV |
 
-In **Monitors & Teams → Official registration roster & roles**, use the
-**Select** checkbox beside each eligible person (on either the Monitors or
-Participants sheet). Filter by name, email or team, then use
-**Select matching eligible** to add the filtered people to the selection.
-Selections persist when switching between sheets. **Clear selection** resets
-the choices. **Invite selected (N)** displays an exact-recipient confirmation
-and sends only those selected accounts—never the entire roster by default.
+In **Monitors & Teams → Official registration roster & roles**,
+import the source roster as either a single two-sheet Excel workbook
+(`Monitors` + `Participants`) **or** upload two separate UTF-8 CSV files
+and identify each as `Monitors` or `Participants`. CSV column names match
+the workbook schema. Participant CSVs need
+`team_name,participant_name,participant_email,participant_role,data_processing_consent`
+for useful eligible registrations. Monitor CSVs require
+`monitor_email,event_role`. Source fields are preserved. Neither import
+sends an invitation or changes native roles.
 
-Imported participants become eligible for selection only after their complete
-two-person pairs are prepared and approved for processing; monitors can be
-selected individually. Entries awaiting review, missing email, unprepared
-participants, and people already invited or accepted cannot be selected for
-another native invitation. Backend validation rejects missing/empty/duplicate,
-unknown, or unreviewed selection batches *before* any native write.
+Choose the one **Supervisely role** to invite: **Annotator** (participant),
+**Manager** (monitor), or **Reviewer** (participant_monitor). Select one or
+several eligible matching people using the checkboxes. Use **Add matching
+eligible (up to 50)** with the sheet/search filter, or **Select next 50**
+to prepare successive batches. The app enforces **1–50 unique email
+addresses, all with the same saved role**, and excludes already accepted
+or pending people, missing emails, unconsented/cancelled registrations,
+and role conflicts.
+
+Click **Copy N emails for ROLE**. The clipboard contains **only** emails,
+comma-and-space separated, for example:
+`first@example.org, second@example.org`. Paste directly in Supervisely's
+**New members** box and select the displayed **Role** before clicking
+**INVITE**. There are no names, headers, role codes or brackets in the
+clipboard data.
+
+**Copying is not confirmation of invitation.** The app records copied batches
+only in the current browser session, for **Select next 50** navigation. It
+does not grant permissions or mark accounts as invited. After the native
+Supervisely invitation, click **Refresh participants & monitors from
+Supervisely** to synchronize current membership/invitations. Reset the
+copied-batch progress at any time to correct a missed invitation.
+
+Participants with an approved role, valid email, consent and no outstanding
+review may be included in an invitation batch **before competition pairs
+are prepared**. Pairing/job dispatch remains a separate controlled step.
 
 The older team invitation screen additionally supports **Invite all monitors**,
 **Invite all participants**, **Invite everyone**, and **Invite** on an
@@ -208,14 +233,13 @@ programmatically with a personal API key on this instance.
 The app now stops a selected batch after its first HTTP 401 rather than
 attempting everyone with the same rejected authentication method. It
 preserves unattempted selections and reports a per-person API error.
-Use **Copy selected emails & roles**, invite through the
+Use **Copy N emails for ROLE** to obtain a comma-separated list of
+**up to 50 same-role email addresses only**, invite them through the
 [Supervisely Team Members UI](https://app.supervisely.com/members/add),
-then click **Refresh participants & monitors from Supervisely** to
-reconcile accepted/pending accounts and monitor permissions. The clipboard
-contains only email addresses and reviewed roles; **never** copy browser
-JWTs/cookies into the Monitoring App. For automated invites, request a
-documented service-token-compatible endpoint or supported OAuth flow
-from Supervisely support.
+choose the indicated role, and click **Refresh participants & monitors
+from Supervisely**. Never copy browser JWTs/cookies into the Monitoring App.
+For automated invites, request a documented service-token-compatible endpoint
+or supported OAuth flow from Supervisely support.
 
 **Native roles:** `roleId` is resolved from the actual instance role
 directory according to the reviewed CSV role (`annotator`, `manager`,
