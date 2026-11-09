@@ -79,12 +79,13 @@ def test_roster_preview_import_reimport_and_soft_delete(client):
     csrf = sign_in(http, "organiser@example.org", "CorrectSecretPassword1!")
     headers = {"X-CSRF-Token": csrf}
     payload = {
-        "csv_text": "\\ufeffName,Email,Role,Team\nOne,one@example.org,participant,Team 001\n"
+        "csv_text": "Name,Email,Role,Team\nOne,one@example.org,participant,Team 001\n"
                     "Two,two@example.org,participant,Team 001\n"
                     "Monitor,monitorperson@example.org,monitor,\n",
         "mapping": {"name": "Name", "email": "Email", "kind": "Role", "team": "Team"},
         "default_kind": "participant",
     }
+    payload["csv_text"] = chr(0xFEFF) + payload["csv_text"]
     preview = http.post("/api/v1/roster/preview", headers=headers, json=payload)
     assert preview.status_code == 200, preview.text
     assert preview.json()["created"] == 3
