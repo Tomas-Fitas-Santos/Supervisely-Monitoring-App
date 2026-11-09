@@ -1,4 +1,4 @@
-"""Validate and compile the event's two-root image / video-frame folder tree.
+"""Validate and compile the event's video-only frame folder tree.
 
 This module is identical for DEMO and PRODUCTION. A video folder is atomic:
 its frames are encoded into one native video, never assigned separately.
@@ -24,87 +24,80 @@ def _natural(name):
     return [int(t) if t.isdigit() else t.casefold() for t in re.split(r'(\d+)', name)]
 
 
-def validate_tree(relative_paths, require_both=True):
-    """Return canonical image paths and video sequences. No remote mutations."""
+def validate_tree(relative_paths, require_both=False):
+    """Validate a video-only frame dataset.
+
+    Supported folder/ZIP layouts:
+      Dataset Name/<species-or-morphology>/<video-title>/<frame>
+      <species-or-morphology>/<video-title>/<frame>
+
+    Each complete video is atomic. The redundant require_both argument remains
+    for older callers but does not re-enable separate images/ and videos/ roots.
+    """
     if not isinstance(relative_paths, list) or not relative_paths:
-        raise WorkflowError('Select the dataset folder containing images/ and videos/.')
+        raise WorkflowError('Select a dataset with species/video/frame folders.')
     if len(relative_paths) > MAX_FILES:
         raise WorkflowError('The selected dataset contains too many files.')
     parsed = []
     for candidate in relative_paths:
-        if not isinstance(candidate, str) or not candidate or '\x00' in candidate:
-            raise WorkflowError('Every dataset file needs a valid relative path.')
-        raw = candidate.replace('\\', '/')
-        parts = PurePosixPath(raw).parts
+        if not isinstance(candidate, str) or not candidate or '\\x00' in candidate:
+            raise WorkflowError('Every video frame needs a valid relative path.')
+        raw = candidate.replace('\\\\', '/')
         if (raw.startswith('/') or raw.endswith('/') or
-                any(p in ('', '.', '..') for p in raw.split('/')) or
-                not parts or ':' in parts[0]):
+                any(part in ('', '.', '..') for part in raw.split('/')) or
+                ':' in raw.split('/')[0]):
             raise WorkflowError('Dataset paths must stay inside the chosen folder.')
+        parts = PurePosixPath(raw).parts
+        if len(parts) not in (3, 4):
+            raise WorkflowError('Use species/video-title/frame folders; an outer dataset folder is optional.')
         parsed.append(parts)
-    # Browser folder selection includes the chosen root folder in every file.
-    # Support direct images/ and videos/ paths as well.
-    if parsed and all(p[0].casefold() not in ('images', 'videos') for p in parsed):
-        selected = {p[0].casefold() for p in parsed}
-        if len(selected) != 1:
+    depths = {len(parts) for parts in parsed}
+    if len(depths) != 1:
+        raise WorkflowError('Do not mix dataset-wrapped and direct category paths.')
+    if depths == {4}:
+        wrappers = {parts[0].casefold() for parts in parsed}
+        if len(wrappers) != 1:
             raise WorkflowError('Select exactly one dataset root folder.')
-        parsed = [p[1:] for p in parsed]
-    images = []
+        parsed = [parts[1:] for parts in parsed]
     videos = defaultdict(list)
     normalized = set()
-    roots = set()
     for parts in parsed:
-        if not parts or parts[0].casefold() not in ('images', 'videos'):
-            raise WorkflowError('Dataset must contain only images/ and videos/ roots.')
-        root = parts[0].casefold()
-        roots.add(root)
-        if (root == 'images' and len(parts) != 3) or (
-                root == 'videos' and len(parts) != 4):
-            raise WorkflowError(
-                'Use images/<category>/<image> and '
-                'videos/<category>/<video-title>/<frame> folder layouts.'
-            )
+        if (any(not part.strip() for part in parts)
+                or parts[0].casefold() in ('images', 'videos')):
+            raise WorkflowError('Do not add images/ or videos/ folders. Start with bird categories.')
         if PurePosixPath(parts[-1]).suffix.casefold() not in IMAGE_EXT:
-            raise WorkflowError('Only image files are accepted; video folders contain frames.')
-        path = '/'.join((root, *parts[1:]))
+            raise WorkflowError('Video folders must contain image frames, not MP4 files.')
+        path = '/'.join(parts)
         folded = path.casefold()
         if folded in normalized:
-            raise WorkflowError('Dataset contains duplicated file paths.')
+            raise WorkflowError('Dataset contains duplicated or case-conflicting frame paths.')
         normalized.add(folded)
-        if root == 'images':
-            images.append({'path': path, 'category': parts[1],
-                           'filename': parts[2]})
-        else:
-            videos[(parts[1], parts[2])].append(path)
-    if require_both and roots != {'images', 'videos'}:
-        raise WorkflowError('Dataset must contain both images/ and videos/ folders.')
-    if len(videos) > MAX_VIDEOS:
-        raise WorkflowError('Too many source videos.')
+        videos[(parts[0], parts[1])].append(path)
+    if not videos or len(videos) > MAX_VIDEOS:
+        raise WorkflowError('Select between 1 and 2000 complete videos.')
     sequences = []
     for (category, title), frames in sorted(
             videos.items(), key=lambda pair: (pair[0][0].casefold(), pair[0][1].casefold())):
         if not 2 <= len(frames) <= MAX_FRAMES_PER_VIDEO:
             raise WorkflowError(f'Video {title} must have 2 to {MAX_FRAMES_PER_VIDEO} frames.')
         frames.sort(key=lambda p: _natural(PurePosixPath(p).stem))
-        keys = [PurePosixPath(p).stem for p in frames]
-        if len(set(k.casefold() for k in keys)) != len(keys):
+        stems = [PurePosixPath(p).stem.casefold() for p in frames]
+        if len(stems) != len(set(stems)):
             raise WorkflowError(f'Video {title} has ambiguous frame names.')
         sequences.append({
             'category': category, 'title': title, 'frames': frames,
-            'frame_count': len(frames),
-            'source_folder': f'videos/{category}/{title}',
+            'frame_count': len(frames), 'source_folder': f'{category}/{title}',
         })
-    images.sort(key=lambda p: _natural(p['path']))
     signature = sha256(json.dumps(
-        {'images': [r['path'] for r in images], 'videos': sequences},
-        sort_keys=True, ensure_ascii=False
-    ).encode()).hexdigest()
-    return {'images': images, 'videos': sequences,
-            'image_count': len(images), 'video_count': len(sequences),
-            'frame_count': sum(r['frame_count'] for r in sequences),
-            'category_count': len({
-                (r['category'] if isinstance(r, dict) else r)
-                for r in images + sequences
-            }), 'hash': signature}
+        {'images': [], 'videos': sequences}, sort_keys=True,
+        ensure_ascii=False).encode()).hexdigest()
+    return {
+        'images': [], 'videos': sequences, 'image_count': 0,
+        'video_count': len(sequences),
+        'frame_count': sum(row['frame_count'] for row in sequences),
+        'category_count': len({row['category'] for row in sequences}),
+        'hash': signature,
+    }
 
 
 def encode_video(frame_paths, destination, fps=12):
