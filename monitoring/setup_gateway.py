@@ -61,64 +61,89 @@ class SetupGateway(Gateway):
             )
         return str(matches[0].login) or email
 
-    def invite_email(self, team_id, email, role, login=None):
-        """Request a real native team invitation for a registered email identity.
+    @staticmethod
+    def _native_invitation_error(exc):
+        """Expose a bounded provider message without printing credentials/tracebacks."""
+        response = getattr(exc, 'response', None)
+        status = getattr(response, 'status_code', None) or getattr(exc, 'status_code', None)
+        try:
+            status = int(status) if status is not None else None
+        except (TypeError, ValueError):
+            status = None
+        detail = ''
+        try:
+            body = response.json() if response is not None else None
+        except (ValueError, TypeError, AttributeError):
+            body = None
+        if isinstance(body, dict):
+            for key in ('message', 'detail', 'error_description', 'error', 'reason'):
+                value = body.get(key)
+                if isinstance(value, dict):
+                    value = value.get('message') or value.get('description')
+                if isinstance(value, str) and value.strip():
+                    # Do not render multi-line logs, encoded tokens or arbitrary
+                    # HTML supplied by an untrusted provider response.
+                    clean = ' '.join(value.split())[:220]
+                    if not any(term in clean.casefold()
+                               for term in ('authorization:', 'bearer ', 'api_token',
+                                            'password=', 'secret=')):
+                        detail = clean
+                        break
+        return status, detail
 
-        The native API's field is named 'login', but some instances also
-        resolve an existing account using its registered email. Resolve a
-        verified login when visible; otherwise pass the exact roster email
-        directly to members.add. Never infer acceptance from the response.
+    def invite_email(self, team_id, email, role, login=None):
+        """Invite by EXACT registered email; never guess a username or retry blindly.
+
+        Supervisely's members.add payload field is named 'login', but the
+        selected identifier here is the email from the reviewed roster.
+        An explicitly stored username is a MANUAL fallback after a definitive
+        rejection, not a hidden automatic second invitation.
         """
-        if login:
-            # The organiser supplied a native login explicitly in the roster.
-            # Check the profile before writing; never guess it from an email.
-            login = str(login).strip()
-            try:
-                person = self.api.user.get_info_by_login(login)
-            except Exception:
-                raise InvitationRejected(
-                    'The CSV Supervisely login could not be verified. Confirm '
-                    'that this account exists on the current server.'
-                ) from None
-            if not person or getattr(person, 'disabled', False):
-                raise InvitationRejected(
-                    'The CSV Supervisely login is unavailable or disabled.'
-                )
-            email_on_profile = str(getattr(person, 'email', '') or '').strip().casefold()
-            if email_on_profile and email_on_profile != str(email).strip().casefold():
-                raise InvitationRejected(
-                    'The CSV login belongs to an account with a different registered '
-                    'email. Correct the roster before sending invitations.'
-                )
-        else:
-            login = self._verified_login_for_email(email)
+        email = str(email or '').strip().casefold()
+        if (len(email) > 254 or email.count('@') != 1 or
+                not all(email.split('@', 1)) or any(c.isspace() for c in email)):
+            raise InvitationRejected('A valid registered Supervisely email address is required.')
         try:
             native_role_id = self.role_id(role)
         except WorkflowError as exc:
             raise InvitationRejected(str(exc)) from None
         try:
-            result = self.api.post('members.add', {'teamId': int(team_id), 'login': login,
-                                                  'roleId': native_role_id}, retries=1).json()
+            reply = self.api.post('members.add', {
+                'teamId': int(team_id), 'login': email, 'roleId': native_role_id
+            }, retries=1).json()
         except Exception as exc:
-            status = getattr(getattr(exc, 'response', None), 'status_code', None)
-            if status == 404:
+            status, detail = self._native_invitation_error(exc)
+            guidance = {
+                400: 'Check the registered email address and the requested team role.',
+                401: 'The Supervisely API token is missing, expired or invalid.',
+                402: 'The Supervisely subscription or account limits may block invitations.',
+                403: 'The current account may lack Team Admin invitation permission.',
+                404: 'The email was not resolved on this Supervisely instance. Verify the address; if needed, use the exact native username in Supervisely and then refresh membership.',
+                409: 'This user may already be invited or a member. Refresh membership before any retry.',
+                422: 'Supervisely rejected the email or role fields. Check the account and role.',
+                429: 'Supervisely is rate-limiting invitations. Do not resend automatically.',
+            }
+            if status in guidance:
+                provider = f' Supervisely says: {detail}.' if detail else ''
                 raise InvitationRejected(
-                    'Supervisely could not resolve this email or username (HTTP 404). '
-                    'The native API field is named login, even if the Supervisely '
-                    'website also accepts registered email addresses. Check the '
-                    'exact registered email and account server, or add the '
-                    'verified Supervisely username to the roster. You can '
-                    'invite directly in the Supervisely Team members page and '
-                    'then refresh membership here without resending.'
+                    f'Supervisely HTTP {status} inviting {email}.{provider} '
+                    + guidance[status]
                 ) from None
-            if status in (400, 401, 402, 403, 409, 422):
-                raise InvitationRejected(
-                    f'Supervisely rejected the invitation (HTTP {status}). '
-                    'Check the team Admin role, account state and native restrictions.'
-                ) from None
-            raise  # Unknown remote outcome: retain the setup operation checkpoint.
-        return {'user_id': result.get('userId') or result.get('id'),
-                'login': login} if isinstance(result, dict) else {'login': login}
+            # A timeout, interrupted connection or 5xx can follow a committed
+            # write. The caller MUST keep status unknown until read-only sync.
+            raise WorkflowError(
+                'Supervisely invitation outcome is unconfirmed'
+                + (f' (HTTP {status})' if status else ' (network/API error)')
+                + f' for {email}. Refresh memberships before retrying.'
+                + (f' Supervisely says: {detail}.' if detail else '')
+            ) from None
+        if not isinstance(reply, dict):
+            raise WorkflowError(
+                f'Supervisely returned an unexpected invitation response for {email}. '
+                'The invitation may have been sent; refresh membership before retrying.'
+            )
+        return {'user_id': reply.get('userId') or reply.get('id'),
+                'login': email}
 
     def visible_accounts(self):
         """Use accessible membership data; global listing is an optional capability."""
