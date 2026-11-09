@@ -456,6 +456,69 @@ class EventPeople:
         return Registrations(self.sessions).import_csv(
             actor, stream.getvalue(), {h:h for h in COLUMNS})
 
+    def link_native_email(self, gateway, actor, record_id, email):
+        """Explicitly link a hidden-email native account to its real address.
+
+        Only the organiser may supply a missing email. Native identity and role
+        are rechecked against the same Supervisely team before the local link
+        is saved; no native invitations or permissions are changed.
+        """
+        from .setup_gateway import SetupGateway
+        email = _email(email)
+        if not email:
+            raise WorkflowError('Enter the registered email for this Supervisely account.')
+        with self.sessions() as session:
+            record = session.get(EventRosterRecord, str(record_id or ''))
+            config = session.get(EventConfig, 1)
+            if (not record or record.email or
+                    (record.source_fields or {}).get('imported_via') != 'supervisely'):
+                raise WorkflowError('Select an unmatched native member with a missing email.')
+            team_id = int(config.monitoring_team_id)
+            login = str(record.source_fields.get('supervisely_login') or '')
+            user_id = str(record.source_fields.get('supervisely_user_id') or '')
+            if not login and not user_id:
+                raise WorkflowError('Native account identity is incomplete. Refresh before linking.')
+        native_members = SetupGateway(gateway.api).invitation_members(team_id)
+        matches = [n for n in native_members
+                   if (user_id and str(n.get('userId') or n.get('id') or '') == user_id)
+                   or (login and str(n.get('login') or '').casefold() == login.casefold())]
+        if len(matches) != 1:
+            raise WorkflowError('Could not uniquely verify the native member. Refresh and review.')
+        native = matches[0]
+        actual_email = _email(native.get('email') or native.get('inviteEmail'))
+        if actual_email and actual_email != email:
+            raise WorkflowError('The supplied email differs from the native registered address.')
+        with self.sessions.begin() as session:
+            record = session.get(EventRosterRecord, str(record_id))
+            if not record or record.email:
+                raise WorkflowError('The identity changed. Refresh the roster and retry.')
+            if session.scalar(select(EventRosterRecord).where(
+                    EventRosterRecord.email == email)):
+                raise WorkflowError(
+                    'This email is already in the roster. Use its existing record and '
+                    'verify the native Supervisely login instead.')
+            existing = session.get(EventInvitee, email)
+            if existing and existing.login and login and existing.login.casefold() != login.casefold():
+                raise WorkflowError('This email is linked to a different Supervisely login.')
+            role = str(record.source_fields.get('supervisely_role') or '').casefold()
+            expected = {'monitor':'manager', 'participant':'annotator',
+                        'participant_monitor':'reviewer'}
+            if role != expected.get(record.event_role):
+                raise WorkflowError('The member role needs administrator review before linking.')
+            record.email = email
+            record.needs_review = False
+            record.source_fields = {**record.source_fields,
+                                    'email_linked_by_organiser': 'yes'}
+            record.updated_at = now()
+            if existing is None:
+                session.add(EventInvitee(email=email, login=login,
+                    event_role=record.event_role, native_role=role,
+                    registration_ids=[]))
+            session.add(Audit(team_id=team_id, batch_id='', actor_id=int(actor),
+                action='native_email_linked',
+                details={'record_id': record.record_id, 'email': email}))
+        return True
+
     def create_pair(self, actor, team_name, emails, confirmed=False):
         """Register two accepted Supervisely accounts as one competition pair.
 
