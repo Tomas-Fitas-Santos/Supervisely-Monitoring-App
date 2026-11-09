@@ -78,6 +78,12 @@ class SetupGateway(Gateway):
         remains the only available identifier for one explicit native attempt.
         """
         expected = str(email or '').strip().casefold()
+        server = str(getattr(self.api, 'server_address', '') or '').rstrip('/').lower()
+        if server in ('https://app.supervisely.com', 'https://app.supervise.ly'):
+            # Confirmed on Community/Pro: users.list can return 404
+            # "Page not found" despite valid authentication and team Admin.
+            # Avoid a failing request for every email in a selected batch.
+            return expected
         try:
             directory = self.api.user.get_list()
         except Exception:
