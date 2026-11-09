@@ -167,7 +167,19 @@ class EventPeople:
                     # Login is not necessarily email; native owner permissions are
                     # verified elsewhere. This file never grants native Admin.
                     pass
+                supplied_login = _string(item['source_fields'].get('supervisely_login', ''))
+                if len(supplied_login) > 180:
+                    raise WorkflowError('Supervisely account login exceeds 180 characters.')
                 if existing:
+                    if supplied_login and supplied_login != existing.login:
+                        pending_login = session.scalar(select(SharedInvitation).where(
+                            SharedInvitation.email == email,
+                            SharedInvitation.status.in_(('pending','accepted','unknown'))))
+                        if pending_login:
+                            raise WorkflowError(
+                                'The monitor login is linked to a native invitation. '
+                                'Review membership before changing it.')
+                        existing.login = supplied_login
                     if existing.event_role != item['event_role']:
                         native = session.scalar(select(SharedInvitation).where(
                             SharedInvitation.email == email,
@@ -185,7 +197,7 @@ class EventPeople:
                         email=email, event_role=item['event_role'],
                         native_role=('reviewer' if item['event_role'] == 'participant_monitor'
                                      else 'manager' if item['event_role'] == 'monitor'
-                                     else 'annotator'), registration_ids=[], login=''))
+                                     else 'annotator'), registration_ids=[], login=supplied_login))
             session.add(Audit(
                 team_id=0, batch_id='', actor_id=int(actor),
                 action='roster_workbook_imported',
@@ -211,6 +223,43 @@ class EventPeople:
             } for p in session.scalars(select(EventRosterRecord).order_by(
                 EventRosterRecord.source_sheet, EventRosterRecord.team_number,
                 EventRosterRecord.display_name))]
+
+    def set_login(self, actor, record_id, login):
+        """Set an explicitly supplied native login before sending invitations."""
+        from .db import Registration
+        from sqlalchemy.orm.attributes import flag_modified
+        login = _string(login)
+        if not login or len(login) > 180:
+            raise WorkflowError('Enter a valid Supervisely login, at most 180 characters.')
+        with self.sessions.begin() as session:
+            row = session.get(EventRosterRecord, str(record_id or ''))
+            if not row or not row.email:
+                raise WorkflowError('Choose a roster account with a valid email.')
+            active = session.scalar(select(SharedInvitation).where(
+                SharedInvitation.email == row.email,
+                SharedInvitation.status.in_(('pending','accepted','unknown'))))
+            if active:
+                raise WorkflowError('This native identity is already invited. '
+                                    'Verify the real account before changing its login.')
+            all_records = session.scalars(select(EventRosterRecord).where(
+                EventRosterRecord.email == row.email))
+            for person in all_records:
+                person.source_fields = {**person.source_fields, 'supervisely_login': login}
+            invitee = session.get(EventInvitee, row.email)
+            if invitee:
+                invitee.login = login
+            for reg in session.scalars(select(Registration)):
+                changed=False
+                for member in reg.members or []:
+                    if str(member.get('email') or '').casefold() == row.email:
+                        member['login'] = login
+                        changed=True
+                if changed:
+                    flag_modified(reg, 'members')
+            session.add(Audit(team_id=0,batch_id='',actor_id=int(actor),
+                action='supervisely_login_edited',
+                details={'email':row.email,'login':login}))
+        return True
 
     def set_role(self, actor, record_id, event_role):
         if event_role not in ROLES:
