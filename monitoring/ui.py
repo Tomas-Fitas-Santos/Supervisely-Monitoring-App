@@ -71,7 +71,45 @@ def identity(request):
         if uid not in (900, 901):
             raise WorkflowError('Select a demo monitor.')
         return uid, Gateway(DemoApi(sessions, uid, settings.home), sessions)
-    if settings.local:
+    external = os.getenv('MONITORING_EXTERNAL') == '1'
+    if external:
+        # This scope value is injected only by ExternalShell after a verified
+        # HttpOnly session cookie. Never read identity from HTTP headers/forms.
+        email = request.scope.get('state', {}).get('external_email')
+        if not email:
+            raise WorkflowError('Sign in using your event monitor email first.')
+        token = os.getenv('SUPERVISELY_SERVICE_TOKEN', '')
+        if not token:
+            raise WorkflowError('Supervisely service credentials are not configured.')
+        api = sly.Api(settings.server_address, token)
+        owner_email = os.getenv('EXTERNAL_ORGANISER_EMAIL', '').strip().casefold()
+        if email == owner_email:
+            profile = api.user.get_my_info()
+            uid = int(profile.id)
+            with sessions.begin() as session:
+                current = session.get(EventConfig, 1)
+                if current.owner_id is None:
+                    required_team = int(os.getenv('EXTERNAL_TEAM_ID', '0'))
+                    if required_team <= 0:
+                        raise WorkflowError('Configure EXTERNAL_TEAM_ID first.')
+                    SetupGateway(api).organiser(required_team, uid)
+                    current.owner_id = uid
+                    current.owner_login = profile.login
+                    current.server_address = api.server_address.rstrip('/')
+                elif int(current.owner_id) != uid:
+                    raise WorkflowError('Service credential does not belong to the event organiser.')
+        else:
+            from .db import SharedInvitation
+            with sessions() as session:
+                current = session.get(EventConfig, 1)
+                membership = (session.get(SharedInvitation,
+                    (current.monitoring_team_id, email))
+                    if current.monitoring_team_id else None)
+                if (not membership or membership.status != 'accepted' or
+                        not membership.user_id):
+                    raise WorkflowError('Event monitor membership is not yet verified in Supervisely.')
+                uid = int(membership.user_id)
+    elif settings.local:
         if request.client.host not in ('127.0.0.1', '::1', 'testclient'):
             raise WorkflowError('Local development is only available on loopback.')
         api = connection.api()
@@ -92,7 +130,7 @@ def identity(request):
     profile = api.user.get_my_info()
     if settings.local:
         uid = int(profile.id)
-    elif int(profile.id) != int(uid):
+    elif not external and int(profile.id) != int(uid):
         raise WorkflowError('Session identity and API credential do not match.')
     uid = int(uid)
     gateway = Gateway(api, sessions)
@@ -120,7 +158,7 @@ def identity(request):
             raise WorkflowError('Only the organiser can finish the event groups.')
     elif setup.monitoring_team_id:
         gateway.member(setup.monitoring_team_id, uid)
-    elif not settings.local:
+    elif not settings.local and not external:
         # Fresh hosted onboarding is restricted to an Admin of the app's launch team.
         launch_id = settings.launch_team_id or sly.env.team_id(raise_not_found=False)
         if not launch_id:
