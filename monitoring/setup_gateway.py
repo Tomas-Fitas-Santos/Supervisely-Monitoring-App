@@ -70,33 +70,41 @@ class SetupGateway(Gateway):
                 for m in all_members]
 
     def _verified_login_for_email(self, email):
-        """Use a native login only if the server exposes a matching registered email.
+        """Resolve an exact email to a verified login when directory access allows.
 
-        The members.add API accepts *login*, which can differ from email.
-        An inaccessible user directory is not evidence that an account is absent.
-        Never guess a login from the email local part or invite another identity.
+        Supervisely's *documented* members.add endpoint expects a login.
+        Do not invent usernames from email prefixes. A team Admin may not
+        have instance-wide users.list permissions, in which case the email
+        remains the only available identifier for one explicit native attempt.
         """
+        expected = str(email or '').strip().casefold()
         try:
-            matches = [
-                u for u in self.api.user.get_list()
-                if str(getattr(u, 'email', '') or '').strip().casefold() == email.casefold()
-            ]
+            directory = self.api.user.get_list()
         except Exception:
-            # Community/role restrictions may prohibit the directory lookup.
-            # Retain the original email identifier for instances supporting it.
-            return email
+            return expected
+        matches = [
+            user for user in directory
+            if str(getattr(user, 'email', '') or '').strip().casefold() == expected
+        ]
         if len(matches) > 1:
             raise InvitationRejected(
-                'Several Supervisely users share this registered email. '
-                'Resolve the account identity before sending an invitation.'
+                f'The Supervisely directory returned multiple accounts with '
+                f'registered email {expected}. Do not invite until the '
+                'account identity is resolved.'
             )
         if not matches:
-            return email
-        if getattr(matches[0], 'disabled', False):
+            # No exact registered email visible. This is not proof an account
+            # is absent; it can be hidden from the current token.
+            return expected
+        user = matches[0]
+        if getattr(user, 'disabled', False):
             raise InvitationRejected(
-                'This email belongs to a disabled Supervisely account.'
+                f'Supervisely account {expected} is disabled; no invitation sent.'
             )
-        return str(matches[0].login) or email
+        login = str(getattr(user, 'login', '') or '').strip()
+        if not login:
+            return expected
+        return login
 
     @staticmethod
     def _native_invitation_error(exc):
@@ -146,13 +154,39 @@ class SetupGateway(Gateway):
         if (len(email) > 254 or email.count('@') != 1 or
                 not all(email.split('@', 1)) or any(c.isspace() for c in email)):
             raise InvitationRejected('A valid registered Supervisely email address is required.')
+        if login:
+            # Optional operator-supplied exact Supervisely username. Verify
+            # the native account and email before the remote write.
+            login = str(login).strip()
+            try:
+                user = self.api.user.get_info_by_login(login)
+            except Exception:
+                raise InvitationRejected(
+                    f'The configured Supervisely login for {email} could not '
+                    'be verified. Correct the roster or remove the login '
+                    'to use the registered-email resolution path.'
+                ) from None
+            if not user or getattr(user, 'disabled', False):
+                raise InvitationRejected(
+                    f'The configured Supervisely login for {email} is missing '
+                    'or disabled. No invitation sent.'
+                )
+            native_email = str(getattr(user, 'email', '') or '').strip().casefold()
+            if native_email and native_email != email:
+                raise InvitationRejected(
+                    f'The configured username belongs to a different email '
+                    f'than {email}. No invitation sent.'
+                )
+            identifier = login
+        else:
+            identifier = self._verified_login_for_email(email)
         try:
             native_role_id = self.role_id(role)
         except WorkflowError as exc:
             raise InvitationRejected(str(exc)) from None
         try:
             reply = self.api.post('members.add', {
-                'teamId': int(team_id), 'login': email, 'roleId': native_role_id
+                'teamId': int(team_id), 'login': identifier, 'roleId': native_role_id
             }, retries=1, raise_error=True).json()
         except Exception as exc:
             status, detail = self._native_invitation_error(exc)
@@ -161,7 +195,11 @@ class SetupGateway(Gateway):
                 401: 'The Supervisely API token is missing, expired or invalid.',
                 402: 'The Supervisely subscription or account limits may block invitations.',
                 403: 'The current account may lack Team Admin invitation permission.',
-                404: 'The email was not resolved on this Supervisely instance. Verify the address; if needed, use the exact native username in Supervisely and then refresh membership.',
+                404: ('Supervisely returned Not Found for the invitation operation '
+                      'or supplied account identifier. This does NOT establish '
+                      'that the email is invalid. Confirm the Supervisely API '
+                      'server, SDK compatibility and the exact account username '
+                      'in Team Members; refresh membership before any retry.'),
                 409: 'This user may already be invited or a member. Refresh membership before any retry.',
                 422: 'Supervisely rejected the email or role fields. Check the account and role.',
                 429: 'Supervisely is rate-limiting invitations. Do not resend automatically.',
@@ -169,7 +207,8 @@ class SetupGateway(Gateway):
             if status in guidance:
                 provider = f' Supervisely says: {detail}.' if detail else ''
                 raise InvitationRejected(
-                    f'Supervisely HTTP {status} inviting {email}.{provider} '
+                    f'Supervisely HTTP {status} inviting {email} '
+                    f'(identifier: {identifier}).{provider} '
                     + guidance[status]
                 ) from None
             # A timeout, interrupted connection or 5xx can follow a committed
@@ -198,7 +237,7 @@ class SetupGateway(Gateway):
                 'Correct the address or role and refresh the team membership before retrying.'
             )
         return {'user_id': reply.get('userId') or reply.get('id'),
-                'login': email}
+                'login': identifier}
 
     def visible_accounts(self):
         """Use accessible membership data; global listing is an optional capability."""
