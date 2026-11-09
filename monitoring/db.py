@@ -215,6 +215,42 @@ class ArrivalCheckin(Base):
     note: Mapped[str] = mapped_column(Text, default='')
 
 
+class TeamSeat(Base):
+    """Physical table location, independent of native Supervisely team IDs."""
+    __tablename__ = 'event_team_seats'
+    registration_id: Mapped[str] = mapped_column(
+        ForeignKey('registrations.id'), primary_key=True)
+    table_number: Mapped[str] = mapped_column(String(20), default='')
+    actor_id: Mapped[int] = mapped_column(default=0)
+    updated_at: Mapped[int] = mapped_column(default=now)
+
+
+class FoodDrinkBalance(Base):
+    """Issued and redeemed physical tickets for an individual registrant."""
+    __tablename__ = 'food_drink_balances'
+    registration_id: Mapped[str] = mapped_column(
+        ForeignKey('registrations.id'), primary_key=True)
+    member_email: Mapped[str] = mapped_column(String(254), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(15), primary_key=True)
+    issued: Mapped[int] = mapped_column(default=0)
+    redeemed: Mapped[int] = mapped_column(default=0)
+
+
+class FoodDrinkTransaction(Base):
+    """Idempotent and immutable ticket audit trail."""
+    __tablename__ = 'food_drink_transactions'
+    operation_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    registration_id: Mapped[str] = mapped_column(
+        ForeignKey('registrations.id'), index=True)
+    member_email: Mapped[str] = mapped_column(String(254))
+    kind: Mapped[str] = mapped_column(String(15))
+    action: Mapped[str] = mapped_column(String(20))
+    quantity: Mapped[int] = mapped_column(default=1)
+    actor_id: Mapped[int] = mapped_column()
+    note: Mapped[str] = mapped_column(Text, default='')
+    created_at: Mapped[int] = mapped_column(default=now)
+
+
 class MediaSequence(Base):
     """Original ordered frame manifest for an encoded native video."""
     __tablename__ = 'media_sequences'
