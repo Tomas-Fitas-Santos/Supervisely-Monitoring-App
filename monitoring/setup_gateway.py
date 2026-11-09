@@ -147,7 +147,7 @@ class SetupGateway(Gateway):
         try:
             reply = self.api.post('members.add', {
                 'teamId': int(team_id), 'login': email, 'roleId': native_role_id
-            }, retries=1).json()
+            }, retries=1, raise_error=True).json()
         except Exception as exc:
             status, detail = self._native_invitation_error(exc)
             guidance = {
