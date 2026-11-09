@@ -113,10 +113,16 @@ class SetupGateway(Gateway):
         except (ValueError, TypeError, AttributeError):
             body = None
         if isinstance(body, dict):
-            for key in ('message', 'detail', 'error_description', 'error', 'reason'):
+            for key in ('message', 'details', 'detail', 'error_description',
+                        'error', 'reason'):
                 value = body.get(key)
                 if isinstance(value, dict):
                     value = value.get('message') or value.get('description')
+                if isinstance(value, list):
+                    value = next((item.get('message') or item.get('description')
+                                  for item in value if isinstance(item, dict)
+                                  and (item.get('message') or item.get('description'))),
+                                 None)
                 if isinstance(value, str) and value.strip():
                     # Do not render multi-line logs, encoded tokens or arbitrary
                     # HTML supplied by an untrusted provider response.
