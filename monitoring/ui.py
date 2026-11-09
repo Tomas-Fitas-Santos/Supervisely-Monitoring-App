@@ -726,9 +726,14 @@ def setup_action(request: Request):
                 f"{result['jobs']} logical labeling jobs prepared. "
                 "Only each team's first job will be released at event start."
             )
-        elif name == 'roster_workbook_import':
+        elif name in ('roster_workbook_import', 'roster_csv_import'):
             from .event_people import EventPeople
-            result = EventPeople(sessions).import_workbook(uid, f['xlsx_base64'])
+            people = EventPeople(sessions)
+            if name == 'roster_csv_import':
+                result = people.import_csv(uid, f.get('csv_text'),
+                                           f.get('source_sheet'))
+            else:
+                result = people.import_workbook(uid, f['xlsx_base64'])
             data['roster_import_result'] = result
             message = (
                 f"Saved {result['monitors']} monitors and {result['participants']} "
