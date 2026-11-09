@@ -124,6 +124,9 @@ def identity(request):
         uid = sly.env.user_from_multiuser_app()
         if api is None or uid is None:
             raise WorkflowError('Open this app through your Supervisely monitoring team.')
+    if external:
+        # First external login may initialise the organiser binding.
+        config = event_config()
     expected_server = config.server_address or settings.server_address
     if api.server_address.rstrip('/') != expected_server:
         raise WorkflowError('The session belongs to a different Supervisely server.')
