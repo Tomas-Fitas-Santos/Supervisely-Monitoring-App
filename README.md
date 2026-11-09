@@ -1,3 +1,67 @@
+# Supervisely Monitoring App — Bird Annotatiathon
+
+## November 9 event operations extension
+
+Branch: `feat/video-only-event-ops-20261109`. This branch is based on
+`feat/single-team-settings-theme-20261105`, **not** the minimal `main`
+branch. DEMO and PRODUCTION share the same application logic and native
+Supervisely Team ID (125980); the roster and video dataset inputs differ.
+
+### Rehearsal preparation
+
+1. Use a private two-sheet Excel workbook: exactly `Monitors` and
+   `Participants`. DEMO has the nine real staff email addresses on the
+   Monitors sheet and zero participant rows initially. Do not commit either
+   participant data or Supervisely credentials.
+2. Start the live DEMO in Windows (Python 3.12, real API token):
+   ```powershell
+   git fetch origin
+   git switch feat/video-only-event-ops-20261109
+   git pull --ff-only origin feat/video-only-event-ops-20261109
+   .\\Start-App.ps1 -Mode Demo -Install
+   ```
+3. In Settings, verify the existing Supervisely team **125980** and its
+   actual Workspace ID; use the existing organiser account.
+4. In Monitors & Teams import the two-sheet workbook. Before live invitations,
+   change two chosen staff event roles to `participant_monitor`, save and
+   create the DEMO rehearsal pair. Leave other users as monitors. If an
+   account has already accepted membership, an explicit native role-change
+   button appears; confirm it and refresh native memberships.
+5. Review the identities/roles. Only then send invitations (the app does not
+   silently invite on import).
+6. In Dataset upload a small real bird-video frame dataset using:
+   `Dataset Name/species-or-morphology/video-title/frame_000001.jpg` or
+   `species-or-morphology/video-title/frame_000001.jpg`. Use folder or ZIP.
+   A complete video is one unit; no `images/` or `videos/` roots.
+7. During the rehearsal, verify individual check-in and table number in
+   Participant Check-in. In Food & Drinks issue pizza/drink tickets and
+   redeem them at reception. A ticket cannot be redeemed more often than
+   it was issued. Corrections require reasons and are audited.
+8. Verify monitor account permissions and real native annotation submissions
+   manually. Do not assume a logical prepared job becomes an actual native
+   Supervisely labeling job.
+
+### Important remaining delivery gate
+
+This branch adds roster/roles, reception logistics and the video-only
+source importer, but does **not** finish or validate native pair-shared
+sequential Supervisely labeling-job creation, automatic next-job release,
+or correction return. The existing monitoring code explicitly flags this
+missing end-to-end integration. Do **not** declare the full event pipeline
+production-ready before testing native jobs with multiple real accounts.
+
+### Quick checks
+
+```powershell
+.\\.venv\\Scripts\\python.exe -m pytest -q tests/test_event_people.py tests/test_event_logistics.py tests/test_zip_dataset.py
+```
+
+Source-data details: [video-only dataset and job planning](docs/structured-dataset-and-jobs.md).
+The storage and frame-count caps need to be checked against actual hosting
+resources; a Pro subscription does not by itself provide local staging disk.
+
+---
+
 # Supervisely Monitoring App — Técnico Nightjar Annotatiathon
 
 This development branch implements the local **DEMO** and the shared architecture
