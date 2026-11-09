@@ -184,80 +184,48 @@ invitation status after people accept in Supervisely. Uncertain invitation
 results require inspection before retrying.
 
 Supervisely account logins may differ from registered email addresses.
-**A username is not required in the CSV.** On Enterprise servers with
-a working user directory, the app may resolve the exact registered roster
-email to the verified native login for `members.add` using the declared
-`roleId`. On `app.supervisely.com` (Community/Pro), we have observed
-`users.list` returning **HTTP 404 Page not found** despite an authenticated
-team Admin. The app therefore no longer calls `users.list` for every
-selected invite: it submits the email in the `members.add.login` field
-**once**, as supported by some instances.
-It does not guess a username from the email prefix or automatically try a
-second invitation on failure. You may explicitly provide an exact verified
-username in the roster as a fallback.
+**Actual cloud invite request confirmed 2026-11-09:** The Supervisely
+`app.supervisely.com` website successfully invited a user by their
+registered **email**, even though their account has a different username,
+using `POST /api/groups/{teamId}/members/add` with JSON
+`{"login":"person@example.org","roleId":<native_role_id>,"type":"core"}`.
+The old SDK `POST /public/api/v3/members.add` returned 404 on this cloud
+instance. The application now sends this observed group request via HTTPS
+using its existing organiser's **personal API token** in the `x-api-key`
+header, without copying browser Bearer JWTs, session cookies or other
+temporary browser credentials.
 
-**Observed on 2026-11-09, team 125980:** A valid Team Admin's
-`users.me` and `members.list` worked, but `users.list` produced HTTP 404
-`Page not found`. This is a route limitation, not evidence that an invited
-email is invalid. On Community/Pro, the app now avoids `users.list`
-altogether. The read-only `diagnose_invitation.py` uses the app's saved
-organiser credentials when available; no participant token or second
-invitation is needed. The native `members.add` route remains an independent
-runtime compatibility question.
+**Authentication limitation:** The successful browser request included
+a separate Bearer/session credential *as well as* `x-api-key`. We cannot
+infer from a browser 200 that the group endpoint will accept the personal
+API key on its own. A personal-token-only live invite must be verified with
+**one uninvited, specifically selected account**, only after revoking the
+credentials accidentally exposed in the original network trace.
+If a 401/403 occurs, **never** copy a browser JWT or cookies into this
+application; invite through Supervisely's website and refresh the app.
 
-If `members.add` itself returns 404 `Page not found`, the app
-**stops the entire selected batch after the first failed attempt**, leaves
-remaining selected accounts untouched, and reports the number not attempted.
-Use Supervisely's Team Members interface and then **Refresh participants &
-monitors from Supervisely**. The actual invite endpoint used by the website
-must be verified from a sanitized browser Network trace or with Supervisely
-support before claiming automated invitations work on that server.
+**Native roles:** `roleId` is resolved from the actual instance role
+directory according to the reviewed CSV role (`annotator`, `manager`,
+`reviewer`). The observed `71` is only proof of the browser request that
+was made for that one role; the app does **not** force 71 on all invitees.
+The `type` is always `core` for this native invite route.
 
-**HTTP 404 / Page not found:** This is an ambiguous native API
-response: it can indicate a missing route, server/SDK compatibility issue
-or an unknown account identifier. It is **not evidence that the registered
-email is invalid**. The error now reports which identifier was attempted
-and directs the organiser to check the Supervisely server and real username.
-There is no automatic retry by another identifier.
+**Invitation behavior:** The exact selected recipient list is used, with
+at most one attempt per address. Pending, accepted or unknown outcomes
+cannot be silently retried. The native API HTTP rejection and safe provider
+message are shown per email. A 404 `Page not found` stops the entire
+batch after the first failed request, leaving all later selected accounts
+untouched. HTTP 5xx/network errors remain unknown until read-only refresh.
 
-To diagnose an HTTP 404 without sending another invitation, use:
+**Refresh participants & monitors:** The existing button reconciles
+accepted/pending native team membership and externally invited people
+without ever sending another invitation or changing native roles.
+New native accounts are imported as unpaired until an organiser creates an
+explicit competition pair; reviewed CSV event roles remain authoritative.
 
-```powershell
-.\\.venv\\Scripts\\python.exe diagnose_invitation.py --team-id 125980 --email "tomas.gaming.21@gmail.com"
-```
-
-The diagnostic now tries the encrypted **organiser token already saved
-inside the Monitoring App**, and prompts privately for *your organiser
-token* only when none is saved. No participant credentials are required.
-It checks your Team membership and only lists members of that team.
-It deliberately does **not** call the broken `users.list` endpoint or
-send an invitation. Do not paste any API token into GitHub or chat.
-
-**Correct invitation errors:** The app makes one native request with
-`raise_error=True`, preserving the actual HTTP rejection rather than hiding
-it behind the SDK's retry-limit exception. On a definitive HTTP 400, 401, 402,
-403, 404, 409, 422 or 429, the roster shows the status, provider message
-(when safe), the affected email and corrective guidance. Network/HTTP 5xx
-outcomes remain **unknown** and cannot be blindly resent. Invitation errors
-also appear under **Invite selected** rather than showing a false success.
-
-**Refresh participants & monitors from Supervisely:** This button performs
-read-only reconciliation of the existing team, including members invited
-directly on the Supervisely website. Where possible, team-scoped user
-profiles fill missing email/login/role fields from `members.list`. Accepted,
-pending, mismatched and deactivated statuses are updated; verified monitors
-receive app monitoring access. New team accounts appear in the Monitors or
-Participants roster without overwriting reviewed CSV roles, assigning
-competition partners or sending invitations. Accounts whose email is hidden
-require explicit administrator linking before they can join event pairs.
-Refresh can be used before or after roster import. Native roles are never
-changed by refresh.
-
-If HTTP 404 means your instance will not resolve an email, confirm the
-registered account on the same Supervisely server, invite it manually by
-username through Supervisely's **Team Members** interface, and use **Refresh**
-to import the accepted membership. The app never invents a login from the
-email local-part or sends a second invitation automatically.
+**Read-only diagnostic:** `diagnose_invitation.py` reuses the already
+encrypted organiser connection, if available. It reads the current team and
+does not call the unavailable global `users.list` API or send invitations.
 
 ### Dataset preparation
 
