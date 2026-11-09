@@ -165,7 +165,9 @@ def display_access(uid, gateway):
                 event_settings=EventSettings(sessions).snapshot(uid))
     from .attendance import EventRoster
     from .event_logistics import EventLogistics
-    data.update(logistics=EventLogistics(sessions).overview(uid, organiser=can_setup),
+    from .event_people import EventPeople
+    data.update(roster_profiles=EventPeople(sessions).overview() if can_setup else [],
+                logistics=EventLogistics(sessions).overview(uid, organiser=can_setup),
                 competition=Competition(sessions).config(),
                 leaderboard=Competition(sessions).leaderboard() if gateway else [],
                 registration_rows=Registrations(sessions).rows() if can_setup else [],
@@ -219,6 +221,7 @@ def clear_access():
                                    directory={}, sources={}, connected=False, review_preview=None,
                                    registration_rows=[], event_settings={}, attendance={'teams': [], 'monitors': [], 'summary': {}},
                                    logistics={'teams': [], 'summary': {}},
+                                   roster_profiles=[], roster_import_result=None,
                                    roster_plan_id=None, roster_balance_preview=None,
                                    prepared_jobs=[], media_preview=None, job_plan_id=None, job_preview=None,
                                    unit_page={}, leaderboard=[], export_data=None,
@@ -593,8 +596,8 @@ def setup_action(request: Request):
                 setup, uid, f['upload_ids'], f['source_mode'])
             data['media_preview'] = preview
             message = (
-                f"Preview: {preview['images']} images, {preview['videos']} complete "
-                f"videos ({preview['frames']} frames) in {preview['categories']} categories. "
+                f"Preview: {preview['videos']} complete videos "
+                f"({preview['frames']} frames) in {preview['categories']} categories. "
                 "Confirm to upload these sources to Supervisely."
             )
         elif name == 'structured_upload':
@@ -612,8 +615,7 @@ def setup_action(request: Request):
             data['catalog'] = gateway.catalog(setup.monitoring_team_id)
             data['media_preview'] = None
             message = (
-                f"Uploaded {result['manifest']['image_count']} images and "
-                f"{result['manifest']['video_count']} complete videos from "
+                f"Uploaded {result['manifest']['video_count']} complete videos from "
                 f"{result['manifest']['frame_count']} ordered frames."
             )
         elif name == 'job_preview':
@@ -621,7 +623,7 @@ def setup_action(request: Request):
             team_ids = f.get('registration_ids')
             dataset_ids = f.get('dataset_ids')
             if not dataset_ids or len(dataset_ids) != len(set(dataset_ids)):
-                raise WorkflowError('Choose the source image and video datasets.')
+                raise WorkflowError('Choose source video datasets.')
             image_units = f.get('image_effort', 1)
             assets, _ = gateway.inventory(
                 setup.monitoring_team_id, dataset_ids, int(image_units))
@@ -647,6 +649,29 @@ def setup_action(request: Request):
                 f"{result['jobs']} logical labeling jobs prepared. "
                 "Only each team's first job will be released at event start."
             )
+        elif name == 'roster_workbook_import':
+            from .event_people import EventPeople
+            result = EventPeople(sessions).import_workbook(uid, f['xlsx_base64'])
+            data['roster_import_result'] = result
+            message = (
+                f"Saved {result['monitors']} monitors and {result['participants']} "
+                f"participant registration rows; {result['needs_review']} flagged "
+                f"for review. No native invitations were sent."
+            )
+        elif name == 'roster_role':
+            from .event_people import EventPeople
+            EventPeople(sessions).set_role(uid, f.get('record_id'), f.get('event_role'))
+            message = 'Event role saved. No native invitation or role change was sent.'
+        elif name == 'roster_prepare_pairs':
+            from .event_people import EventPeople
+            count = EventPeople(sessions).prepare_pairs(uid)
+            message = f'{count} eligible pairs registered. Review before sending invitations.'
+        elif name == 'roster_demo_pair':
+            if os.getenv('MONITORING_LIVE_DEMO') != '1' and os.getenv('MONITORING_PILOT') != '1':
+                raise WorkflowError('The test pair shortcut is available only in live DEMO mode.')
+            from .event_people import EventPeople
+            count = EventPeople(sessions).prepare_demo_pair(uid, f.get('emails'))
+            message = f'{count} DEMO pair registered with dual-role real staff accounts.'
         elif name == 'registration_excel_preview':
             from .excel_import import excel_to_csv
             response.update(excel_to_csv(f['xlsx_base64'], f.get('sheet_name'),
