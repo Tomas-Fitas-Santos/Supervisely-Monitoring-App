@@ -12,6 +12,26 @@ Import a two-tab Excel roster (Monitors and Participants). The Monitors sheet is
 
 ## Deploy to a Docker-capable Linux VPS / organisational server
 
+This is the intended route when the event is on Supervisely Pro and cannot
+publish a **private native custom app**. It hosts only the monitoring dashboard
+on your own server; Supervisely retains the actual annotation datasets, team
+memberships and native labeling jobs.
+
+A new Windows PowerShell preflight/launch helper is available:
+
+```powershell
+Copy-Item .env.external.example .env.external
+# Fill and verify all real secrets locally. Do not commit them.
+.\Deploy-External.ps1
+.\Deploy-External.ps1 -Up
+```
+
+Without `-Up`, the helper validates the domain, origin, organiser identity,
+existing team ID, long independent secrets, matching PostgreSQL password,
+SMTP parameters and Docker Compose configuration without starting a container
+or issuing invitations. On Linux follow the Docker Compose commands below.
+
+
 Requires: public DNS pointing to the host, TCP ports 80 and 443, Docker Compose plugin, PostgreSQL credentials, SMTP TLS credentials, and the organiser's Supervisely API token.
 
 1. Clone the repository and checkout feat/video-only-event-ops-20261109.
