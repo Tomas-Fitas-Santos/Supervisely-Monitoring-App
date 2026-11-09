@@ -8,10 +8,13 @@ class InvitationRejected(WorkflowError):
 
 
 class InvitationEndpointUnavailable(InvitationRejected):
-    """The server returned 404 Page not found for the members.add API route.
+    """The native invitation endpoint returned 404 Page not found."""
 
-    Stop the selected batch. This is not a per-account 'email not found'
-    verdict, and retrying it for every participant would be misleading.
+
+class InvitationAuthenticationUnavailable(InvitationRejected):
+    """The native browser invitation route rejected personal-key authentication.
+
+    Stop the entire selected batch; no browser tokens or cookies are imported.
     """
 
 
@@ -280,6 +283,14 @@ class SetupGateway(Gateway):
                     f'(identifier: {identifier}).{provider} '
                     + guidance[status]
                 )
+                if status == 401:
+                    raise InvitationAuthenticationUnavailable(
+                        message + ' Bulk invitations stopped. The personal API '
+                        'key cannot authenticate this browser-only operation. '
+                        'Use Supervisely Team Members and refresh the app; do '
+                        'not supply browser JWTs, session cookies or other '
+                        'users\' credentials.'
+                    ) from None
                 if status == 404 and 'page not found' in detail.lower():
                     raise InvitationEndpointUnavailable(
                         message + ' The group-members invitation route may '
