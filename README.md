@@ -196,6 +196,23 @@ It does not guess a username from the email prefix or automatically try a
 second invitation on failure. You may explicitly provide an exact verified
 username in the roster as a fallback.
 
+**Observed on 2026-11-09, team 125980:** A valid Team Admin's
+`users.me` and `members.list` worked, but `users.list` produced HTTP 404
+`Page not found`. This is a route limitation, not evidence that an invited
+email is invalid. On Community/Pro, the app now avoids `users.list`
+altogether. The read-only `diagnose_invitation.py` uses the app's saved
+organiser credentials when available; no participant token or second
+invitation is needed. The native `members.add` route remains an independent
+runtime compatibility question.
+
+If `members.add` itself returns 404 `Page not found`, the app
+**stops the entire selected batch after the first failed attempt**, leaves
+remaining selected accounts untouched, and reports the number not attempted.
+Use Supervisely's Team Members interface and then **Refresh participants &
+monitors from Supervisely**. The actual invite endpoint used by the website
+must be verified from a sanitized browser Network trace or with Supervisely
+support before claiming automated invitations work on that server.
+
 **HTTP 404 / Page not found:** This is an ambiguous native API
 response: it can indicate a missing route, server/SDK compatibility issue
 or an unknown account identifier. It is **not evidence that the registered
