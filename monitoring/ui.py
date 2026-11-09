@@ -775,7 +775,7 @@ def setup_action(request: Request):
             count = EventPeople(sessions).prepare_pairs(uid)
             message = f'{count} eligible pairs registered. Review before sending invitations.'
         elif name == 'roster_demo_pair':
-            if os.getenv('MONITORING_LIVE_DEMO') != '1' and os.getenv('MONITORING_PILOT') != '1':
+            if not settings.local or os.getenv('MONITORING_REHEARSAL_PAIR') != '1':
                 raise WorkflowError('The test pair shortcut is available only in live DEMO mode.')
             from .event_people import EventPeople
             count = EventPeople(sessions).prepare_demo_pair(uid, f.get('emails'))
