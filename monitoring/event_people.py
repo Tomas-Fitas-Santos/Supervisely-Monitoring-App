@@ -221,12 +221,24 @@ class EventPeople:
 
     def overview(self):
         with self.sessions() as session:
-            invitations = {inv.email:inv.status for inv in session.scalars(select(SharedInvitation))}
+            config = session.get(EventConfig, 1)
+            team_id = config.monitoring_team_id if config else None
+            invitations = {
+                inv.email: inv.status for inv in session.scalars(
+                    select(SharedInvitation).where(SharedInvitation.team_id == team_id))
+            } if team_id else {}
+            # A participant only becomes invitation-ready after a complete,
+            # eligible pair has been prepared; imported staff are ready without
+            # creating competition pairs. The UI must never infer this itself.
+            prepared_emails = set(session.scalars(select(EventInvitee.email)))
             return [{
                 'id':p.record_id, 'source_sheet':p.source_sheet,
                 'team_number':p.team_number, 'team_name':p.team_name,
                 'display_name':p.display_name, 'email':p.email,
                 'event_role':p.event_role, 'needs_review':p.needs_review,
+                'invitable': bool(p.email and p.email in prepared_emails
+                                  and not p.needs_review
+                                  and p.event_role != 'inactive'),
                 'source_fields':p.source_fields,
                 'invitation_status':invitations.get(p.email, 'not_invited')
             } for p in session.scalars(select(EventRosterRecord).order_by(
