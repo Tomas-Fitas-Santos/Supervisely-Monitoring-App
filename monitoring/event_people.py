@@ -225,7 +225,7 @@ class EventPeople:
             config = session.get(EventConfig, 1)
             team_id = config.monitoring_team_id if config else None
             invitations = {
-                inv.email: inv.status for inv in session.scalars(
+                inv.email: inv for inv in session.scalars(
                     select(SharedInvitation).where(SharedInvitation.team_id == team_id))
             } if team_id else {}
             # A participant only becomes invitation-ready after a complete,
@@ -248,8 +248,12 @@ class EventPeople:
                 'can_pair': bool(p.email and p.email not in paired and
                                  p.event_role in ('participant', 'participant_monitor')
                                  and not p.needs_review and
-                                 invitations.get(p.email) == 'accepted'),
-                'invitation_status':invitations.get(p.email, 'not_invited')
+                                 getattr(invitations.get(p.email), 'status', None) == 'accepted'),
+                'invitation_status':getattr(invitations.get(p.email), 'status', 'not_invited'),
+                'invitation_error':getattr(invitations.get(p.email), 'error', '') or '',
+                'native_user_id':getattr(invitations.get(p.email), 'user_id', None),
+                'native_login':getattr(invitations.get(p.email), 'login', None) or '',
+                'native_role':getattr(invitations.get(p.email), 'effective_role', None) or '',
             } for p in session.scalars(select(EventRosterRecord).order_by(
                 EventRosterRecord.source_sheet, EventRosterRecord.team_number,
                 EventRosterRecord.display_name))]
