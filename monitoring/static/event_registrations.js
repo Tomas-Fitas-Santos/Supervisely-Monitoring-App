@@ -135,6 +135,26 @@ Vue.component('event-registrations', {
       this.inviteEmails=[...new Set([...this.selectedReady,...this.selectableVisible])];
     },
     clearInviteSelection(){this.inviteEmails=[];},
+    async copySelectedForSupervisely(){
+      const emails=[...this.selectedReady];
+      if(!emails.length){this.error='Select one or more eligible people first.';return;}
+      const roleLabels={monitor:'Manager',participant:'Annotator',
+        participant_monitor:'Reviewer'};
+      const rows=['Email\tSupervisely role',...emails.map(email=>{
+        const person=this.profiles.find(p=>p.email===email);
+        return email+'\t'+(roleLabels[person?.event_role]||'Needs review');
+      })];
+      const text=rows.join('\n');
+      try{
+        if(!navigator.clipboard?.writeText)throw new Error('Clipboard API unavailable');
+        await navigator.clipboard.writeText(text);
+        this.error='';
+      }catch(_){
+        // Manual paste fallback for non-secure browser origins; never expose
+        // account tokens, only email addresses and approved event roles.
+        window.prompt('Copy selected emails and their assigned roles:',text);
+      }
+    },
     async inviteSelected(){
       if(this.disabled||this.busy)return;
       const chosen=[...this.inviteEmails];
@@ -156,8 +176,15 @@ Vue.component('event-registrations', {
         if(!result)
           throw new Error(this.view.message||'Could not send the selected invitations.');
         this.inviteFailures=result?.invitations?.errors||[];
-        if(result?.invitations?.endpoint_unavailable){
-          this.error='Supervisely returned 404 Page not found for members.add. '+
+        if(result?.invitations?.authentication_unavailable){
+          this.error='Supervisely rejected personal API-key authentication (HTTP 401). '+
+            'No further invitations were attempted; '+
+            (result.invitations.not_attempted||0)+
+            ' selected account(s) were not attempted. Copy your selection, '+
+            'invite through Supervisely Team Members, then Refresh.';
+          this.inviteEmails=this.selectedReady;
+        }else if(result?.invitations?.endpoint_unavailable){
+          this.error='Supervisely returned 404 Page not found for the invitation endpoint. '+
             'The batch stopped after the first failure; '+
             (result.invitations.not_attempted||0)+
             ' selected account(s) were not attempted. Invite through the native '+
@@ -271,7 +298,11 @@ Vue.component('event-registrations', {
     </div>
     <p class="nj-caution">Invitations are sent only to the accounts you select.
       Selected accounts can span both sheets. Existing pending or accepted invitations
-      cannot be resent. Real Supervisely permissions come from the reviewed roster.</p>
+      cannot be resent. Real Supervisely permissions come from the reviewed roster.
+      On app.supervisely.com, the website's invitation endpoint may reject personal API
+      tokens even for a Team Admin. In that case, copy your selection, invite on
+      <a href="https://app.supervisely.com/members/add" target="_blank" rel="noopener noreferrer">Supervisely Team Members</a>,
+      and refresh this roster. Do not share browser session credentials.</p>
     <div class="nj-form-row">
       <label>Sheet<select v-model="group">
         <option value="Monitors">Monitors</option>
@@ -284,6 +315,9 @@ Vue.component('event-registrations', {
       </button>
       <button @click="clearInviteSelection" :disabled="disabled||busy||!inviteEmails.length">
         Clear selection
+      </button>
+      <button @click="copySelectedForSupervisely" :disabled="disabled||busy||!selectedReady.length">
+        Copy selected emails &amp; roles
       </button>
       <button class="nj-primary" @click="inviteSelected"
         :disabled="disabled||busy||!selectedReady.length">
