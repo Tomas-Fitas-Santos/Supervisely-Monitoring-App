@@ -156,20 +156,70 @@ class SetupGateway(Gateway):
                         break
         return status, detail
 
-    def invite_email(self, team_id, email, role, login=None):
-        """Invite a roster email through a verified Supervisely username if visible.
+    def _post_group_invitation(self, team_id, identifier, native_role_id):
+        """Single authenticated native invite using the observed cloud UI route.
 
-        The documented members.add API expects the native *login*, which may
-        differ from the registered email. Resolve it with an exact email
-        directory match, or use a separately verified operator-supplied login.
-        Only when directory access does not expose a match, try the email in
-        the login field once. A failure does not trigger a second write.
+        Community/Pro browser uses /api/groups/{teamId}/members/add, NOT the
+        SDK's /public/api/v3/members.add. Do not replay browser cookies/JWTs.
+        SDK's personal API token is sent only via x-api-key over HTTPS.
+        A browser-only auth requirement is a hard failure, not a request to
+        persist/capture a user's browser session.
+        """
+        import requests
+
+        server = str(getattr(self.api, 'server_address', '') or '').rstrip('/')
+        if server == 'https://app.supervisely.com':
+            token = getattr(self.api, 'token', None)
+            if not isinstance(token, str) or not token:
+                raise InvitationRejected(
+                    'The organiser personal API token is unavailable. '
+                    'Reconnect the Monitoring App with a new Supervisely token.'
+                )
+            url = f'{server}/api/groups/{int(team_id)}/members/add'
+            result = requests.post(
+                url,
+                json={'login': identifier, 'roleId': int(native_role_id),
+                      'type': 'core'},
+                headers={
+                    'x-api-key': token,
+                    'x-team-id': str(int(team_id)),
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json',
+                },
+                timeout=20,
+                allow_redirects=False,
+            )
+            # A redirect would move the API token to another endpoint; never
+            # follow it automatically. The HTTP error is surfaced below.
+            result.raise_for_status()
+            return result.json()
+        # Other Supervisely instances retain the documented SDK endpoint.
+        return self.api.post('members.add', {
+            'teamId': int(team_id), 'login': identifier,
+            'roleId': int(native_role_id)
+        }, retries=1, raise_error=True).json()
+
+    def invite_email(self, team_id, email, role, login=None):
+        """Invite using email on the observed cloud endpoint or SDK elsewhere.
+
+        For app.supervisely.com the browser demonstrably accepts registered
+        email as 'login' on /api/groups/{team}/members/add. Other instances
+        use the SDK endpoint and may need verified username resolution.
+        There is exactly one native write per selected recipient.
         """
         email = str(email or '').strip().casefold()
         if (len(email) > 254 or email.count('@') != 1 or
                 not all(email.split('@', 1)) or any(c.isspace() for c in email)):
             raise InvitationRejected('A valid registered Supervisely email address is required.')
-        if login:
+        cloud_email = (
+            str(getattr(self.api, 'server_address', '') or '').rstrip('/')
+            == 'https://app.supervisely.com'
+        )
+        if cloud_email:
+            # The successful native UI request used the email, even though
+            # the target's unique Supervisely username was different.
+            identifier = email
+        elif login:
             # Optional operator-supplied exact Supervisely username. Verify
             # the native account and email before the remote write.
             login = str(login).strip()
@@ -200,9 +250,9 @@ class SetupGateway(Gateway):
         except WorkflowError as exc:
             raise InvitationRejected(str(exc)) from None
         try:
-            reply = self.api.post('members.add', {
-                'teamId': int(team_id), 'login': identifier, 'roleId': native_role_id
-            }, retries=1, raise_error=True).json()
+            reply = self._post_group_invitation(
+                team_id, identifier, native_role_id
+            )
         except Exception as exc:
             status, detail = self._native_invitation_error(exc)
             guidance = {
@@ -210,11 +260,10 @@ class SetupGateway(Gateway):
                 401: 'The Supervisely API token is missing, expired or invalid.',
                 402: 'The Supervisely subscription or account limits may block invitations.',
                 403: 'The current account may lack Team Admin invitation permission.',
-                404: ('Supervisely returned Not Found for the invitation operation '
-                      'or supplied account identifier. This does NOT establish '
-                      'that the email is invalid. Confirm the Supervisely API '
-                      'server, SDK compatibility and the exact account username '
-                      'in Team Members; refresh membership before any retry.'),
+                404: ('The native invitation endpoint returned Not Found. '
+                      'This does NOT establish that the email is invalid. '
+                      'Check the configured server, team and the selected '
+                      'account; refresh before retrying.'),
                 409: 'This user may already be invited or a member. Refresh membership before any retry.',
                 422: 'Supervisely rejected the email or role fields. Check the account and role.',
                 429: 'Supervisely is rate-limiting invitations. Do not resend automatically.',
@@ -228,10 +277,10 @@ class SetupGateway(Gateway):
                 )
                 if status == 404 and 'page not found' in detail.lower():
                     raise InvitationEndpointUnavailable(
-                        message + ' The members.add API route may be unavailable '
-                        'on this Community/Pro server. Stop bulk invitations; '
-                        'use the Supervisely Team Members website and then '
-                        'refresh the Monitoring App.'
+                        message + ' The group-members invitation route may '
+                        'require browser-session authentication instead of the '
+                        'organiser personal API token. Bulk invites are stopped. '
+                        'Use Team Members and refresh the Monitoring App.'
                     ) from None
                 raise InvitationRejected(message) from None
             # A timeout, interrupted connection or 5xx can follow a committed
