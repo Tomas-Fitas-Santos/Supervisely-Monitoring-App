@@ -14,7 +14,7 @@ Import a two-tab Excel roster (Monitors and Participants). The Monitors sheet is
 
 Requires: public DNS pointing to the host, TCP ports 80 and 443, Docker Compose plugin, PostgreSQL credentials, SMTP TLS credentials, and the organiser's Supervisely API token.
 
-1. Clone the repository and checkout feat/external-monitor-login-20261109.
+1. Clone the repository and checkout feat/video-only-event-ops-20261109.
 2. Copy .env.external.example to .env.external and replace every placeholder. Generate EXTERNAL_AUTH_SECRET with: python3 -c "import secrets; print(secrets.token_hex(48))"
 3. Keep .env.external private. Never commit it.
 4. Run:
