@@ -45,11 +45,50 @@ class SharedTeamInvitations:
             )
         return int(config.monitoring_team_id)
 
-    def _targets(self, session, registration_id=None, audience='everyone', email=None):
-        """One native invite per identity even if a monitor oversees many pairs."""
+    def _targets(self, session, registration_id=None, audience='everyone', email=None,
+                 selected_emails=None):
+        """One native invite per identity even if a monitor oversees many pairs.
+
+        A submitted selection is an explicit non-empty allowlist. It must never
+        fall back to the 'everyone' audience when it is empty or malformed.
+        Validate the entire batch BEFORE any native writes or membership refresh.
+        """
         invitees = list(session.scalars(select(EventInvitee).order_by(EventInvitee.email)))
         if not invitees:
             raise WorkflowError('Upload a roster before sending invitations.')
+        if selected_emails is not None:
+            if (not isinstance(selected_emails, list) or
+                    not 1 <= len(selected_emails) <= 1000):
+                raise WorkflowError('Select between 1 and 1000 eligible roster people to invite.')
+            if any(not isinstance(value, str) for value in selected_emails):
+                raise WorkflowError('Selected invitation addresses must be text.')
+            addresses = [normal_email(value) for value in selected_emails]
+            if len(set(addresses)) != len(addresses):
+                raise WorkflowError('The selected invitation list contains duplicate accounts.')
+            allowed = {person.email: person for person in invitees}
+            unknown = set(addresses) - allowed.keys()
+            if unknown:
+                raise WorkflowError(
+                    'One or more selected accounts are not prepared for invitations. '
+                    'Prepare complete eligible pairs and review their roles first.'
+                )
+            # The imported workbook may flag cancelled, unconsented, duplicate,
+            # or inactive records. None may be explicitly invited by bypassing
+            # the roster UI's disabled checkbox.
+            from .db import EventRosterRecord
+            roster = list(session.scalars(select(EventRosterRecord).where(
+                EventRosterRecord.email.in_(addresses))))
+            if any(person.needs_review or person.event_role == 'inactive'
+                   for person in roster):
+                raise WorkflowError(
+                    'Some selected roster records need review and cannot be invited.'
+                )
+            if (registration_id is not None or audience != 'everyone' or
+                    email is not None):
+                raise WorkflowError(
+                    'Select invitees by explicit emails or by an audience, not both.'
+                )
+            return [allowed[address] for address in addresses]
         if registration_id is not None:
             reg_id = str(registration_id)
             if not session.get(Registration, reg_id):
@@ -320,11 +359,17 @@ class SharedTeamInvitations:
                 details={'invitees_checked': len(entries)}))
         return self.summary()
 
-    def invite(self, gateway, actor, registration_id=None, audience='everyone', email=None):
-        """Invite roles from CSV, once, with no blind retry of unknown writes."""
+    def invite(self, gateway, actor, registration_id=None, audience='everyone', email=None,
+               selected_emails=None):
+        """Invite only explicitly chosen accounts when selected_emails is supplied.
+
+        Native permissions still come from the reviewed EventInvitee role,
+        never from request data. Pending or unknown writes are never resent.
+        """
         with self.sessions() as session:
             tid = self._event_team(session)
-            selected = [v.email for v in self._targets(session, registration_id, audience, email)]
+            selected = [v.email for v in self._targets(
+                session, registration_id, audience, email, selected_emails)]
         api = SetupGateway(gateway.api)
         self.refresh(gateway, actor)
         outcomes = {'invited': 0, 'pending': 0, 'accepted': 0, 'failed': 0}
