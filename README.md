@@ -202,6 +202,17 @@ email is invalid**. The error now reports which identifier was attempted
 and directs the organiser to check the Supervisely server and real username.
 There is no automatic retry by another identifier.
 
+To diagnose an HTTP 404 without sending another invitation, use:
+
+```powershell
+.\\.venv\\Scripts\\python.exe diagnose_invitation.py --team-id 125980 --email "tomas.gaming.21@gmail.com"
+```
+
+The tool prompts privately for your Supervisely token and performs **only**
+`users.me`, current team membership and available directory reads. It prints
+the exact matching account username if visible; do not paste the API token
+into GitHub issues or chat logs.
+
 **Correct invitation errors:** The app makes one native request with
 `raise_error=True`, preserving the actual HTTP rejection rather than hiding
 it behind the SDK's retry-limit exception. On a definitive HTTP 400, 401, 402,
