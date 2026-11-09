@@ -2,7 +2,7 @@
 Vue.component('event-logistics', {
   props: ['view', 'form', 'post', 'locked'],
   data() {
-    return {busy:false, error:'', query:'', quantity:1, notes:{}, timer:null};
+    return {busy:false, error:'', query:'', quantity:1, notes:{}, pending:{}, timer:null};
   },
   computed: {
     logistics() {return this.view.logistics||{teams:[],summary:{}};},
@@ -20,22 +20,32 @@ Vue.component('event-logistics', {
       if(this.busy||this.locked)return;
       this.busy=true;this.error='';
       const key=team&&person&&kind?this.key(team,person,kind):'';
+      const pendingKey=action+'/'+key;
+      if(action!=='refresh'&&!this.pending[pendingKey]){
+        this.$set(this.pending,pendingKey,{
+          operation_id:crypto.randomUUID().replace(/-/g,''),
+          quantity:Number(this.quantity),
+          note:key?(this.notes[key]||'').trim():''
+        });
+      }
+      const operation=this.pending[pendingKey]||{};
       Object.assign(this.form,{
         logistics_action:action,
-        operation_id:crypto.randomUUID().replace(/-/g,''),
+        operation_id:operation.operation_id||crypto.randomUUID().replace(/-/g,''),
         registration_id:team?.id||'',
         member_email:person?.email||'',
         ticket_kind:kind||'',
-        quantity:Number(this.quantity),
-        ticket_note:key?(this.notes[key]||'').trim():''
+        quantity:operation.quantity||1,
+        ticket_note:operation.note||''
       });
       try {
         const reply=await this.post('/logistics/action');
         if(reply?.ok===false||this.view.error)
           throw new Error(this.view.message||'Reception action failed.');
+        if(action!=='refresh')this.$delete(this.pending,pendingKey);
         if(key&&(action==='void_issue'||action==='undo_redemption'))this.$delete(this.notes,key);
       } catch(e) {
-        this.error=e.message||'Could not update ticket ledger.';
+        this.error=(e.message||'Could not update ticket ledger.')+' Retrying this action reuses its original operation ID; refresh the ledger if the result is uncertain.';
       } finally {this.busy=false;}
     }
   },
