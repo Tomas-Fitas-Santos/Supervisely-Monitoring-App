@@ -1,14 +1,16 @@
-"""CSV-driven native invitations and verified event roles in one shared team.
+"""Native Supervisely team discovery and explicit, role-aware invitations.
 
-All live invitation writes are explicit, use the role declared in the imported
-CSV, and never create a new native team. DEMO and PRODUCTION use the same path.
+No native invitation or role is changed during membership reconciliation.
 """
+import hashlib
+from collections import Counter
+
 from sqlalchemy import select, update
 from sqlalchemy.orm.attributes import flag_modified
 
 from .db import (
     Audit, EventConfig, EventInvitee, EventMember, EventPreferences,
-    Registration, RosterContact, SharedInvitation, TeamOnboarding, now,
+    EventRosterRecord, Registration, RosterContact, SharedInvitation, TeamOnboarding, now,
 )
 from .event_settings import single_team
 from .service import WorkflowError
@@ -228,8 +230,107 @@ class SharedTeamInvitations:
                 int(user_id) == int(organiser_id) and
                 entry.event_role in ('monitor', 'participant_monitor'))
 
+    @staticmethod
+    def _native_role(member, role_ids):
+        """Normalize the role field returned by different Supervisely versions."""
+        raw = member.get('role') or member.get('roleId') or ''
+        if isinstance(raw, dict):
+            raw = raw.get('role') or raw.get('name') or raw.get('id') or ''
+        name = str(raw).strip().casefold()
+        return role_ids.get(name, name)
+
+    def _discover_native_members(self, session, team_id, listing, role_ids, actor, checked_at):
+        """Adopt externally invited members into the app without inviting anyone.
+
+        A native role is authoritative about permission, not about competition
+        pairing. Unpaired people stay unassigned until the organiser registers
+        an explicit two-person pair. Existing workbook rows are never overwritten.
+        """
+        role_map = {'manager': ('monitor', 'Monitors'),
+                    'annotator': ('participant', 'Participants'),
+                    'reviewer': ('participant_monitor', 'Participants')}
+        existing_emails = set(session.scalars(select(EventRosterRecord.email)))
+        existing_logins = {str(v.login or '').casefold()
+                           for v in session.scalars(select(EventInvitee)) if v.login}
+        known_users = {int(v.user_id) for v in session.scalars(select(SharedInvitation).where(
+            SharedInvitation.team_id == team_id)) if v.user_id}
+        duplicates = Counter(
+            normal_email_or_blank(m.get('email') or m.get('inviteEmail'))
+            for m in listing
+        )
+        added = 0
+        needs_link = 0
+        observed = set()
+        for native in listing:
+            email = normal_email_or_blank(native.get('email') or native.get('inviteEmail'))
+            login = str(native.get('login') or '').strip()[:180]
+            name = str(native.get('name') or login or email or 'Supervisely member').strip()[:180]
+            user_id = native.get('userId') or native.get('id')
+            try:
+                user_id = int(user_id) if user_id else None
+            except (ValueError, TypeError):
+                user_id = None
+            role = self._native_role(native, role_ids)
+            event_role, sheet = role_map.get(role, (
+                'monitor' if role in ('admin', 'developer') else 'participant',
+                'Monitors' if role in ('admin', 'developer') else 'Participants'))
+            is_owner = user_id is not None and user_id == session.get(EventConfig, 1).owner_id
+            supported = role in role_map or (role == 'admin' and is_owner)
+            if not email and (login.casefold() in existing_logins or user_id in known_users):
+                # An imported roster may already identify this private native
+                # account by login/ID even if the server withholds its email.
+                continue
+            identity = email if email else (login.casefold() or str(user_id or ''))
+            if not identity:
+                continue
+            record_id = hashlib.sha256(
+                f'supervisely:{team_id}:{identity}'.encode('utf-8')).hexdigest()
+            observed.add(record_id)
+            meta = {'imported_via': 'supervisely', 'supervisely_login': login,
+                    'supervisely_user_id': str(user_id or ''),
+                    'supervisely_role': role}
+            conflict = bool(email and duplicates[email] > 1)
+            record = session.get(EventRosterRecord, record_id)
+            if record:
+                record.source_fields = {**(record.source_fields or {}), **meta}
+                record.display_name = name
+                record.updated_at = checked_at
+                # Do not silently change an organiser-reviewed event role.
+                record.needs_review = (not supported or conflict or not email or
+                                       record.event_role != event_role)
+            elif not email or email not in existing_emails:
+                session.add(EventRosterRecord(
+                    record_id=record_id, source_sheet=sheet, team_number='',
+                    team_name='', display_name=name, email=email,
+                    event_role=event_role, source_fields=meta,
+                    needs_review=(not supported or conflict or not email),
+                    updated_at=checked_at))
+                existing_emails.add(email)
+                added += 1
+                if not email:
+                    needs_link += 1
+            # Explicit workbook/CSV roles win over observed native roles.
+            # Admin/developer/ambiguous accounts need manual review first.
+            if email and supported and not conflict and not session.get(EventInvitee, email):
+                native_role = 'manager' if role == 'admin' else role
+                session.add(EventInvitee(
+                    email=email, login=login, event_role=event_role,
+                    native_role=native_role, registration_ids=[]))
+        # Preserve the visible native directory but flag identities no longer
+        # returned by Supervisely; do not silently purge event registrations.
+        for record in session.scalars(select(EventRosterRecord)):
+            if (record.source_fields or {}).get('imported_via') == 'supervisely':
+                if record.record_id not in observed:
+                    record.needs_review = True
+        session.add(Audit(team_id=team_id, batch_id='', actor_id=int(actor),
+            action='native_roster_discovered',
+            details={'native_members': len(listing), 'added': added,
+                     'missing_email': needs_link}))
+        return {'native_members': len(listing), 'added': added,
+                'missing_email': needs_link}
+
     def refresh(self, gateway, actor):
-        """Read-only native reconciliation; update app permissions from evidence."""
+        """Discover direct Supervisely invitations and reconcile verified roles."""
         with self.sessions() as session:
             tid = self._event_team(session)
         listing = SetupGateway(gateway.api).invitation_members(tid)
@@ -243,7 +344,11 @@ class SharedTeamInvitations:
         now_at = now()
         with self.sessions.begin() as session:
             config = session.get(EventConfig, 1)
-            entries = self._targets(session)
+            self._discover_native_members(
+                session, tid, listing, native_role_ids, actor, now_at)
+            # Refresh works even before any CSV or workbook import.
+            entries = list(session.scalars(
+                select(EventInvitee).order_by(EventInvitee.email)))
             for entry in entries:
                 row = session.get(SharedInvitation, (tid, entry.email))
                 if row is None:
@@ -265,11 +370,7 @@ class SharedTeamInvitations:
                         row.checked_at = now_at
                         continue
                     uid = native.get('userId') or native.get('id')
-                    raw_role = native.get('role') or native.get('roleId') or ''
-                    if isinstance(raw_role, dict):
-                        raw_role = raw_role.get('role') or raw_role.get('name') or raw_role.get('id') or ''
-                    role = str(raw_role).strip().casefold()
-                    role = native_role_ids.get(role, role)
+                    role = self._native_role(native, native_role_ids)
                     active = native.get('membership_active') is True
                     if native.get('disabled') or native.get('disabledAt'):
                         status = 'deactivated'
