@@ -139,9 +139,7 @@ def test_native_invites_receive_declared_reviewer_roles(sessions):
     result = SharedTeamInvitations(sessions).invite(NS(api=api), 900)
     assert result['invited'] == 2
     assert [x['roleId'] for x in api.calls] == [4, 4]
-    assert sorted(x['login'] for x in api.calls) == [
-        'nightjar-gaming', 'nightjar-work'
-    ]
+    assert sorted(x['login'] for x in api.calls) == sorted(demo_accounts())
     with sessions() as s:
         assert all(s.get(SharedInvitation, (15, email)).status == 'pending'
                    for email in demo_accounts())
@@ -165,7 +163,7 @@ def test_bulk_invitations_load_directory_and_roles_once_per_request(sessions):
     api.post = Mock(wraps=api.post)
     result = SharedTeamInvitations(sessions).invite(NS(api=RequestApi(api)), 900)
     assert result['invited'] == 40
-    api.user.get_list.assert_called_once()
+    api.user.get_list.assert_not_called()
     api.role.get_list.assert_called_once()
     assert sum(call.args[0] == 'members.add' for call in api.post.call_args_list) == 40
     assert sum(call.args[0] == 'members.list' for call in api.post.call_args_list) == 4
@@ -232,9 +230,7 @@ def test_separate_monitor_is_invited_with_manager_role(sessions):
     api = FakeApi(accounts)
     results = SharedTeamInvitations(sessions).invite(NS(api=api), 900)
     assert results['invited'] == 3
-    roles = {next(u['email'] for u in accounts.values()
-                  if u['login'] == payload['login']): payload['roleId']
-             for payload in api.calls}
+    roles = {payload['login']: payload['roleId'] for payload in api.calls}
     assert roles == {
         'a@example.org': 5, 'b@example.org': 5, 'monitor@example.org': 3,
     }
@@ -260,8 +256,7 @@ def test_invitation_audience_sends_only_selected_people(sessions, audience, emai
     accounts = import_invitation_roster(sessions)
     api = FakeApi(accounts)
     result = SharedTeamInvitations(sessions).invite(NS(api=api), 900, audience=audience, email=email)
-    by_login = {person['login']: address for address, person in accounts.items()}
-    assert {by_login[call['login']] for call in api.calls} == expected
+    assert {call['login'] for call in api.calls} == expected
     assert result['invited'] == len(expected)
 
 
@@ -312,10 +307,9 @@ def test_explicit_selected_invites_only_the_named_accounts_and_preserves_roles(s
     result = invitations.invite(
         gateway, 900, selected_emails=['B@EXAMPLE.ORG', 'monitor@example.org'])
     assert result == {'invited': 2, 'pending': 0, 'accepted': 0, 'failed': 0}
-    native_to_email = {entry['login']: email for email, entry in accounts.items()}
-    assert {native_to_email[call['login']] for call in api.calls} == {
+    assert {call['login'] for call in api.calls} == {
         'b@example.org', 'monitor@example.org'}
-    roles = {native_to_email[call['login']]: call['roleId'] for call in api.calls}
+    roles = {call['login']: call['roleId'] for call in api.calls}
     assert roles == {'b@example.org': 5, 'monitor@example.org': 3}
     with sessions() as s:
         assert s.get(SharedInvitation, (15, 'a@example.org')).status == 'not_invited'
@@ -398,12 +392,12 @@ def test_email_only_native_invitation_when_global_user_directory_is_unavailable(
         assert evidence.login == 'b@example.org'
 
 
-def test_email_resolution_prefers_verified_native_username_when_directory_available(sessions):
+def test_direct_email_invite_even_if_global_directory_is_accessible(sessions):
     """Email lookup is exact; never guess a username from its local part."""
     accounts = import_invitation_roster(sessions)
     api = FakeApi(accounts)
     invitation = SharedTeamInvitations(sessions).invite(
         NS(api=api), 900, selected_emails=['b@example.org'])
     assert invitation['invited'] == 1
-    assert api.calls[0]['login'] == accounts['b@example.org']['login']
-    assert api.calls[0]['login'] != 'b'
+    assert api.calls[0]['login'] == 'b@example.org'
+    assert api.calls[0]['login'] != accounts['b@example.org']['login']
