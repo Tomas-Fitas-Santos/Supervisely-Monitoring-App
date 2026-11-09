@@ -92,7 +92,9 @@ class EventRoster:
         return monitors
 
     def overview(self, actor, organiser=False):
+        from .db import TeamSeat
         with self.sessions() as session:
+            seats = {s.registration_id: s.table_number for s in session.scalars(select(TeamSeat))}
             monitors = self._named_monitors(session)
             checkins = {
                 (row.registration_id, row.member_email): row
@@ -125,6 +127,8 @@ class EventRoster:
                 count = sum(p["checked_in"] for p in people)
                 teams.append({
                     "id": reg.id, "name": reg.team_name,
+                    "table_number": seats.get(reg.id, ''),
+                    "can_set_table": bool(organiser or assigned == actor),
                     "monitor_id": assigned,
                     "monitor_name": monitors.get(assigned, {}).get("name", "Unassigned"),
                     "native_provisioned": bool(reg.team_id),
