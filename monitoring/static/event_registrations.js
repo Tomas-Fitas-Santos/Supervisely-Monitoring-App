@@ -325,15 +325,30 @@ Vue.component('event-registrations', {
       <span class="nj-muted">Last checked: {{view.event_settings?.membership_synced_at?
         new Date(view.event_settings.membership_synced_at*1000).toLocaleString():'Not yet refreshed'}}</span>
     </div>
-    <p class="nj-muted">Alternatively, import the official registration workbook with
-      Monitors and Participants sheets. Imported source columns and reviewed
-      event roles are preserved. Importing does not invite anyone.</p>
+    <p class="nj-muted">Import the official two-sheet Excel workbook, or
+      separate UTF-8 CSVs for Monitors and Participants. CSV files use the same
+      roster columns; importing never sends invitations. Participants need a
+      valid email, approved role and data_processing_consent = Sim/Yes to be eligible.</p>
     <div class="nj-form-row">
       <label>Event roster (.xlsx)
         <input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
           @change="fileChanged" :disabled="disabled||busy">
       </label>
-      <button class="nj-primary" @click="load" :disabled="disabled||busy||!file">Import both sheets</button>
+      <button @click="load" :disabled="disabled||busy||!file">Import both sheets</button>
+    </div>
+    <div class="nj-form-row">
+      <label>One roster sheet (.csv)
+        <input type="file" accept=".csv,text/csv" @change="csvFileChanged"
+          :disabled="disabled||busy">
+      </label>
+      <label>CSV contains
+        <select v-model="csvSheet" :disabled="disabled||busy">
+          <option value="Monitors">Monitors</option>
+          <option value="Participants">Participants</option>
+        </select>
+      </label>
+      <button class="nj-primary" @click="loadCsv"
+        :disabled="disabled||busy||!csvFile">Import CSV</button>
     </div>
     <p v-if="error" class="nj-message nj-error" role="alert">{{error}}</p>
     <div v-if="inviteFailures.length" class="nj-message nj-error" role="alert">
@@ -396,42 +411,71 @@ Vue.component('event-registrations', {
         Prepare complete eligible pairs
       </button>
     </div>
-    <p class="nj-caution">Invitations are sent only to the accounts you select.
-      Selected accounts can span both sheets. Existing pending or accepted invitations
-      cannot be resent. Real Supervisely permissions come from the reviewed roster.
-      On app.supervisely.com, the website's invitation endpoint may reject personal API
-      tokens even for a Team Admin. In that case, copy your selection, invite on
-      <a href="https://app.supervisely.com/members/add" target="_blank" rel="noopener noreferrer">Supervisely Team Members</a>,
-      and refresh this roster. Do not share browser session credentials.</p>
+    <h4>Prepare Supervisely invitations — up to 50 emails per role</h4>
+    <p class="nj-muted">Choose one approved role, tick individual recipients or select
+      the next 50 matching people. Copy just their email addresses, paste into
+      <a href="https://app.supervisely.com/members/add" target="_blank" rel="noopener noreferrer">Supervisely Invite Team members</a>,
+      choose the displayed role, and click Invite there. Then return here to
+      Refresh participants &amp; monitors. Existing accepted/pending accounts and
+      records needing review are excluded. No participant API tokens needed.</p>
     <div class="nj-form-row">
+      <label>Supervisely role for this batch
+        <select v-model="manualRole" @change="manualRoleChanged" :disabled="disabled||busy">
+          <option value="participant">Annotator</option>
+          <option value="monitor">Manager</option>
+          <option value="participant_monitor">Reviewer</option>
+        </select>
+      </label>
       <label>Sheet<select v-model="group">
         <option value="Monitors">Monitors</option>
         <option value="Participants">Participants</option></select></label>
       <label>Find name, email or team<input v-model="search" placeholder="Filter records"></label>
     </div>
+    <p class="nj-muted" role="status">
+      {{selectedReady.length}} / 50 selected for <strong>{{manualRoleLabel}}</strong>.
+      {{roleEligible.length}} eligible account(s) with this role;
+      {{roleRemaining}} not copied during this session.
+      Copied batches are not marked invited until Supervisely confirms membership.
+    </p>
     <div class="nj-actions">
-       <button @click="selectVisibleInvitees" :disabled="disabled||busy||!selectableVisible.length">
-        Select matching eligible ({{selectableVisible.length}})
+      <button @click="selectVisibleInvitees" :disabled="disabled||busy||!selectableVisible.length||selectedReady.length>=50">
+        Add matching eligible (up to 50)
+      </button>
+      <button @click="selectNextBatch" :disabled="disabled||busy||!roleRemaining">
+        Select next 50
       </button>
       <button @click="clearInviteSelection" :disabled="disabled||busy||!inviteEmails.length">
         Clear selection
       </button>
-      <button @click="copySelectedForSupervisely" :disabled="disabled||busy||!selectedReady.length">
-        Copy selected emails &amp; roles
-      </button>
-      <button class="nj-primary" @click="inviteSelected"
-        :disabled="disabled||busy||!selectedReady.length||invitationAuthBlocked">
-        Invite selected ({{selectedReady.length}})
+      <button @click="resetCopyProgress" :disabled="disabled||busy||!copiedEmails.length">
+        Reset copied-batch progress
       </button>
     </div>
+    <p class="nj-muted"><strong>Role to select in Supervisely: {{manualRoleLabel}}</strong>.
+      Paste the email list below into the New members box (comma-separated, no names or headers).</p>
+    <textarea :value="batchEmailText" readonly rows="3" class="nj-input"
+      aria-label="Paste-ready invitation emails" placeholder="Select eligible recipients to prepare up to 50 emails"></textarea>
+    <div class="nj-actions">
+      <button class="nj-primary" @click="copySelectedForSupervisely"
+        :disabled="disabled||busy||!selectedReady.length">
+        Copy {{selectedReady.length}} emails for {{manualRoleLabel}}
+      </button>
+      <a href="https://app.supervisely.com/members/add" target="_blank" rel="noopener noreferrer">
+        Open Supervisely invitation form
+      </a>
+    </div>
+    <p v-if="copyNotice" class="nj-message" role="status">{{copyNotice}}</p>
     <div class="nj-table-scroll"><table class="nj-table">
       <thead><tr><th>Select</th><th>Team</th><th>Name / email</th><th>Event role</th>
         <th>Invitation</th><th>Review</th><th>Fields</th></tr></thead>
       <tbody><tr v-for="p in selected" :key="p.id">
-        <td><input type="checkbox" :value="p.email" v-model="inviteEmails"
-          :disabled="disabled||busy||!canInvite(p)"
-          :title="canInvite(p)?'Select for invitation':'Not eligible, already invited or awaiting review'"
-          :aria-label="'Select '+(p.display_name||p.email)+' for invitation'"></td>
+        <td><input type="checkbox" :checked="selectedReady.includes(p.email)"
+          @change="toggleManual(p,$event.target.checked)"
+          :disabled="disabled||busy||!canSelectManual(p)||
+            (!selectedReady.includes(p.email)&&selectedReady.length>=50)"
+          :title="canSelectManual(p)?'Select for '+manualRoleLabel+' (max 50)':
+            'Choose this approved role; account may already be invited, unprepared, or need review'"
+          :aria-label="'Select '+(p.display_name||p.email)+' for '+manualRoleLabel"></td>
         <td>{{p.team_name||'Staff'}}</td>
         <td><strong>{{p.display_name||'—'}}</strong>
           <small class="nj-small-text">{{p.email||'Email missing'}}</small></td>
@@ -488,6 +532,9 @@ Vue.component('event-registrations', {
       </tr></tbody>
     </table></div>
     <p v-if="!selected.length" class="nj-muted">No matching records in this sheet.</p>
+    <p class="nj-muted">Tip: select a different role or sheet to see other eligible
+      records. A CSV row's saved event role, not an unsaved dropdown edit, determines
+      its Supervisely invitation role.</p>
     <p class="nj-muted">Only event organisers can see the full registration
       fields, including private personal information. Check-in and reception
       surfaces show the minimum information needed by monitors.</p>
