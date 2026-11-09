@@ -37,3 +37,34 @@ def test_local_hosting_cannot_replace_hosted_identity(environment):
     with pytest.raises(RuntimeError, match='hosted Supervisely'):
         configure_local_environment()
     assert not (environment / 'data').exists()
+
+
+def test_local_live_demo_marker_only_enables_rehearsal_pair(environment):
+    # DEMO mode must not enable simulated identities, fake acceptance, or
+    # synthetic-native operations. Its only extra permission is the real-pair
+    # action in the authenticated local event roster.
+    os.environ['MONITORING_REHEARSAL_PAIR'] = '1'
+    configure_local_environment()
+    assert os.environ['MONITORING_REHEARSAL_PAIR'] == '1'
+    assert os.environ['MONITORING_SIMULATOR'] == '0'
+    assert os.environ['MONITORING_LIVE_DEMO'] == '0'
+    assert os.environ['MONITORING_PILOT'] == '0'
+    from monitoring.settings import Settings
+    assert Settings.load().local is True
+
+
+def test_local_deployment_scripts_exist_and_cover_browser_smoke_check():
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    startup = (root / 'Start-App.ps1').read_text(encoding='utf-8')
+    smoke = (root / 'Test-App.ps1').read_text(encoding='utf-8')
+    release = (root / 'Prepare-Release.ps1').read_text(encoding='utf-8')
+    assert "[ValidateSet('Local', 'Demo')]" in startup
+    assert "MONITORING_REHEARSAL_PAIR" in startup
+    assert "-m monitoring.run --local" in startup
+    assert "'/healthz'" in smoke
+    assert "'/static/event_registrations.js'" in smoke
+    assert "registration_invite_selected" in smoke
+    assert "monitoring.release" in release
+    assert "instance_version" in release
+    assert "docker push" in release
