@@ -31,6 +31,10 @@ where = ["src"]
 testpaths = ["tests"]
 addopts = "-ra"
 
+# FastAPI dependency injection intentionally uses callable defaults via Depends.
+[tool.ruff.lint]
+ignore = ["B008"]
+
 [tool.ruff]
 target-version = "py312"
 line-length = 100
