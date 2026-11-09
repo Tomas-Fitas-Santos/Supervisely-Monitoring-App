@@ -799,3 +799,48 @@ def test_cloud_invite_uses_email_even_when_csv_contains_other_verified_login(
     assert result['invited'] == 1
     assert api.calls[0]['login'] == 'b@example.org'
     assert api.calls[0]['roleId'] == 5
+
+
+
+def test_cloud_browser_route_auth_401_aborts_selected_batch(sessions):
+    """A personal API-key 401 is a route-wide auth limitation, not bad email."""
+    api = FakeApi(import_invitation_roster(sessions))
+    previous_post = api.post
+    attempts = []
+
+    def reject_login(op, data, **kwargs):
+        if op == 'members.add':
+            attempts.append(data)
+            raise FailedNativeInvite(401, 'Invalid token')
+        return previous_post(op, data, **kwargs)
+
+    api.post = reject_login
+    result = SharedTeamInvitations(sessions).invite(
+        NS(api=api), 900,
+        selected_emails=['b@example.org', 'c@example.org', 'd@example.org'])
+    assert result['authentication_unavailable'] is True
+    assert result['not_attempted'] == 2
+    assert result['invited'] == 0
+    assert result['failed'] == 1
+    assert len(attempts) == 1
+    failure = result['errors'][0]
+    assert failure['email'] == 'b@example.org'
+    assert 'Invalid token' in failure['error']
+    assert 'Bulk invitations stopped' in failure['error']
+    with sessions() as session:
+        assert session.get(SharedInvitation, (15, 'b@example.org')).status == 'invitation_error'
+        assert session.get(SharedInvitation, (15, 'c@example.org')).status == 'not_invited'
+        assert session.get(SharedInvitation, (15, 'd@example.org')).status == 'not_invited'
+
+
+def test_manual_selected_invite_recovery_uses_roster_roles_and_refresh():
+    script = (Path(__file__).resolve().parents[1] /
+              'monitoring/static/event_registrations.js').read_text(encoding='utf-8')
+    assert 'Copy selected emails &amp; roles' in script
+    assert 'copySelectedForSupervisely' in script
+    assert 'monitor:\'Manager\'' in script
+    assert 'participant:\'Annotator\'' in script
+    assert 'participant_monitor:\'Reviewer\'' in script
+    assert 'https://app.supervisely.com/members/add' in script
+    assert 'registration_refresh' in script
+    assert 'authentication_unavailable' in script
