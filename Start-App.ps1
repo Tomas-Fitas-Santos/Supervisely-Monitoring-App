@@ -1,23 +1,15 @@
 param(
-    [ValidateSet('Local', 'Demo')]
+    [ValidateSet('Local')]
     [string]$Mode = 'Local',
     [switch]$Install,
     [switch]$CheckOnly
 )
 
-# Both Local and Demo are authenticated, real-account rehearsals using the
-# same local persistent event database. Demo NEVER enables fake users/invites.
-# Native production hosting uses Dockerfile + monitoring.release, not this
-# loopback-only developer launcher.
+# Local is a production-data launch with actual Supervisely authentication.
+# This launcher never creates mock accounts, pairs, or invitations.
 $ErrorActionPreference = 'Stop'
-$PreviousRehearsal = [Environment]::GetEnvironmentVariable('MONITORING_REHEARSAL_PAIR', 'Process')
 Push-Location $PSScriptRoot
 try {
-    if ($Mode -eq 'Demo') {
-        $env:MONITORING_REHEARSAL_PAIR = '1'
-    } else {
-        $env:MONITORING_REHEARSAL_PAIR = '0'
-    }
     $Python = Join-Path $PSScriptRoot '.venv\Scripts\python.exe'
     if (-not (Test-Path $Python)) {
         & py -3.12 -m venv .venv
@@ -51,7 +43,7 @@ try {
         return
     }
 
-    Write-Host ("Starting Supervisely Monitoring App in {0} rehearsal mode." -f $Mode)
+    Write-Host 'Starting Supervisely Monitoring App (live team, local access).'
     Write-Host 'Open http://127.0.0.1:8000 and sign in with your personal Supervisely User ID and API token.'
     Write-Host 'The SDK can log "no-html mode"; the app local shell serves its own HTML.'
     & $Python -m monitoring.run --local
@@ -60,10 +52,5 @@ try {
     }
 }
 finally {
-    if ($null -eq $PreviousRehearsal) {
-        [Environment]::SetEnvironmentVariable('MONITORING_REHEARSAL_PAIR', $null, 'Process')
-    } else {
-        $env:MONITORING_REHEARSAL_PAIR = $PreviousRehearsal
-    }
     Pop-Location
 }
