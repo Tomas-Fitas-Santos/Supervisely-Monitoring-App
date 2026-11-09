@@ -5,7 +5,7 @@ Vue.component('event-registrations', {
   props:['view','run','form','post','disabled'],
   data() {
     return {file:null,busy:false,error:'',search:'',group:'Monitors',
-      roleEdits:{},loginEdits:{},pairName:'',pairEmails:[],pairEligible:false,
+      roleEdits:{},loginEdits:{},nativeEmailEdits:{},pairName:'',pairEmails:[],pairEligible:false,
       inviteEmails:[],showFields:false};
   },
   computed: {
@@ -81,6 +81,16 @@ Vue.component('event-registrations', {
       if(!await this.run('roster_login',{record_id:person.id,login}))
         this.error=this.view.message||'Could not save native account login.';
       else this.$delete(this.loginEdits,person.id);
+    },
+    async linkNativeEmail(person){
+      const email=(this.nativeEmailEdits[person.id]||'').trim();
+      if(!email)return;
+      if(!window.confirm('Associate Supervisely login '+
+        (person.source_fields?.supervisely_login||'')+' with '+email+
+        '? Only continue if this is the account\'s registered email.'))return;
+      if(!await this.run('roster_link_native_email',{record_id:person.id,email}))
+        this.error=this.view.message||'Could not verify the native identity.';
+      else this.$delete(this.nativeEmailEdits,person.id);
     },
     async nativeRole(person){
       const choice=this.roleEdits[person.id]||person.event_role;
@@ -271,6 +281,18 @@ Vue.component('event-registrations', {
         <td><span v-if="p.needs_review" class="nj-badge warning">Review</span>
           <span v-else>Ready to evaluate</span></td>
         <td><details><summary>Source columns &amp; Supervisely login</summary>
+          <p v-if="!p.email && p.source_fields?.imported_via==='supervisely'"
+             class="nj-muted">Supervisely did not disclose this account's email.
+             Link its registered address to use this person for event registration.</p>
+          <div v-if="!p.email && p.source_fields?.imported_via==='supervisely'"
+            class="nj-inline-actions">
+            <input v-model.trim="nativeEmailEdits[p.id]" type="email"
+              placeholder="Registered account email" :disabled="disabled||busy">
+            <button @click="linkNativeEmail(p)"
+              :disabled="disabled||busy||!nativeEmailEdits[p.id]">
+              Link native account
+            </button>
+          </div>
           <p class="nj-muted">Set the exact native login when it differs from email.
             Existing invited account identities require manual review.</p>
           <div class="nj-inline-actions">
