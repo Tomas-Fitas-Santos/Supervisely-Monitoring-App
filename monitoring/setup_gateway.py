@@ -26,10 +26,47 @@ class SetupGateway(Gateway):
                     return result
                 page += 1
         all_members, accepted = listing(True), listing(False)
-        active_ids = {m.get('userId') or m.get('id') for m in accepted
-                      if m.get('activated') is not False and not m.get('disabled') and not m.get('disabledAt')}
-        return [dict(m, membership_active=(m.get('userId') or m.get('id')) in active_ids
-                     and m.get('activated') is not False and not m.get('disabled') and not m.get('disabledAt'))
+        active_ids = {str(m.get('userId') or m.get('id')) for m in accepted
+                      if (m.get('userId') or m.get('id')) and
+                      m.get('activated') is not False and
+                      not m.get('disabled') and not m.get('disabledAt')}
+        # Some Supervisely versions omit the registered email from members.list.
+        # Enrich only with *this team's* active members when the SDK permits;
+        # never depend on global users.list access or infer a CSV-to-user match.
+        # This is read-only and must not send another invitation or change roles.
+        try:
+            team_members = list(self.api.user.get_team_members(int(team_id)))
+        except Exception:
+            team_members = []
+        members_by_id = {
+            str(m.get('userId') or m.get('id')): m for m in all_members
+            if m.get('userId') or m.get('id')
+        }
+        for person in team_members:
+            uid = getattr(person, 'id', None)
+            if uid is None:
+                continue
+            uid = str(uid)
+            native = members_by_id.get(uid)
+            if native is None:
+                native = {'userId': int(uid)}
+                all_members.append(native)
+                members_by_id[uid] = native
+            for field in ('email', 'login', 'name', 'role'):
+                value = getattr(person, field, None)
+                if value and not native.get(field):
+                    native[field] = value
+            if getattr(person, 'disabled', False):
+                native['disabled'] = True
+            else:
+                active_ids.add(uid)
+        return [dict(m, membership_active=(
+                    str(m.get('userId') or m.get('id')) in active_ids or
+                    (not (m.get('userId') or m.get('id')) and
+                     any(a.get('login') and a.get('login') == m.get('login')
+                         for a in accepted))
+                ) and m.get('activated') is not False
+                and not m.get('disabled') and not m.get('disabledAt'))
                 for m in all_members]
 
     def _verified_login_for_email(self, email):
