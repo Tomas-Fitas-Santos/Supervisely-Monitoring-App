@@ -15,6 +15,7 @@ class Dashboard(Widget):
         JinjaWidgets().context['__widget_scripts__']['NightjarStructuredDataset'] = './static/structured_dataset.js'
         JinjaWidgets().context['__widget_scripts__']['NightjarJobPlanner'] = './static/job_planner.js'
         JinjaWidgets().context['__widget_scripts__']['NightjarLogistics'] = './static/event_logistics.js'
+        JinjaWidgets().context['__widget_scripts__']['NightjarPeople'] = './static/event_registrations.js'
 
     def get_json_data(self):
         return {'snapshot': {'teams': []}, 'message': '', 'error': False, 'links': [],
@@ -22,6 +23,7 @@ class Dashboard(Widget):
                 'competition': {}, 'registration_rows': [], 'attendance': {'teams': [], 'monitors': [], 'summary': {}},
                 'roster_plan_id': None, 'roster_balance_preview': None, 'event_settings': {},
                 'logistics': {'teams': [], 'summary': {}},
+                'roster_profiles': [], 'roster_import_result': None,
                 'prepared_jobs': [], 'media_preview': None, 'job_plan_id': None, 'job_preview': None,
                 'unit_page': {}, 'leaderboard': [], 'simulator': False, 'pilot': False,
                 'export_data': None, 'closed': False,
