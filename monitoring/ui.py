@@ -164,7 +164,9 @@ def display_access(uid, gateway):
                 directory=setup.directory() if gateway else {}, connection=connection_view(gateway is not None),
                 event_settings=EventSettings(sessions).snapshot(uid))
     from .attendance import EventRoster
-    data.update(competition=Competition(sessions).config(),
+    from .event_logistics import EventLogistics
+    data.update(logistics=EventLogistics(sessions).overview(uid, organiser=can_setup),
+                competition=Competition(sessions).config(),
                 leaderboard=Competition(sessions).leaderboard() if gateway else [],
                 registration_rows=Registrations(sessions).rows() if can_setup else [],
                 attendance=EventRoster(sessions).overview(uid, can_setup),
@@ -216,6 +218,7 @@ def clear_access():
                                    assignment_plan_id=None, assignment_preview=[],
                                    directory={}, sources={}, connected=False, review_preview=None,
                                    registration_rows=[], event_settings={}, attendance={'teams': [], 'monitors': [], 'summary': {}},
+                                   logistics={'teams': [], 'summary': {}},
                                    roster_plan_id=None, roster_balance_preview=None,
                                    prepared_jobs=[], media_preview=None, job_plan_id=None, job_preview=None,
                                    unit_page={}, leaderboard=[], export_data=None,
@@ -448,6 +451,57 @@ def settings_action(request: Request):
         log.exception('Event settings action failed')
         dashboard.display(service.snapshot(uid) if uid else {'teams': []},
                           'Could not validate settings. No changes were confirmed.', True)
+        return {'ok': False}
+
+
+@app.get_server().post('/logistics/action')
+def logistics_action(request: Request):
+    """Authenticated physical-table and ticket workflow, independent of native jobs."""
+    from supervisely.app import DataJson
+    from .event_logistics import EventLogistics
+    from .attendance import EventRoster
+    uid = None
+    try:
+        uid, gateway = identity(request)
+        if gateway is None:
+            raise WorkflowError('Connect to Supervisely before using the reception desk.')
+        organiser = False
+        try:
+            setup.authorize(SetupGateway(gateway.api, sessions), uid)
+            organiser = True
+        except WorkflowError:
+            pass
+        form = request_form(request)
+        action_name = str(form.get('logistics_action') or 'refresh')
+        service_logistics = EventLogistics(sessions)
+        message = 'Reception list refreshed.'
+        if action_name == 'set_table':
+            changed = service_logistics.set_table(
+                uid, form.get('registration_id'), form.get('table_number'),
+                organiser=organiser)
+            message = 'Team seating updated.' if changed else 'No change to table assignment.'
+            DataJson()['dashboard']['attendance'] = EventRoster(sessions).overview(
+                uid, organiser=organiser)
+        elif action_name in ('issue', 'redeem', 'void_issue', 'undo_redemption'):
+            changed = service_logistics.ticket_action(
+                uid, form.get('operation_id'), form.get('registration_id'),
+                form.get('member_email'), form.get('ticket_kind'), action_name,
+                form.get('quantity', 1), form.get('ticket_note', ''),
+                organiser=organiser)
+            message = 'Ticket transaction recorded.' if changed else 'Already recorded; no duplicate.'
+        elif action_name != 'refresh':
+            raise WorkflowError('Unknown reception action.')
+        DataJson()['dashboard']['logistics'] = service_logistics.overview(
+            uid, organiser=organiser)
+        dashboard.display(service.snapshot(uid), message)
+        return {'ok': True}
+    except WorkflowError as exc:
+        dashboard.display(service.snapshot(uid) if uid else {'teams': []}, str(exc), True)
+        return {'ok': False}
+    except Exception:
+        log.exception('Reception operation failed')
+        dashboard.display(service.snapshot(uid) if uid else {'teams': []},
+                          'Could not update the reception desk. Refresh before retrying.', True)
         return {'ok': False}
 
 
