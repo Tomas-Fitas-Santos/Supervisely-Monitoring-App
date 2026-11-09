@@ -179,7 +179,7 @@ class ExternalShell:
         if declared and int(declared) > 12 * 1024 * 1024:
             return await self._reply(JSONResponse({'message':'Request too large'},
                                        status_code=413),scope,receive,send)
-        scope.setdefault('state', {})['external_email'] = email
+        scope['external_verified_email'] = email
         # The Supervisely SDK dashboard model is process-global. Isolate the
         # user-specific view around each action; never expose its shared data
         # endpoint or websocket to external clients.
