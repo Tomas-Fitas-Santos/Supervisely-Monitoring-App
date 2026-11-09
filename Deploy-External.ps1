@@ -62,6 +62,10 @@ try {
     if ($values.DATABASE_URL -ne $expectedDatabaseUrl) {
         throw 'DATABASE_URL must use the same PostgreSQL password and internal database host.'
     }
+    if (($values.SMTP_USER -match '(?i)^REPLACE_WITH') -or
+        ($values.SMTP_PASSWORD -match '(?i)^REPLACE_WITH')) {
+        throw 'Configure real SMTP credentials or set both SMTP_USER and SMTP_PASSWORD to empty.'
+    }
     if ([bool]$values.SMTP_USER -ne [bool]$values.SMTP_PASSWORD) {
         throw 'Set both SMTP_USER and SMTP_PASSWORD, or neither for an SMTP service permitting anonymous delivery.'
     }
