@@ -1,9 +1,9 @@
 """Safe ZIP ingestion for the same two-root folder layout as direct folder uploads.
 
 Accepted ZIP layout:
-  Some Dataset/images/<category>/<image.ext>
-  Some Dataset/videos/<category>/<video title>/<frame.ext>
-Archives may also start directly with images/ and videos/. All accepted files
+  Some Dataset/<species-or-morphology>/<video title>/<frame.ext>
+  <species-or-morphology>/<video title>/<frame.ext>
+Archives may also start directly with category folders. All accepted frames
 are mapped to canonical paths; extraction never trusts archive paths.
 """
 import hashlib
@@ -65,7 +65,7 @@ def _entries(file_path):
             if _metadata(name):
                 continue
             if not entry.file_size or entry.file_size > MAX_SINGLE_FILE_BYTES:
-                raise WorkflowError('ZIP contains an empty or oversized image/frame file.')
+                raise WorkflowError('ZIP contains an empty or oversized video frame.')
             if entry.compress_size == 0 or entry.file_size / entry.compress_size > MAX_EXPANSION:
                 raise WorkflowError('ZIP contains an excessively compressed entry.')
             total += entry.file_size
@@ -73,19 +73,23 @@ def _entries(file_path):
                 raise WorkflowError('ZIP uncompressed content exceeds the configured limit.')
             files.append(entry)
         if not files:
-            raise WorkflowError('ZIP has no dataset images or video frames.')
+            raise WorkflowError('ZIP has no video frames.')
         if len(files) > MAX_FILES:
             raise WorkflowError('ZIP contains too many dataset files.')
-        manifest = validate_tree([entry.filename for entry in files], require_both=True)
-        # Derive canonical names, including support for a single dataset-name wrapper.
-        rootless = all(e.filename.split('/')[0].casefold() in ('images', 'videos') for e in files)
+        manifest = validate_tree([entry.filename for entry in files])
+        # A video path is category/video/frame; a named outer folder is optional.
+        widths = {len(entry.filename.split('/')) for entry in files}
+        if len(widths) != 1 or not widths.issubset({3, 4}):
+            raise WorkflowError('ZIP paths must use a consistent category/video/frame hierarchy.')
+        wrapped = widths == {4}
         indexed = {}
+        folded = set()
         for entry in files:
             segments = entry.filename.split('/')
-            canonical = '/'.join(segments if rootless else segments[1:])
-            canonical = '/'.join((canonical.split('/')[0].casefold(), *canonical.split('/')[1:]))
-            if canonical in indexed:
-                raise WorkflowError('ZIP contains multiple entries with the same dataset path.')
+            canonical = '/'.join(segments[1:] if wrapped else segments)
+            if canonical.casefold() in folded:
+                raise WorkflowError('ZIP contains case-conflicting or duplicated video frame paths.')
+            folded.add(canonical.casefold())
             indexed[canonical] = entry
         return archive, manifest, indexed, total
     except Exception:
