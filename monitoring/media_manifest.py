@@ -40,9 +40,9 @@ def validate_tree(relative_paths, require_both=False):
         raise WorkflowError('The selected dataset contains too many files.')
     parsed = []
     for candidate in relative_paths:
-        if not isinstance(candidate, str) or not candidate or '\\x00' in candidate:
+        if not isinstance(candidate, str) or not candidate or '\x00' in candidate:
             raise WorkflowError('Every video frame needs a valid relative path.')
-        raw = candidate.replace('\\\\', '/')
+        raw = candidate.replace('\\', '/')
         if (raw.startswith('/') or raw.endswith('/') or
                 any(part in ('', '.', '..') for part in raw.split('/')) or
                 ':' in raw.split('/')[0]):
