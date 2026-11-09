@@ -6,7 +6,7 @@ Vue.component('event-registrations', {
   data() {
     return {file:null,busy:false,error:'',search:'',group:'Monitors',
       roleEdits:{},loginEdits:{},nativeEmailEdits:{},pairName:'',pairEmails:[],pairEligible:false,
-      inviteEmails:[],showFields:false};
+      inviteEmails:[],inviteFailures:[],lastSync:null,showFields:false};
   },
   computed: {
     profiles(){return this.view.roster_profiles||[];},
@@ -151,13 +151,31 @@ Vue.component('event-registrations', {
         '\n\nRoles will follow the reviewed event roster.'))return;
       this.busy=true;this.error='';
       try{
-        if(!await this.run('registration_invite_selected',{invite_emails:chosen}))
+        this.inviteFailures=[];
+        const result=await this.run('registration_invite_selected',{invite_emails:chosen});
+        if(!result)
           throw new Error(this.view.message||'Could not send the selected invitations.');
+        this.inviteFailures=result?.invitations?.errors||[];
+        if(this.inviteFailures.length){
+          this.error=this.inviteFailures.length+
+            ' account(s) could not be invited or require inspection. See the exact API errors below.';
+        }
         this.inviteEmails=[];
       }catch(e){this.error=e.message||'Could not send selected invitations.';}
       finally{this.busy=false;}
     },
-    refresh(){return this.command('registration_refresh');}
+    async refresh(){
+      if(this.disabled||this.busy)return;
+      this.busy=true;this.error='';
+      try {
+        const result=await this.run('registration_refresh');
+        if(!result)throw new Error(this.view.message||'Could not refresh Supervisely team membership.');
+        this.lastSync=result?.membership_sync||null;
+        this.inviteFailures=[];
+        this.inviteEmails=this.selectedReady;
+      }catch(e){this.error=e.message||'Could not refresh team members.';}
+      finally{this.busy=false;}
+    }
   },
   template:`<section class="nj-panel nj-people-roster">
     <h3>Supervisely team members &amp; event roster</h3>
@@ -182,6 +200,17 @@ Vue.component('event-registrations', {
       <button class="nj-primary" @click="load" :disabled="disabled||busy||!file">Import both sheets</button>
     </div>
     <p v-if="error" class="nj-message nj-error" role="alert">{{error}}</p>
+    <div v-if="inviteFailures.length" class="nj-message nj-error" role="alert">
+      <strong>Supervisely invitation errors (no automatic retry):</strong>
+      <ul><li v-for="failure in inviteFailures" :key="failure.email">
+        <strong>{{failure.email}}</strong> ({{failure.status}}): {{failure.error}}
+      </li></ul>
+    </div>
+    <p v-if="lastSync" class="nj-message" role="status">
+      Sync complete: {{lastSync.new}} newly discovered,
+      {{lastSync.accepted}} accepted, {{lastSync.pending}} pending,
+      {{lastSync.needs_attention}} need review. No invitations were sent.
+    </p>
     <p v-if="view.roster_import_result" class="nj-message">
       {{view.roster_import_result.monitors}} monitors,
       {{view.roster_import_result.participants}} participants;
@@ -277,7 +306,14 @@ Vue.component('event-registrations', {
               !roleEdits[p.id]||roleEdits[p.id]===p.event_role">
             Change live role</button>
         </div></td>
-        <td>{{p.invitation_status}}</td>
+        <td><strong>{{p.invitation_status}}</strong>
+          <small v-if="p.native_login" class="nj-small-text">
+            Native login: {{p.native_login}}</small>
+          <small v-if="p.native_role" class="nj-small-text">
+            Native role: {{p.native_role}}</small>
+          <p v-if="p.invitation_error" class="nj-caution" role="alert">
+            {{p.invitation_error}}</p>
+        </td>
         <td><span v-if="p.needs_review" class="nj-badge warning">Review</span>
           <span v-else>Ready to evaluate</span></td>
         <td><details><summary>Source columns &amp; Supervisely login</summary>
