@@ -662,6 +662,10 @@ def setup_action(request: Request):
             from .event_people import EventPeople
             EventPeople(sessions).set_role(uid, f.get('record_id'), f.get('event_role'))
             message = 'Event role saved. No native invitation or role change was sent.'
+        elif name == 'roster_login':
+            from .event_people import EventPeople
+            EventPeople(sessions).set_login(uid, f.get('record_id'), f.get('login'))
+            message = 'Supervisely login saved without sending invitations.'
         elif name == 'roster_native_role':
             from .event_people import EventPeople
             EventPeople(sessions).change_native_role(
