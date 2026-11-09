@@ -141,10 +141,26 @@ one native invitation.
 | Participant and monitor | Reviewer |
 | Event admin | Existing Admin; never granted through a CSV |
 
-Use **Invite all monitors**, **Invite all participants**, **Invite everyone**,
-or **Invite** on an individual's row. People already invited or accepted are
-skipped. Refresh invitation status after people accept in Supervisely.
-Uncertain invitation results require inspection before retrying.
+In **Monitors & Teams → Official registration roster & roles**, use the
+**Select** checkbox beside each eligible person (on either the Monitors or
+Participants sheet). Filter by name, email or team, then use
+**Select matching eligible** to add the filtered people to the selection.
+Selections persist when switching between sheets. **Clear selection** resets
+the choices. **Invite selected (N)** displays an exact-recipient confirmation
+and sends only those selected accounts—never the entire roster by default.
+
+Imported participants become eligible for selection only after their complete
+two-person pairs are prepared and approved for processing; monitors can be
+selected individually. Entries awaiting review, missing email, unprepared
+participants, and people already invited or accepted cannot be selected for
+another native invitation. Backend validation rejects missing/empty/duplicate,
+unknown, or unreviewed selection batches *before* any native write.
+
+The older team invitation screen additionally supports **Invite all monitors**,
+**Invite all participants**, **Invite everyone**, and **Invite** on an
+individual's row. People already invited or accepted are skipped. Refresh
+invitation status after people accept in Supervisely. Uncertain invitation
+results require inspection before retrying.
 
 Supervisely account logins may differ from email addresses. If needed, include
 `member_1_login`, `member_2_login` and `monitor_login`, or `participant_login`
