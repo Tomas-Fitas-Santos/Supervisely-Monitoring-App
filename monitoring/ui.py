@@ -743,6 +743,12 @@ def setup_action(request: Request):
             from .event_people import EventPeople
             EventPeople(sessions).set_login(uid, f.get('record_id'), f.get('login'))
             message = 'Supervisely login saved without sending invitations.'
+        elif name == 'roster_link_native_email':
+            from .event_people import EventPeople
+            EventPeople(sessions).link_native_email(
+                gateway, uid, f.get('record_id'), f.get('email'))
+            SharedTeamInvitations(sessions).refresh(gateway, uid)
+            message = 'Supervisely account linked and verified. No invitation was sent.'
         elif name == 'roster_native_role':
             from .event_people import EventPeople
             EventPeople(sessions).change_native_role(
