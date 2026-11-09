@@ -15,8 +15,8 @@ import tempfile
 from .service import WorkflowError
 
 IMAGE_EXT = frozenset({'.jpg', '.jpeg', '.png', '.webp', '.bmp', '.tif', '.tiff'})
-MAX_FILES = 100000
-MAX_VIDEOS = 2000
+MAX_FILES = 250000
+MAX_VIDEOS = 20000
 MAX_FRAMES_PER_VIDEO = 20000
 
 
@@ -74,7 +74,7 @@ def validate_tree(relative_paths, require_both=False):
         normalized.add(folded)
         videos[(parts[0], parts[1])].append(path)
     if not videos or len(videos) > MAX_VIDEOS:
-        raise WorkflowError('Select between 1 and 2000 complete videos.')
+        raise WorkflowError('Select between 1 and 20000 complete videos.')
     sequences = []
     for (category, title), frames in sorted(
             videos.items(), key=lambda pair: (pair[0][0].casefold(), pair[0][1].casefold())):
