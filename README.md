@@ -184,13 +184,14 @@ invitation status after people accept in Supervisely. Uncertain invitation
 results require inspection before retrying.
 
 Supervisely account logins may differ from registered email addresses.
-**A username is not required in the CSV.** The app first checks
-whether its authorised Supervisely user directory contains exactly one
-account with the registered roster email, and uses that account's *actual
-username* with `members.add.login` and the CSV-defined `roleId`.
-This follows Supervisely's documented API contract. If global directory
-access is unavailable or no exact email is visible, the app sends the exact
-roster email in the login field **once**, because some instances support it.
+**A username is not required in the CSV.** On Enterprise servers with
+a working user directory, the app may resolve the exact registered roster
+email to the verified native login for `members.add` using the declared
+`roleId`. On `app.supervisely.com` (Community/Pro), we have observed
+`users.list` returning **HTTP 404 Page not found** despite an authenticated
+team Admin. The app therefore no longer calls `users.list` for every
+selected invite: it submits the email in the `members.add.login` field
+**once**, as supported by some instances.
 It does not guess a username from the email prefix or automatically try a
 second invitation on failure. You may explicitly provide an exact verified
 username in the roster as a fallback.
@@ -208,10 +209,12 @@ To diagnose an HTTP 404 without sending another invitation, use:
 .\\.venv\\Scripts\\python.exe diagnose_invitation.py --team-id 125980 --email "tomas.gaming.21@gmail.com"
 ```
 
-The tool prompts privately for your Supervisely token and performs **only**
-`users.me`, current team membership and available directory reads. It prints
-the exact matching account username if visible; do not paste the API token
-into GitHub issues or chat logs.
+The diagnostic now tries the encrypted **organiser token already saved
+inside the Monitoring App**, and prompts privately for *your organiser
+token* only when none is saved. No participant credentials are required.
+It checks your Team membership and only lists members of that team.
+It deliberately does **not** call the broken `users.list` endpoint or
+send an invitation. Do not paste any API token into GitHub or chat.
 
 **Correct invitation errors:** The app makes one native request with
 `raise_error=True`, preserving the actual HTTP rejection rather than hiding
