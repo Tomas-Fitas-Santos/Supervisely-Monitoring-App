@@ -58,7 +58,43 @@ pulling a new frontend version.
    annotation submission using real accounts. Logical prepared jobs do **not**
    yet prove actual sequential native Supervisely labeling jobs were created.
 
-## B. Prepare a shared hosted Supervisely release
+## B. Shared HTTPS deployment for Supervisely Pro
+
+The current Supervisely pricing rules place **private custom Python apps in
+Enterprise**, not Pro. This repository already has a separate external HTTPS
+hosting mode with **real email-code login**, a PostgreSQL database, and Caddy
+TLS. Its configuration is in `compose.external.yaml`,
+`Dockerfile.external`, `Caddyfile.external` and `.env.external.example`.
+
+Use a Docker-capable Linux server or an authorised existing institutional VM
+with a **public DNS hostname**, TCP ports **80/443**, SMTP TLS service, and the
+organiser's real Supervisely API token. The external app does not grant new
+native Supervisely permissions; every monitor must have verified membership.
+
+```powershell
+# On the Docker host, after fetching this branch:
+Copy-Item .env.external.example .env.external
+# Fill all real values locally. Never commit or paste secrets.
+.\Deploy-External.ps1
+# The previous command checks configuration; it does not deploy.
+.\Deploy-External.ps1 -Up
+```
+
+On Linux, run the equivalent existing Docker Compose deployment:
+
+```bash
+docker compose --env-file .env.external -f compose.external.yaml config --quiet
+docker compose --env-file .env.external -f compose.external.yaml up -d --build
+docker compose --env-file .env.external -f compose.external.yaml logs --tail 50 monitoring
+```
+
+**Do not publish** the DB port or app's internal port directly. The Caddy
+proxy handles HTTPS and external login requires real SMTP delivery. Deploy
+exactly one app container. The event uses persistent Docker volumes, but
+backups and host/DNS/SMTP verification remain operator responsibilities.
+Follow [external deployment](external-deployment.md) for detailed checks.
+
+## C. Prepare a native Supervisely release (Enterprise / approved public app)
 
 This app uses Supervisely's native multi-user application session for hosted
 identity and **PostgreSQL** for persistent shared state. A publicly exposed
@@ -107,7 +143,7 @@ Official Supervisely references:
 - [Release compatibility](https://developer.supervisely.com/app-development/basics/compatibility)
 - [App configuration](https://developer.supervisely.com/app-development/basics/app-json-config/config-json)
 
-## C. Stop conditions before declaring the event ready
+## D. Stop conditions before declaring the event ready
 
 The current application **does not yet prove native pair-shared sequential
 labeling-job creation, automatic next-job release, or correction return**.
