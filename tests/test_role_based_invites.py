@@ -375,3 +375,35 @@ def test_selected_invitation_roster_frontend_requires_explicit_selection():
     assert "registration_provision_all" not in source
     assert "selected_emails=addresses" in handler
     assert "if not isinstance(addresses, list) or not addresses:" in handler
+
+
+
+def test_email_only_native_invitation_when_global_user_directory_is_unavailable(sessions):
+    """The API login field may receive the exact roster email as fallback."""
+    accounts = import_invitation_roster(sessions)
+    api = FakeApi(accounts)
+
+    def no_global_directory():
+        raise PermissionError('Supervisely instance-wide users.list is unavailable')
+
+    api.user.get_list = no_global_directory
+    invitation = SharedTeamInvitations(sessions).invite(
+        NS(api=api), 900, selected_emails=['b@example.org'])
+    assert invitation['invited'] == 1
+    assert len(api.calls) == 1
+    assert api.calls[0] == {'teamId':15, 'login':'b@example.org', 'roleId':5}
+    with sessions() as session:
+        evidence = session.get(SharedInvitation, (15, 'b@example.org'))
+        assert evidence.status == 'pending'
+        assert evidence.login == 'b@example.org'
+
+
+def test_email_resolution_prefers_verified_native_username_when_directory_available(sessions):
+    """Email lookup is exact; never guess a username from its local part."""
+    accounts = import_invitation_roster(sessions)
+    api = FakeApi(accounts)
+    invitation = SharedTeamInvitations(sessions).invite(
+        NS(api=api), 900, selected_emails=['b@example.org'])
+    assert invitation['invited'] == 1
+    assert api.calls[0]['login'] == accounts['b@example.org']['login']
+    assert api.calls[0]['login'] != 'b'
