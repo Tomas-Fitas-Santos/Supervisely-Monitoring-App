@@ -3,6 +3,7 @@ from functools import lru_cache
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import SQLAlchemyError
 
 from .config import get_settings
 
@@ -24,6 +25,6 @@ def database_is_ready() -> bool:
         with engine().connect() as connection:
             connection.execute(text("SELECT 1"))
         return True
-    except Exception:
+    except (SQLAlchemyError, OSError, ValueError):
         # Do not expose credentials, connection strings or infrastructure details.
         return False
