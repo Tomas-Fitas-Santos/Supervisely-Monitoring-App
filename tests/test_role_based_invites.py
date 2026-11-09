@@ -539,6 +539,13 @@ def test_refresh_preserves_existing_reviewed_roster_roles_without_native_writes(
         assert invitation.status == 'role_mismatch'
         assert 'reviewer' in invitation.error
         assert session.get(EventMember, 301) is None
+    from monitoring.event_people import EventPeople
+    person = next(p for p in EventPeople(sessions).overview()
+                  if p['email'] == 'a@example.org')
+    assert person['event_role'] == 'participant_monitor'
+    assert person['needs_review'] is True
+    assert person['invitation_status'] == 'role_mismatch'
+    assert person['native_role'] == 'annotator'
 
 
 
