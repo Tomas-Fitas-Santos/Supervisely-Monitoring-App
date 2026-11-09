@@ -48,7 +48,7 @@ def main():
                 if args.simulator:
                     stop.wait(settings.interval)
                     continue
-                token = os.getenv('SYNC_API_TOKEN')
+                token = os.getenv('SYNC_API_TOKEN') or (os.getenv('SUPERVISELY_SERVICE_TOKEN') if args.external else None)
                 server = ui.event_config().server_address or ui.settings.server_address
                 api = sly.Api(server, token) if token else (
                     ui.connection.api() if ui.settings.local else None)
