@@ -539,3 +539,54 @@ def test_refresh_preserves_existing_reviewed_roster_roles_without_native_writes(
         assert invitation.status == 'role_mismatch'
         assert 'reviewer' in invitation.error
         assert session.get(EventMember, 301) is None
+
+
+
+def test_supervisely_nested_http_error_details_are_visible_to_organiser():
+    response = NS(
+        status_code=404,
+        json=lambda: {
+            'error': 'USER_NOT_FOUND',
+            'details': {'message': 'No account has the requested email'},
+        }
+    )
+    error = NS(response=response)
+    status, detail = SetupGateway._native_invitation_error(error)
+    assert status == 404
+    assert detail == 'No account has the requested email'
+
+
+def test_supervisely_success_false_does_not_count_as_sent(sessions):
+    api = FakeApi(import_invitation_roster(sessions))
+    original = api.post
+
+    def return_provider_failure(op, data, **kwargs):
+        if op == 'members.add':
+            return NS(json=lambda: {
+                'success': False,
+                'message': 'Invitation blocked by account restriction',
+            })
+        return original(op, data, **kwargs)
+
+    api.post = return_provider_failure
+    result = SharedTeamInvitations(sessions).invite(
+        NS(api=api), 900, selected_emails=['b@example.org'])
+    assert result['invited'] == 0 and result['failed'] == 1
+    assert 'Invitation blocked by account restriction' in result['errors'][0]['error']
+
+
+def test_invite_api_uses_one_http_attempt_and_preserves_raw_http_status(sessions):
+    api = FakeApi(import_invitation_roster(sessions))
+    original = api.post
+    options = []
+
+    def record(op, data, **kwargs):
+        if op == 'members.add':
+            options.append(kwargs)
+        return original(op, data, **kwargs)
+
+    api.post = record
+    result = SharedTeamInvitations(sessions).invite(
+        NS(api=api), 900, selected_emails=['b@example.org'])
+    assert result['invited'] == 1
+    assert options == [{'retries': 1, 'raise_error': True}]
