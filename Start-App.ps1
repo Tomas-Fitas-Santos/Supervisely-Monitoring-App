@@ -13,7 +13,11 @@ $ErrorActionPreference = 'Stop'
 $PreviousRehearsal = [Environment]::GetEnvironmentVariable('MONITORING_REHEARSAL_PAIR', 'Process')
 Push-Location $PSScriptRoot
 try {
-    $env:MONITORING_REHEARSAL_PAIR = if ($Mode -eq 'Demo') { '1' } else { '0' }
+    if ($Mode -eq 'Demo') {
+        $env:MONITORING_REHEARSAL_PAIR = '1'
+    } else {
+        $env:MONITORING_REHEARSAL_PAIR = '0'
+    }
     $Python = Join-Path $PSScriptRoot '.venv\Scripts\python.exe'
     if (-not (Test-Path $Python)) {
         & py -3.12 -m venv .venv
