@@ -835,6 +835,23 @@ def setup_action(request: Request):
         elif name == 'registration_resolve':
             Registrations(sessions).resolve(gateway, uid, f.get('registration_id'), f.get('login_overrides'))
             message = 'Account matching finished. Resolve any unmatched emails before provisioning.'
+        elif name == 'registration_invite_selected':
+            if not single_team(event_config()):
+                raise WorkflowError('Configure the existing Supervisely event team before inviting people.')
+            # Explicit roster selection only. Never default an absent or empty
+            # list to the legacy bulk 'everyone' invitation operation.
+            addresses = f.get('invite_emails')
+            if not isinstance(addresses, list) or not addresses:
+                raise WorkflowError('Select at least one eligible person before inviting.')
+            result = SharedTeamInvitations(sessions).invite(
+                gateway, uid, selected_emails=addresses)
+            response['invitations'] = result
+            message = (
+                f"Selected invitation results: {result['invited']} sent, "
+                f"{result['pending']} already pending, "
+                f"{result['accepted']} already accepted, "
+                f"{result['failed']} need attention."
+            )
         elif name == 'registration_provision_all' and single_team(event_config()):
             result = SharedTeamInvitations(sessions).invite(gateway, uid)
             message = (
