@@ -183,22 +183,38 @@ individual's row. People already invited or accepted are skipped. Refresh
 invitation status after people accept in Supervisely. Uncertain invitation
 results require inspection before retrying.
 
-Supervisely account logins may differ from email addresses. **A username
-is not required in the roster for normal invitations.** The app first
-looks up the *exact registered email* in the user directory when permitted.
-If the directory cannot list users, or yields no exact match, the app submits
-the roster email directly as the native API's `members.add.login` identifier;
-some Supervisely instances resolve either a registered email or username in
-that field. The documented SDK formally calls it a *login*, so the final
-acceptance of email-as-login must be verified against this instance.
+Supervisely account logins may differ from registered email addresses.
+**A username is not required for invitations.** The app sends the exact
+reviewed roster email directly to Supervisely's `members.add` endpoint in
+the parameter named `login`, with the CSV-defined native `roleId`. This
+matches the expected email-first workflow; email acceptance still depends on
+the actual Supervisely instance. The SDK formally names the field *login*.
 
-If the API replies 404 for an email, check the existing Supervisely account,
-supply the verified `member_1_login`, `member_2_login`, `monitor_login` or
-`participant_login` (person-row CSV), or invite through the native UI and
-click **Refresh membership** in the app. Do not blindly resend an invitation
-whose outcome is unknown. Reimport preserves invitation evidence and does
-not silently change an accepted native role. Optional team-assignment
-adjustments are available below the people lists.
+**Correct invitation errors:** The app makes one native request with
+`raise_error=True`, preserving the actual HTTP rejection rather than hiding
+it behind the SDK's retry-limit exception. On a definitive HTTP 400, 401, 402,
+403, 404, 409, 422 or 429, the roster shows the status, provider message
+(when safe), the affected email and corrective guidance. Network/HTTP 5xx
+outcomes remain **unknown** and cannot be blindly resent. Invitation errors
+also appear under **Invite selected** rather than showing a false success.
+
+**Refresh participants & monitors from Supervisely:** This button performs
+read-only reconciliation of the existing team, including members invited
+directly on the Supervisely website. Where possible, team-scoped user
+profiles fill missing email/login/role fields from `members.list`. Accepted,
+pending, mismatched and deactivated statuses are updated; verified monitors
+receive app monitoring access. New team accounts appear in the Monitors or
+Participants roster without overwriting reviewed CSV roles, assigning
+competition partners or sending invitations. Accounts whose email is hidden
+require explicit administrator linking before they can join event pairs.
+Refresh can be used before or after roster import. Native roles are never
+changed by refresh.
+
+If HTTP 404 means your instance will not resolve an email, confirm the
+registered account on the same Supervisely server, invite it manually by
+username through Supervisely's **Team Members** interface, and use **Refresh**
+to import the accepted membership. The app never invents a login from the
+email local-part or sends a second invitation automatically.
 
 ### Dataset preparation
 
