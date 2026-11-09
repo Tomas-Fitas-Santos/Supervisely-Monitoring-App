@@ -250,7 +250,7 @@ class EventPeople:
                     native_role='reviewer' if event_role == 'participant_monitor'
                     else 'manager' if event_role == 'monitor' else 'annotator',
                     registration_ids=[], login=''))
-            from .registration import Registrations
+            from .db import Registration
             from sqlalchemy.orm.attributes import flag_modified
             for reg in session.scalars(select(Registration)):
                 changed = False
