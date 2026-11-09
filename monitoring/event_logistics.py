@@ -73,6 +73,7 @@ class EventLogistics:
                 results.append({
                     'id': reg.id, 'name': reg.team_name,
                     'table_number': seats.get(reg.id, ''),
+                    'can_issue': bool(organiser or EventRoster._assigned_id(session, reg) == int(actor)),
                     'members': people,
                 })
             return {'teams': results, 'summary': summary}
