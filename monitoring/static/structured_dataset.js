@@ -14,7 +14,7 @@ Vue.component('event-structured-upload', {
     totalBytes() {return this.files.reduce((n,f)=>n+f.size,0);},
     selectionLabel() {
       return this.mode==='zip' ? 'ZIP containing the named dataset folder'
-        : 'Dataset folder containing images/ and videos/';
+        : 'Dataset folder containing species / video title / frames';
     }
   },
   methods: {
@@ -42,7 +42,7 @@ Vue.component('event-structured-upload', {
       } else {
         if(this.files.some(f=>!/^\S.*\.(jpe?g|png|bmp|webp|tiff?)$/i.test(f.name)
           || !f.webkitRelativePath)){
-          this.error='Select the entire dataset folder. Only image files and video frames are supported.';
+          this.error='Select the entire dataset folder. Only video frame image files are supported.';
           this.files=[];return;
         }
         if(this.files.length&&this.sourceName==='Bird Annotation Dataset')
@@ -94,7 +94,7 @@ Vue.component('event-structured-upload', {
       try{
         for(let i=0;i<this.files.length;i++)
           this.uploadIds.push(await this.stageFile(this.files[i],i));
-        this.progress='Validating images, video sequences and archive integrity…';
+        this.progress='Validating complete video sequences and archive integrity…';
         await this.request('media_staged_preview',{
           upload_ids:this.uploadIds,source_mode:this.mode
         });
@@ -130,8 +130,8 @@ Vue.component('event-structured-upload', {
   template:`<section class="nj-panel nj-structured-upload">
     <h3>Upload event dataset</h3>
     <p class="nj-muted">Both DEMO and PRODUCTION accept an entire dataset folder or
-      a ZIP containing that same folder. The selected root must have images/
-      and videos/ subfolders. Each video is a named folder containing its ordered frames.</p>
+      a ZIP containing that same folder. Under the dataset root, use species/morphology
+      folders, then a named folder for each video containing its ordered frames.</p>
     <div class="nj-upload-modes">
       <button :class="{selected:mode==='folder'}" @click="chooseMode('folder')" :disabled="busy">Dataset folder</button>
       <button :class="{selected:mode==='zip'}" @click="chooseMode('zip')" :disabled="busy">ZIP archive</button>
@@ -169,7 +169,7 @@ Vue.component('event-structured-upload', {
     <div v-if="preview" class="nj-panel">
       <h4>Validated dataset — confirm before uploading</h4>
       <div class="nj-metrics nj-three-metrics">
-        <div><span>Images</span><strong>{{preview.images}}</strong></div>
+        <div><span>Bird categories</span><strong>{{preview.categories}}</strong></div>
         <div><span>Complete videos</span><strong>{{preview.videos}}</strong></div>
         <div><span>Video frames</span><strong>{{preview.frames}}</strong></div>
       </div>
