@@ -5,7 +5,7 @@ Vue.component('event-registrations', {
   props:['view','run','form','post','disabled'],
   data() {
     return {file:null,busy:false,error:'',search:'',group:'Monitors',
-      roleEdits:{},loginEdits:{},demoEmails:[],showFields:false};
+      roleEdits:{},loginEdits:{},demoEmails:[],inviteEmails:[],showFields:false};
   },
   computed: {
     profiles(){return this.view.roster_profiles||[];},
@@ -20,6 +20,15 @@ Vue.component('event-registrations', {
     eligibleDemo(){
       return this.monitors.filter(p=>
         (this.roleEdits[p.id]||p.event_role)==='participant_monitor'&&!!p.email);
+    },
+    invitableEmails(){
+      return new Set(this.profiles.filter(p=>this.canInvite(p)).map(p=>p.email));
+    },
+    selectedReady(){
+      return this.inviteEmails.filter(email=>this.invitableEmails.has(email));
+    },
+    selectableVisible(){
+      return [...new Set(this.selected.filter(p=>this.canInvite(p)).map(p=>p.email))];
     },
     reviewCount(){return this.participants.filter(p=>p.needs_review).length;},
     completeTeams(){
@@ -49,7 +58,7 @@ Vue.component('event-registrations', {
         });
         if(!await this.run('roster_workbook_import',{xlsx_base64:base64}))
           throw new Error(this.view.message||'Workbook import failed.');
-        this.demoEmails=[];this.roleEdits={};
+        this.demoEmails=[];this.inviteEmails=[];this.roleEdits={};
       }catch(e){this.error=e.message||'Could not import workbook.';}
       finally{this.busy=false;}
     },
@@ -90,7 +99,38 @@ Vue.component('event-registrations', {
       else this.error='';
     },
     asPairs(){return this.command('roster_prepare_pairs');},
-    invite(){return this.command('registration_provision_all');},
+    canInvite(person){
+      return Boolean(person.email&&person.invitable&&
+        ['not_invited','invitation_error'].includes(person.invitation_status));
+    },
+    selectVisibleInvitees(){
+      // Add only the currently filtered, eligible accounts. Preserve selections
+      // from the other tab, never silently add unseen people.
+      this.inviteEmails=[...new Set([...this.selectedReady,...this.selectableVisible])];
+    },
+    clearInviteSelection(){this.inviteEmails=[];},
+    async inviteSelected(){
+      if(this.disabled||this.busy)return;
+      const chosen=[...this.inviteEmails];
+      if(!chosen.length){this.error='Select one or more people first.';return;}
+      if(chosen.some(email=>!this.invitableEmails.has(email))){
+        this.error='Selection changed. Review the current roles and invitation statuses.';
+        this.inviteEmails=this.selectedReady;
+        return;
+      }
+      const preview=chosen.slice(0,8).join('\n');
+      const more=chosen.length>8?'\n…and '+(chosen.length-8)+' more':'';
+      if(!window.confirm('Send real Supervisely invitations to exactly '+
+        chosen.length+' selected account(s)?\n\n'+preview+more+
+        '\n\nRoles will follow the reviewed event roster.'))return;
+      this.busy=true;this.error='';
+      try{
+        if(!await this.run('registration_invite_selected',{invite_emails:chosen}))
+          throw new Error(this.view.message||'Could not send the selected invitations.');
+        this.inviteEmails=[];
+      }catch(e){this.error=e.message||'Could not send selected invitations.';}
+      finally{this.busy=false;}
+    },
     refresh(){return this.command('registration_refresh');}
   },
   template:`<section class="nj-panel nj-people-roster">
@@ -143,26 +183,36 @@ Vue.component('event-registrations', {
         Prepare complete eligible pairs
       </button>
     </div>
-    <div class="nj-actions">
-      <button @click="refresh" :disabled="disabled||busy">Refresh Supervisely membership statuses</button>
-      <button class="nj-primary" @click="invite"
-        :disabled="disabled||busy||!monitors.length">
-        Send role-aware invitations to prepared event users
-      </button>
-    </div>
-    <p class="nj-caution">Sending invitations acts on real Supervisely
-      accounts. Review the declared roles and the prepared teams before clicking.
-      Existing accepted native roles cannot be silently changed by CSV reimport.</p>
+    <p class="nj-caution">Invitations are sent only to the accounts you select.
+      Selected accounts can span both sheets. Existing pending or accepted invitations
+      cannot be resent. Real Supervisely permissions come from the reviewed roster.</p>
     <div class="nj-form-row">
       <label>Sheet<select v-model="group">
         <option value="Monitors">Monitors</option>
         <option value="Participants">Participants</option></select></label>
       <label>Find name, email or team<input v-model="search" placeholder="Filter records"></label>
     </div>
+    <div class="nj-actions">
+      <button @click="refresh" :disabled="disabled||busy">Refresh Supervisely membership statuses</button>
+      <button @click="selectVisibleInvitees" :disabled="disabled||busy||!selectableVisible.length">
+        Select matching eligible ({{selectableVisible.length}})
+      </button>
+      <button @click="clearInviteSelection" :disabled="disabled||busy||!inviteEmails.length">
+        Clear selection
+      </button>
+      <button class="nj-primary" @click="inviteSelected"
+        :disabled="disabled||busy||!selectedReady.length">
+        Invite selected ({{selectedReady.length}})
+      </button>
+    </div>
     <div class="nj-table-scroll"><table class="nj-table">
-      <thead><tr><th>Team</th><th>Name / email</th><th>Event role</th>
+      <thead><tr><th>Select</th><th>Team</th><th>Name / email</th><th>Event role</th>
         <th>Invitation</th><th>Review</th><th>Fields</th></tr></thead>
       <tbody><tr v-for="p in selected" :key="p.id">
+        <td><input type="checkbox" :value="p.email" v-model="inviteEmails"
+          :disabled="disabled||busy||!canInvite(p)"
+          :title="canInvite(p)?'Select for invitation':'Not eligible, already invited or awaiting review'"
+          :aria-label="'Select '+(p.display_name||p.email)+' for invitation'"></td>
         <td>{{p.team_name||'Staff'}}</td>
         <td><strong>{{p.display_name||'—'}}</strong>
           <small class="nj-small-text">{{p.email||'Email missing'}}</small></td>
