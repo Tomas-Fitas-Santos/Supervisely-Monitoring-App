@@ -1,39 +1,79 @@
-# Annotatiathon — Event Operations & Supervisely Monitoring
+# Nightjar Annotatiathon — Event & Annotation Operations
 
-A new, production-oriented application for the Técnico Bird Annotatiathon. Development happens **only on `main`**. The previous implementation is reference material, not the codebase for this rebuild.
+**Clean local-first rebuild** of the Técnico Bird Annotatiathon platform. All development commits go to **`main` only**. No new branches, no demo operation mode, and no real event data in Git.
 
-## Current status
+## What's implemented on `main`
 
-**Phase 1 started:** architecture and local backend foundation. The application is **not yet ready for event use**. No real login, roster management, job distribution, or annotation evaluation is implemented in this new codebase yet.
+- FastAPI backend, PostgreSQL migrations and real staff account authentication with Argon2 password hashing, HttpOnly sessions, role checks, CSRF and login lockout.
+- Responsive React + TypeScript interface: professional login, organiser overview, People & Teams (team/member views, filtering, sorting and editing), CSV mapping with preview/import, select/copy up to 50 emails for manual Supervisely invitations, and organiser-only Supervisely settings.
+- Independent local staff authentication: **no Supervisely API token at login**. External Team ID and Workspace ID are configured under Settings.
+- Initial automated backend/security tests, real PostgreSQL migration CI and TypeScript build CI.
 
-Read:
-- [Product specification](docs/PRODUCT_SPEC.md)
-- [Implementation roadmap and acceptance gates](docs/IMPLEMENTATION_ROADMAP.md)
-- [Architecture and data ownership](docs/ARCHITECTURE.md)
-- [Engineering rules](docs/ENGINEERING_RULES.md)
+**Not implemented yet:** actual native Supervisely API connection verification and membership synchronization; QR check-in; tickets/activities; dataset uploads; labeling job planning/dispatch; review/scoring; event finalization. A reported sent invitation is **not** treated as verified native membership. The UI makes these gaps explicit.
 
-## Local development (Windows PowerShell)
+## Start locally on Windows
 
-Requires Python 3.12+, Docker with Compose, and Git.
+Requires Python 3.12+, Docker Desktop with Compose, Node.js 22+ and npm.
+
+Stop any previous Monitoring App occupying port 8000 before starting the new API.
 
 ```powershell
 git switch main
 git pull --ff-only origin main
 Copy-Item .env.example .env
-# Edit .env and choose a strong POSTGRES_PASSWORD and matching DATABASE_URL
+# Edit .env: choose a strong POSTGRES_PASSWORD and set the SAME password in DATABASE_URL.
 docker compose -f compose.local.yaml --env-file .env up -d db
 py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -e ".[dev]"
+alembic upgrade head
+```
+
+Create the first organiser (no account/password is baked into the code or repository):
+
+```powershell
+python -m annotatiathon.manage create-staff --email "organiser@your-domain.pt" --name "Event Organiser" --roles organiser
+```
+
+A password is prompted securely; it is not passed on the command line. For additional staff, use the same command with roles such as `monitor,reception` or `activity,distribution`.
+
+Start the backend in **Terminal 1**:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
 uvicorn annotatiathon.app:app --reload --host 127.0.0.1 --port 8000
 ```
 
-Endpoints: `http://127.0.0.1:8000/health/live` and `/health/ready`.
+Start the frontend in **Terminal 2**:
 
-Run tests: `python -m pytest -q`.
+```powershell
+cd web
+npm install
+npm run dev
+```
 
-**Important:** This foundation currently exposes health endpoints only. It deliberately does not simulate event operations, create sample users, or auto-create a database schema. Staff authentication and database migrations are next milestones.
+Open **http://127.0.0.1:5173** and sign in with the organiser account.
 
-## Data safety
+API health: `http://127.0.0.1:8000/health/live`, DB health: `/health/ready`. The frontend development server proxies `/api` to port 8000. The API itself does not serve the React interface.
 
-This repository is public. Do **not** commit actual registrant workbooks, CSV exports, private contact data, datasets, API keys, database dumps, or `.env`. Such material belongs in private local storage or the application database.
+## Working with the application
+
+1. Open **People & Teams → Import CSV roster** and map CSV columns for name, email, team and optional role. Preview then confirm; an identical reimport does not duplicate attendees.
+2. View competition teams or individual people; the Monitoring Team is pinned first. Organisers can add/edit/deactivate people.
+3. Select up to 50 people **of one role**, copy comma-separated emails, and send the actual invitations in Supervisely's website. Only then mark those attempts reported sent. Native join and pending-invite verification arrive in the later integration phase.
+4. In **Settings**, configure the Supervisely server, team ID (the existing team is 125980) and workspace ID. This does not yet verify API access or alter Supervisely.
+
+Only the current screen refreshes while open, every five seconds. There are no background full-dataset network scans. Switching tabs loads current data immediately.
+
+## Tests and safety
+
+```powershell
+python -m ruff check src tests migrations
+python -m pytest -q
+cd web
+npm run build
+```
+
+Do not commit real attendee lists, registration workbooks, media, API tokens, `.env`, exports or database dumps: **the repository is public**. Old branches contain historical registration artifacts and are not merged into `main`.
+
+Architecture, scope and remaining acceptance gates are documented under `docs/`.

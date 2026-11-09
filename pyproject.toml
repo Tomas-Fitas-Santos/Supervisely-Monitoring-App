@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "annotatiathon-platform"
-version = "0.1.0"
-description = "Annotatiathon event management and Supervisely operations"
+version = "0.2.0"
+description = "Nightjar Annotatiathon event management and Supervisely operations"
 requires-python = ">=3.12"
 dependencies = [
   "fastapi>=0.115,<1",
@@ -14,6 +14,7 @@ dependencies = [
   "psycopg[binary]>=3.2,<4",
   "pydantic-settings>=2.6,<3",
   "alembic>=1.14,<2",
+  "argon2-cffi>=23.1,<26",
 ]
 
 [project.optional-dependencies]

@@ -1,0 +1,103 @@
+"""Persistent event records. All account and attendee identifiers are application-owned."""
+import time
+import uuid
+
+from sqlalchemy import Boolean, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+
+def epoch() -> int:
+    return int(time.time())
+
+
+def identifier() -> str:
+    return str(uuid.uuid4())
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class StaffAccount(Base):
+    __tablename__ = "staff_accounts"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=identifier)
+    email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(200))
+    password_hash: Mapped[str] = mapped_column(Text)
+    roles: Mapped[list[str]] = mapped_column(JSON, default=list)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    login_failures: Mapped[int] = mapped_column(Integer, default=0)
+    locked_until: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[int] = mapped_column(Integer, default=epoch)
+
+
+class StaffSession(Base):
+    __tablename__ = "staff_sessions"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    staff_id: Mapped[str] = mapped_column(ForeignKey("staff_accounts.id"), index=True)
+    csrf_token: Mapped[str] = mapped_column(String(128))
+    expires_at: Mapped[int] = mapped_column(Integer, index=True)
+    created_at: Mapped[int] = mapped_column(Integer, default=epoch)
+
+
+class CompetitionTeam(Base):
+    __tablename__ = "competition_teams"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=identifier)
+    name: Mapped[str] = mapped_column(String(200), unique=True, index=True)
+    created_at: Mapped[int] = mapped_column(Integer, default=epoch)
+
+
+class Person(Base):
+    __tablename__ = "people"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=identifier)
+    name: Mapped[str] = mapped_column(String(200), index=True)
+    email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
+    kind: Mapped[str] = mapped_column(String(20), index=True)
+    team_id: Mapped[str | None] = mapped_column(
+        ForeignKey("competition_teams.id"), index=True, nullable=True
+    )
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # This value is never set to "joined" by a roster import or a browser claim.
+    membership_status: Mapped[str] = mapped_column(String(30), default="not_invited")
+    supervisely_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    supervisely_login: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    check_in_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_fields: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[int] = mapped_column(Integer, default=epoch)
+    updated_at: Mapped[int] = mapped_column(Integer, default=epoch, onupdate=epoch)
+
+
+class SuperviselyConfig(Base):
+    __tablename__ = "supervisely_config"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    server_url: Mapped[str] = mapped_column(
+        String(512), default="https://app.supervisely.com"
+    )
+    team_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    workspace_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    updated_at: Mapped[int] = mapped_column(Integer, default=epoch, onupdate=epoch)
+
+
+class AuditEvent(Base):
+    __tablename__ = "audit_events"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=identifier)
+    staff_id: Mapped[str | None] = mapped_column(
+        ForeignKey("staff_accounts.id"), nullable=True, index=True
+    )
+    action: Mapped[str] = mapped_column(String(100), index=True)
+    target_type: Mapped[str] = mapped_column(String(80))
+    target_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    details: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[int] = mapped_column(Integer, default=epoch, index=True)
+
+
+class ImportBatch(Base):
+    __tablename__ = "roster_imports"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=identifier)
+    source_hash: Mapped[str] = mapped_column(String(64), index=True)
+    staff_id: Mapped[str] = mapped_column(ForeignKey("staff_accounts.id"))
+    row_count: Mapped[int] = mapped_column(Integer)
+    created_count: Mapped[int] = mapped_column(Integer)
+    changed_count: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[int] = mapped_column(Integer, default=epoch)
