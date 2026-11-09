@@ -257,9 +257,14 @@ class SetupGateway(Gateway):
             status, detail = self._native_invitation_error(exc)
             guidance = {
                 400: 'Check the registered email address and the requested team role.',
-                401: 'The Supervisely API token is missing, expired or invalid.',
+                401: ('The invitation route rejected the organiser API-key-only '
+                      'authentication. The browser uses a separate session token. '
+                      'Reconnect with a rotated personal API key, or use the '
+                      'Supervisely website. Do not copy browser JWTs or cookies.'),
                 402: 'The Supervisely subscription or account limits may block invitations.',
-                403: 'The current account may lack Team Admin invitation permission.',
+                403: ('The invitation route rejected this action. The personal '
+                      'API key may lack browser-route permissions even with '
+                      'Team Admin membership. Use the website and refresh.'),
                 404: ('The native invitation endpoint returned Not Found. '
                       'This does NOT establish that the email is invalid. '
                       'Check the configured server, team and the selected '
