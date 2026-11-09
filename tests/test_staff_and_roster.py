@@ -79,7 +79,7 @@ def test_roster_preview_import_reimport_and_soft_delete(client):
     csrf = sign_in(http, "organiser@example.org", "CorrectSecretPassword1!")
     headers = {"X-CSRF-Token": csrf}
     payload = {
-        "csv_text": "Name,Email,Role,Team\nOne,one@example.org,participant,Team 001\n"
+        "csv_text": "\\ufeffName,Email,Role,Team\nOne,one@example.org,participant,Team 001\n"
                     "Two,two@example.org,participant,Team 001\n"
                     "Monitor,monitorperson@example.org,monitor,\n",
         "mapping": {"name": "Name", "email": "Email", "kind": "Role", "team": "Team"},
