@@ -143,12 +143,13 @@ class SetupGateway(Gateway):
         return status, detail
 
     def invite_email(self, team_id, email, role, login=None):
-        """Invite by EXACT registered email; never guess a username or retry blindly.
+        """Invite a roster email through a verified Supervisely username if visible.
 
-        Supervisely's members.add payload field is named 'login', but the
-        selected identifier here is the email from the reviewed roster.
-        An explicitly stored username is a MANUAL fallback after a definitive
-        rejection, not a hidden automatic second invitation.
+        The documented members.add API expects the native *login*, which may
+        differ from the registered email. Resolve it with an exact email
+        directory match, or use a separately verified operator-supplied login.
+        Only when directory access does not expose a match, try the email in
+        the login field once. A failure does not trigger a second write.
         """
         email = str(email or '').strip().casefold()
         if (len(email) > 254 or email.count('@') != 1 or
