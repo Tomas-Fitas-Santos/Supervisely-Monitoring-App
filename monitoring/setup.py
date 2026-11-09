@@ -135,6 +135,13 @@ class Setup:
     def authorize(self, gateway, actor):
         if gateway is None:
             raise WorkflowError('Connect your Supervisely account in the app to start setup.')
+        if os.getenv('MONITORING_EXTERNAL') == '1':
+            # The CSV may include other native Team Admins, but external
+            # organiser privileges are reserved for the bootstrap owner only.
+            with self.sessions() as session:
+                config = session.get(EventConfig, 1)
+                if not config or int(config.owner_id or 0) != int(actor):
+                    raise WorkflowError('Only the event organiser can manage the full roster and setup.')
         if self.monitoring_team_id:
             gateway.organiser(self.monitoring_team_id, actor)
         else:
