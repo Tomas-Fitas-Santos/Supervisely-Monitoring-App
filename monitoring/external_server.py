@@ -153,7 +153,10 @@ class ExternalShell:
             return await self._reply(response,scope,receive,send)
         if method == 'GET' and path == '/':
             text = (Path(__file__).parent/'static'/'local.html').read_text(encoding='utf-8')
-            initial = json.dumps({'dashboard':self.dashboard.get_json_data()})
+            text = text.replace('<div id="app">',
+                '<button type="button" style="position:fixed;top:8px;right:8px;z-index:999;padding:7px" '
+                'onclick="fetch(\'/auth/logout\',{method:\'POST\'}).then(()=>location.href=\'/\')">Sign out</button>'
+                '<div id="app">')
             text = text.replace('__INITIAL_DATA__',
                                 json.dumps(self.dashboard.get_json_data()).replace('<','\\u003c'))
             response=HTMLResponse(text,headers={
