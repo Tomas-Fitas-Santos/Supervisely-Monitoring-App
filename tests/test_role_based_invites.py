@@ -147,6 +147,30 @@ def test_native_invites_receive_declared_reviewer_roles(sessions):
                    for email in demo_accounts())
 
 
+def test_bulk_invitations_load_directory_and_roles_once_per_request(sessions):
+    from unittest.mock import Mock
+    from monitoring.request_api import RequestApi
+    text = 'team_name,member_1_email,member_2_email\n'
+    accounts = {}
+    for index in range(20):
+        text += f'Pair {index},a{index}@example.org,b{index}@example.org\n'
+        for prefix in ('a', 'b'):
+            email = f'{prefix}{index}@example.org'
+            accounts[email] = dict(id=len(accounts)+100, login=f'{prefix}{index}', email=email, disabled=False)
+    import_text(sessions, text)
+    bind_event(sessions)
+    api = FakeApi(accounts)
+    api.user.get_list = Mock(wraps=api.user.get_list)
+    api.role.get_list = Mock(wraps=api.role.get_list)
+    api.post = Mock(wraps=api.post)
+    result = SharedTeamInvitations(sessions).invite(NS(api=RequestApi(api)), 900)
+    assert result['invited'] == 40
+    api.user.get_list.assert_called_once()
+    api.role.get_list.assert_called_once()
+    assert sum(call.args[0] == 'members.add' for call in api.post.call_args_list) == 40
+    assert sum(call.args[0] == 'members.list' for call in api.post.call_args_list) == 4
+
+
 def test_accepted_native_roles_register_both_as_event_monitors(sessions, monkeypatch):
     import_text(sessions, SAMPLE.read_text(encoding='utf-8'))
     bind_event(sessions)
@@ -183,14 +207,13 @@ def test_native_role_mismatch_blocks_readiness(sessions):
                    for email in demo_accounts())
 
 
-def test_shared_team_rejects_roster_without_explicit_roles(sessions):
+def test_simple_csv_assigns_participant_roles_from_participant_columns(sessions):
     bind_event(sessions)
-    legacy = (
-        'team_name,member_1_email,member_2_email\n'
-        'PAIR A,a@example.org,b@example.org\n'
-    )
-    with pytest.raises(WorkflowError, match='explicitly declare'):
-        import_text(sessions, legacy)
+    text = 'team_name,member_1_email,member_2_email,monitor_email\nPAIR A,a@example.org,b@example.org,monitor@example.org\n'
+    import_text(sessions, text)
+    with sessions() as session:
+        assert session.get(EventInvitee, 'a@example.org').native_role == 'annotator'
+        assert session.get(EventInvitee, 'monitor@example.org').native_role == 'manager'
 
 
 def test_separate_monitor_is_invited_with_manager_role(sessions):
@@ -215,3 +238,67 @@ def test_separate_monitor_is_invited_with_manager_role(sessions):
     assert roles == {
         'a@example.org': 5, 'b@example.org': 5, 'monitor@example.org': 3,
     }
+
+
+def import_invitation_roster(sessions):
+    bind_event(sessions)
+    import_text(sessions,
+        'team_name,monitor_email,member_1_email,member_2_email,member_1_name,member_1_role,member_2_role\n'
+        'A,monitor@example.org,a@example.org,b@example.org,Ana,participant_monitor,participant\n'
+        'B,monitor@example.org,c@example.org,d@example.org,Carla,participant,participant\n')
+    return {email: {'id': index, 'login': 'native-' + str(index), 'email': email, 'disabled': False}
+            for index, email in enumerate(['a@example.org','b@example.org','c@example.org','d@example.org','monitor@example.org'], 300)}
+
+
+@pytest.mark.parametrize('audience,email,expected', [
+    ('monitors', None, {'a@example.org','monitor@example.org'}),
+    ('participants', None, {'a@example.org','b@example.org','c@example.org','d@example.org'}),
+    ('everyone', None, {'a@example.org','b@example.org','c@example.org','d@example.org','monitor@example.org'}),
+    ('person', 'b@example.org', {'b@example.org'}),
+])
+def test_invitation_audience_sends_only_selected_people(sessions, audience, email, expected):
+    accounts = import_invitation_roster(sessions)
+    api = FakeApi(accounts)
+    result = SharedTeamInvitations(sessions).invite(NS(api=api), 900, audience=audience, email=email)
+    by_login = {person['login']: address for address, person in accounts.items()}
+    assert {by_login[call['login']] for call in api.calls} == expected
+    assert result['invited'] == len(expected)
+
+
+def test_imported_people_are_visible_before_native_invitations_and_are_deduplicated(sessions):
+    import_invitation_roster(sessions)
+    people = SharedTeamInvitations(sessions).people()
+    assert len(people) == 5
+    assert {p['status'] for p in people} == {'not_invited'}
+    monitor = next(p for p in people if p['email'] == 'monitor@example.org')
+    assert sorted(monitor['teams']) == ['A', 'B']
+    assert next(p for p in people if p['email'] == 'a@example.org')['name'] == 'Ana'
+
+
+def test_overlapping_group_invites_do_not_resend_pending_people(sessions):
+    api = FakeApi(import_invitation_roster(sessions))
+    invitations = SharedTeamInvitations(sessions)
+    invitations.invite(NS(api=api), 900, audience='monitors')
+    invitations.invite(NS(api=api), 900, audience='participants')
+    result = invitations.invite(NS(api=api), 900)
+    assert len(api.calls) == 5
+    assert result['invited'] == 0 and result['pending'] == 5
+
+
+@pytest.mark.parametrize('audience,email', [('person','outside@example.org'),('invalid',None)])
+def test_invalid_invitation_selection_cannot_send_anything(sessions, audience, email):
+    api = FakeApi(import_invitation_roster(sessions))
+    with pytest.raises(WorkflowError):
+        SharedTeamInvitations(sessions).invite(NS(api=api), 900, audience=audience, email=email)
+    assert not api.calls
+
+
+def test_person_rows_import_the_team_monitor_without_extra_setup(sessions):
+    bind_event(sessions)
+    import_text(sessions,
+        'team_name,participant_email,monitor_email\n'
+        'A,a@example.org,monitor@example.org\n'
+        'A,b@example.org,monitor@example.org\n')
+    people = SharedTeamInvitations(sessions).people()
+    assert len(people) == 3
+    assert next(p for p in people if p['role'] == 'monitor')['email'] == 'monitor@example.org'

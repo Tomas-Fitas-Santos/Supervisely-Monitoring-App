@@ -124,6 +124,26 @@ class EventPreferences(Base):
     membership_synced_at: Mapped[int | None] = mapped_column(nullable=True)
 
 
+class LoginSession(Base):
+    """Browser login; only the cookie digest and encrypted API token are stored."""
+    __tablename__ = 'login_sessions'
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[int]
+    login: Mapped[str] = mapped_column(String(180))
+    server: Mapped[str] = mapped_column(String(500))
+    token: Mapped[str] = mapped_column(Text)
+    expires_at: Mapped[int]
+
+
+class ResetBackup(Base):
+    __tablename__ = 'reset_backups'
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    actor_id: Mapped[int]
+    scope: Mapped[str] = mapped_column(String(30))
+    data: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[int] = mapped_column(default=now)
+
+
 class EventInvitee(Base):
     """CSV-declared identity and role in the one shared Supervisely event team.
 
@@ -137,6 +157,16 @@ class EventInvitee(Base):
     event_role: Mapped[str] = mapped_column(String(30))
     native_role: Mapped[str] = mapped_column(String(30))
     registration_ids: Mapped[list] = mapped_column(JSON, default=list)
+
+
+class RosterContact(Base):
+    """Imported display metadata, including people who still need an email."""
+    __tablename__ = 'roster_contacts'
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    email: Mapped[str] = mapped_column(String(254), default='')
+    name: Mapped[str] = mapped_column(String(180), default='')
+    role: Mapped[str] = mapped_column(String(30))
+    team_name: Mapped[str] = mapped_column(String(180), default='')
 
 
 class SharedInvitation(Base):
@@ -337,6 +367,10 @@ class TaskProgress(Base):
 def database(url: str):
     opts = {"connect_args": {"check_same_thread": False, "timeout": 30}} if url.startswith("sqlite") else {}
     engine = create_engine(url, pool_pre_ping=True, **opts)
+    if url.startswith('sqlite'):
+        # Readers can keep navigating while an import commits its transaction.
+        with engine.connect() as connection:
+            connection.exec_driver_sql('PRAGMA journal_mode=WAL').close()
     return engine, sessionmaker(engine, expire_on_commit=False)
 
 

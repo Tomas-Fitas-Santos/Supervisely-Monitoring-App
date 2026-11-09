@@ -1,6 +1,4 @@
 param(
-    [ValidateSet('Pilot', 'Demo', 'Simulator', 'Event')]
-    [string]$Mode = 'Demo',
     [switch]$Install
 )
 
@@ -25,17 +23,8 @@ try {
         & $Python -c 'import magic, supervisely; import monitoring.run'
         if ($LASTEXITCODE -ne 0) { throw 'Application imports failed; inspect the error above.' }
     }
-    Write-Host "Starting $Mode mode. Open http://127.0.0.1:8000 after the server is ready."
-    if ($Mode -eq 'Demo' -or $Mode -eq 'Pilot') {
-        Write-Host 'LIVE Supervisely: connect your organiser token in the app. Teams, invitations, photo uploads and tasks are real.'
-    }
-    elseif ($Mode -eq 'Simulator') {
-        Write-Host 'OFFLINE simulator: no real teams, invitations, uploads or tasks.'
-    }
-    if ($Mode -eq 'Pilot') { & $Python -m monitoring.run --pilot }
-    elseif ($Mode -eq 'Demo') { & $Python -m monitoring.run --demo }
-    elseif ($Mode -eq 'Simulator') { & $Python -m monitoring.run --simulator }
-    else { & $Python -m monitoring.run }
+    Write-Host 'Starting Supervisely Monitoring App. Open http://127.0.0.1:8000 after the server is ready.'
+    & $Python -m monitoring.run --local
     if ($LASTEXITCODE -ne 0) { throw 'The app stopped with an error; inspect the output above.' }
 }
 finally { Pop-Location }

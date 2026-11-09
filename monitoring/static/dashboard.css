@@ -21,6 +21,7 @@
 
 
 /* Accessible browser-local light/dark mode (event data is unchanged). */
+.nj-account-bar,.nj-reset-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:18px}.nj-account-bar{padding:12px 18px;border:1px solid #d3dce6;border-radius:8px}.nj-setup-steps{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;list-style:none;margin:0;padding:0}.nj-setup-steps button{width:100%;height:100%;text-align:left}.nj-setup-steps small{display:block;font-weight:400;margin:6px 0 0 22px}.nj-setup-steps button.selected{border-color:#20a0ff;background:#eef7ff;color:#1d8ce0}.nj-reset-toolbar{justify-content:flex-end}.nj-reset-toolbar>span{margin-right:auto}.nj-reset-confirm{border-color:#ff4949}.nj-mapping-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin:16px 0}.nj-mapping-grid label{font-size:12px}.nj-mapping-grid select{margin-top:5px}.nj-advanced{margin:18px 0;padding:14px;border:1px solid #d3dce6;border-radius:8px}.nj-app button:disabled{cursor:not-allowed}.nj-app[data-theme="dark"] .nj-setup-steps button.selected{background:#12334a;color:#7dd3fc;border-color:#38bdf8}@media(max-width:750px){.nj-setup-steps{grid-template-columns:1fr 1fr}.nj-setup-guide .nj-section-heading{align-items:flex-start}}
 .nj-app[data-theme="dark"]{
   background:#111827;color:#e5edf5;color-scheme:dark;
   min-height:100vh
@@ -68,3 +69,42 @@
 .nj-app[data-theme="dark"] .nj-unit{background:#273449!important;border-color:#52627a!important;color:#e5edf5}
 .nj-app[data-theme="dark"] .nj-tabs{border-color:#475569}
 .nj-app[data-theme="dark"] a{color:#7dd3fc}
+
+/* Page theme includes the area outside the centered application. */
+html{min-height:100%;background:#f5f7fa}
+html[data-nightjar-theme="light"],html[data-nightjar-theme="light"] body{background:#f5f7fa;color:#1f2d3d;color-scheme:light}
+html[data-nightjar-theme="dark"],html[data-nightjar-theme="dark"] body{background:#111827;color:#e5edf5;color-scheme:dark}
+body{min-height:100vh;margin:0}
+.nj-app{min-height:100vh;min-height:100dvh}
+.nj-app button{min-height:44px;padding:11px 18px;line-height:1.35}
+.nj-actions,.nj-inline-actions,.nj-upload-modes{gap:12px}
+.nj-upload-modes{display:flex;flex-wrap:wrap;margin:18px 0}
+.nj-section-heading{gap:20px;align-items:flex-start}
+.nj-tabs{gap:12px;margin-bottom:24px;padding:12px 0}
+.nj-roster-upload{display:flex;align-items:center;gap:20px;flex-wrap:wrap;margin:20px 0}
+.nj-roster-upload .nj-field{flex:1 1 340px;margin:0}
+.nj-roster-upload input{display:block;margin-top:10px;padding:14px}
+.nj-invitation-controls p{margin-bottom:0}
+.nj-invite-toolbar{display:flex;gap:14px;flex-wrap:wrap;margin-top:22px}
+.nj-invite-toolbar button{flex:1 1 210px}
+.nj-roster-search{max-width:520px;margin:24px 0}
+.nj-people-columns{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px}
+.nj-people-columns>.nj-panel{min-width:0;padding:24px}
+.nj-people-rows{list-style:none;margin:12px 0 0;padding:0}
+.nj-people-rows li{display:flex;gap:20px;align-items:flex-start;padding:20px 0;border-bottom:1px solid #e5e9f2}
+.nj-people-rows li:last-child{border-bottom:0;padding-bottom:0}
+.nj-person-info{flex:1;min-width:0;overflow-wrap:anywhere}
+.nj-person-info>span,.nj-person-info>small{display:block;margin-top:6px}
+.nj-person-info>small{color:#63758c}
+.nj-person-actions{display:flex;flex-direction:column;align-items:flex-end;gap:12px;min-width:105px}
+.nj-person-actions button{min-width:100px}
+.nj-roster-team{display:flex;flex-direction:column;gap:6px;padding:18px 0;border-bottom:1px solid #e5e9f2}
+.nj-wizard-footer{position:sticky;bottom:0;z-index:5;display:flex;align-items:center;justify-content:space-between;gap:24px;margin:24px 0 0;padding:22px 0;background:#f5f7fa;border-top:1px solid #d3dce6}
+.nj-wizard-footer p{margin:0}
+.nj-wizard-buttons{display:flex;gap:14px;flex-shrink:0}
+.nj-wizard-buttons .nj-primary{min-width:200px}
+.nj-app[data-theme="dark"] .nj-person-info>small{color:#b6c5d7}
+.nj-app[data-theme="dark"] .nj-people-rows li,.nj-app[data-theme="dark"] .nj-roster-team{border-color:#475569}
+.nj-app[data-theme="dark"] .nj-wizard-footer{background:#111827;border-color:#475569}
+@media(max-width:900px){.nj-people-columns{grid-template-columns:1fr}}
+@media(max-width:600px){.nj-wizard-footer{flex-direction:column;align-items:stretch;gap:16px}.nj-wizard-buttons{display:flex}.nj-wizard-buttons button{flex:1;min-width:0!important}.nj-invite-toolbar button{flex-basis:100%}.nj-roster-upload{align-items:stretch}.nj-roster-upload>button{width:100%}.nj-people-columns>.nj-panel{padding:18px}.nj-person-actions{min-width:90px}.nj-people-rows li{gap:12px}}

@@ -6,7 +6,6 @@ does not provision native jobs or change native reviewer permissions.
 """
 import hashlib
 import json
-import os
 from uuid import uuid4
 
 from sqlalchemy import select
@@ -23,11 +22,9 @@ class EventRoster:
         self.sessions = sessions
 
     @staticmethod
-    def _demo_dual_role():
-        return (
-            os.getenv("MONITORING_LIVE_DEMO") == "1"
-            or os.getenv("MONITORING_PILOT") == "1"
-        ) and os.getenv("MONITORING_SIMULATOR") != "1"
+    def _dual_role_enabled():
+        # Declared, accepted roles work identically for every event setup.
+        return True
 
     @staticmethod
     def _people(row):
@@ -76,7 +73,7 @@ class EventRoster:
                 "login": config.owner_login or "",
                 "demo_dual_role": False,
             })
-        if EventRoster._demo_dual_role():
+        if EventRoster._dual_role_enabled():
             # DEMO can put its two real annotators on the monitoring roster.
             # This does not grant them native Supervisely permissions.
             for reg in session.scalars(select(Registration)):
@@ -102,7 +99,7 @@ class EventRoster:
             for reg in session.scalars(select(Registration).order_by(Registration.team_name)):
                 assigned = self._assigned_id(session, reg)
                 members = self._people(reg)
-                demo_member = self._demo_dual_role() and any(
+                demo_member = self._dual_role_enabled() and any(
                     (m.get("role") == "participant_monitor" and m.get("status") == "accepted"
                      and int(m.get("user_id") or 0) == int(actor)) for m in members
                 )
@@ -165,7 +162,7 @@ class EventRoster:
             members = self._people(reg)
             if email not in {p["email"].strip().casefold() for p in members}:
                 raise WorkflowError("Participant is not registered for this team.")
-            demo_member = self._demo_dual_role() and any(
+            demo_member = self._dual_role_enabled() and any(
                 (m.get("role") == "participant_monitor" and m.get("status") == "accepted"
                  and int(m.get("user_id") or 0) == actor) for m in members
             )

@@ -65,11 +65,27 @@ def test_live_local_identity_uses_token_owner_instead_of_demo_id(ui, monkeypatch
     api = Mock(server_address=ui.settings.server_address)
     api.user.get_my_info.return_value = NS(id=90)
     api.user.get_member_info_by_id.return_value = NS(id=90, role='admin')
-    monkeypatch.setattr(ui.sly.Api, 'from_env', lambda: api)
-    uid, gateway = ui.identity(NS(client=NS(host='127.0.0.1')))
+    monkeypatch.setattr(ui.connection, 'session_api', lambda secret: (api, 90) if secret == 'own-session' else (_ for _ in ()).throw(WorkflowError('Sign in')))
+    uid, gateway = ui.identity(NS(client=NS(host='127.0.0.1'), cookies={'nightjar_session': 'own-session'}))
     assert uid == 90
-    assert gateway.api is api
+    assert gateway.api.raw_api is api
     api.user.get_member_info_by_id.assert_called_once_with(10, 90)
+
+
+def test_saved_admin_token_cannot_authenticate_a_browser_without_login(ui, monkeypatch):
+    monkeypatch.setattr(ui, 'settings', replace(ui.settings, local=True))
+    monkeypatch.setenv('API_TOKEN', 'saved-admin-token')
+    with pytest.raises(WorkflowError, match='Sign in'):
+        ui.identity(NS(client=NS(host='127.0.0.1'), cookies={}))
+
+
+def test_other_native_admin_cannot_manage_event_setup(ui):
+    with ui.sessions.begin() as s:
+        c = s.get(EventConfig, 1)
+        c.owner_id, c.monitoring_team_id = 99, 10
+    gateway = Mock()
+    with pytest.raises(WorkflowError, match='Only the event organiser'):
+        ui.setup.authorize(gateway, 90)
 
 
 def test_setup_endpoint_denies_non_admin_before_loading_roster(ui, monkeypatch):
@@ -236,7 +252,7 @@ def test_live_mode_rejects_simulator_presentation_actions_before_mutation(ui, mo
     prepare.assert_not_called()
 
 
-def test_add_team_form_uses_email_invitations_and_keeps_pending_team_visible(ui, monkeypatch):
+def test_legacy_team_form_cannot_import_before_shared_team_is_configured(ui, monkeypatch):
     import supervisely.app
     from monitoring.demo import DemoApi, initialize_demo
     from monitoring.gateway import Gateway
@@ -249,8 +265,97 @@ def test_add_team_form_uses_email_invitations_and_keeps_pending_team_visible(ui,
     monkeypatch.setattr(ui,'identity',lambda request:(900,Gateway(api,ui.sessions)))
     form={'setup_action':'email_team','name':'Manual email team',
           'participant_emails':['tomas.gaming.21@gmail.com'], 'monitor_email':'tomas.bf.santos@gmail.com'}
-    assert ui.setup_action(NS(state=NS(state={'dashboard':form}))) == {'ok':True}
-    team=data['dashboard']['directory']['teams'][0]
-    assert team['name']=='Manual email team' and team['membership_status']=='pending'
-    assert team['participants'][0]['email']=='tomas.gaming.21@gmail.com'
-    assert not team['annotator_ids'] and not data['dashboard']['setup']['blocked_by']
+    assert ui.setup_action(NS(state=NS(state={'dashboard':form}))) == {'ok':False}
+    assert not data['dashboard']['directory']['teams']
+
+
+def test_two_browser_logins_keep_admin_and_monitor_models_separate(ui, monkeypatch):
+    from fastapi.testclient import TestClient
+    from monitoring.local_shell import LocalShell
+    monkeypatch.setattr(ui, 'settings', replace(ui.settings, local=True))
+    apis = {}
+    for uid, login in [(99, 'admin'), (90, 'monitor')]:
+        api = Mock(server_address=ui.settings.server_address)
+        api.user.get_my_info.return_value = NS(id=uid, login=login)
+        api.user.get_member_info_by_id.return_value = NS(id=uid, login=login, role='admin' if uid == 99 else 'manager', disabled=False)
+        apis[login + '-token'] = api
+    monkeypatch.setattr(ui.sly, 'Api', lambda server, token: apis[token])
+    shell = LocalShell(ui.app, ui.dashboard, ui.connection.session)
+    admin = TestClient(shell, base_url='http://127.0.0.1')
+    monitor = TestClient(shell, base_url='http://127.0.0.1')
+    anonymous = TestClient(shell, base_url='http://127.0.0.1')
+    login = admin.post('/connection', json={'server':ui.settings.server_address,'token':'admin-token','user_id':99})
+    assert login.status_code == 200, login.text
+    assert 'HttpOnly' in login.headers['set-cookie'] and 'SameSite=strict' in login.headers['set-cookie']
+    assert 'admin-token' not in login.text
+    with ui.sessions.begin() as s:
+        c = s.get(EventConfig, 1)
+        c.monitoring_team_id = c.annotator_team_id = 10
+        c.source_workspace_id = 20
+        s.add(EventMember(user_id=90, login='monitor', name='Monitor', group='monitors'))
+        s.add(Team(id=101, name='Assigned to monitor', monitor_id=90, annotator_ids=[11,12]))
+    assert monitor.post('/connection', json={'server':ui.settings.server_address,'token':'monitor-token','user_id':90}).status_code == 200
+    for client, login_name in ((admin, 'admin'), (monitor, 'monitor')):
+        api = apis[login_name + '-token']
+        api.user.get_my_info.reset_mock()
+        api.user.get_member_info_by_id.reset_mock()
+        response = client.post('/dashboard/action', json={'state':{'dashboard':{'action':'refresh'}},'context':{}},
+                               headers={'x-nightjar-view':'1', 'x-user-id':'99'})
+        assert response.status_code == 200
+        view = response.json()['dashboard']
+        assert view['connection']['login'] == login_name
+        assert view['can_setup'] == (login_name == 'admin')
+        api.user.get_my_info.assert_called_once()
+        api.user.get_member_info_by_id.assert_called_once_with(10, 99 if login_name == 'admin' else 90)
+    admin_data = admin.post('/sly/data',json={}).json()['dashboard']
+    monitor_data = monitor.post('/sly/data?userId=99',json={},headers={'x-user-id':'99'}).json()['dashboard']
+    assert admin_data['can_setup'] and admin_data['connection']['login'] == 'admin'
+    assert not monitor_data['can_setup'] and monitor_data['connection']['login'] == 'monitor'
+    assert monitor_data['snapshot']['teams'][0]['name'] == 'Assigned to monitor'
+    assert anonymous.post('/sly/data',json={},headers={'x-user-id':'99'}).status_code == 401
+    assert anonymous.post('/dashboard/action',json={'state':{'dashboard':{'action':'refresh'}}},
+                          headers={'x-nightjar-view':'1','x-user-id':'99'}).status_code == 401
+    assert monitor.post('/setup/action',json={'state':{'dashboard':{'setup_action':'reset_preview','reset_scope':'settings'}}}).json() == {'ok':False}
+    assert monitor.post('/logout').json() == {'ok':True}
+    assert monitor.post('/sly/data',json={}).status_code == 401
+    assert admin.post('/sly/data',json={}).json()['dashboard']['can_setup']
+
+
+def test_csv_upload_automatically_maps_columns_and_populates_people_without_inviting(ui, monkeypatch):
+    import supervisely.app
+    data={'dashboard':{}}
+    monkeypatch.setattr(supervisely.app,'DataJson',lambda:data)
+    monkeypatch.setattr(ui.dashboard,'display',Mock())
+    monkeypatch.setattr(ui.setup,'authorize',Mock())
+    api=Mock()
+    api.user.get_my_info.return_value=NS(id=99,login='admin')
+    monkeypatch.setattr(ui,'identity',lambda request:(99,NS(api=api)))
+    with ui.sessions.begin() as session:
+        config=session.get(EventConfig,1)
+        config.owner_id=99
+        config.monitoring_team_id=config.annotator_team_id=10
+    csv='team_name,member_1_email,member_2_email,monitor_email\nPair,a@example.org,b@example.org,monitor@example.org\n'
+    result=ui.setup_action(NS(state=NS(state={'dashboard':{'setup_action':'registration_import','csv_text':csv}})))
+    assert result['ok'] is True
+    people=data['dashboard']['registration_people']
+    assert len(people)==3 and {p['status'] for p in people}=={'not_invited'}
+    assert next(p for p in people if p['email']=='monitor@example.org')['role']=='monitor'
+    api.post.assert_not_called()
+
+
+def test_upload_chunk_returns_offset_without_rebuilding_the_dashboard(ui, monkeypatch):
+    monkeypatch.setattr(ui, 'identity', lambda request: (99, NS(api=Mock())))
+    monkeypatch.setattr(ui.setup, 'authorize', Mock())
+    stage = Mock(return_value=32)
+    monkeypatch.setattr(ui.setup, 'stage', stage)
+    display = Mock()
+    monkeypatch.setattr(ui.dashboard, 'display', display)
+    access = Mock()
+    monkeypatch.setattr(ui, 'display_access', access)
+    request = NS(headers={'x-nightjar-view':'0'}, state=NS(state={'dashboard':{
+        'setup_action':'chunk', 'upload_id':'upload-123', 'filename':'a.jpg',
+        'size':32, 'offset':0, 'chunk':'encoded', 'relative_path':'images/a.jpg'}}))
+    assert ui.setup_action(request) == {'ok':True, 'upload_offset':32}
+    stage.assert_called_once_with(99, 'upload-123', 'a.jpg', 32, 0, 'encoded', 'images/a.jpg')
+    display.assert_not_called()
+    access.assert_not_called()

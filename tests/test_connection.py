@@ -40,10 +40,10 @@ def test_existing_connection_pins_organiser_and_server(connection):
     local, api = connection
     local.save('https://app.supervisely.com', 'first-token')
     api.user.get_my_info.return_value = NS(id=100, login='other')
-    with pytest.raises(WorkflowError, match='organiser account'):
+    with pytest.raises(WorkflowError, match='organiser must configure'):
         local.save('https://app.supervisely.com', 'other-token')
     api.user.get_my_info.return_value = NS(id=99, login='organiser')
-    with pytest.raises(WorkflowError, match='organiser account'):
+    with pytest.raises(WorkflowError, match='bound to another Supervisely server'):
         local.save('https://other.example', 'other-token')
     local.save('https://app.supervisely.com', 'new-token')
     local.api()

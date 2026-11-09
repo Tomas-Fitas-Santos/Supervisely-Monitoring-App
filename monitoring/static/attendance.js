@@ -28,10 +28,8 @@ Vue.component('event-roster-assignment', {
     }
   },
   template: `<section class="nj-panel nj-event-roster">
-    <h3>Competition teams and monitor allocation</h3>
-    <p class="nj-muted">Competition pairs are separate logical entities in the monitoring app.
-      This roster is ready for the planned single shared Supervisely team migration;
-      the existing native provisioning flow has not yet been migrated.</p>
+    <h3>3. Assign teams to monitors</h3>
+    <p class="nj-muted">Choose who supervises each team. Use a balanced assignment or select a monitor manually below.</p>
     <div class="nj-metrics nj-three-metrics">
       <div><span>Registered pairs</span><strong>{{teams.length}}</strong></div>
       <div><span>Not provisioned</span><strong>{{eligible.length}}</strong></div>
@@ -101,13 +99,14 @@ Vue.component('event-roster-assignment', {
     </table></div>
     <p v-if="!teams.length" class="nj-muted">Import registration data to populate competition teams and members.</p>
     <p class="nj-muted">Native reviewer handover remains a separate, permission-checked operation.
-      DEMO monitoring privileges must be enabled in the actual Supervisely account.</p>
+      Monitoring access follows accepted Supervisely team membership.</p>
   </section>`
 });
 
 Vue.component('event-attendance', {
   props: ['view','form','post','locked'],
-  data() {return {busy:false,query:'',status:'all',notes:{},clientError:'',timer:null};},
+  data() {return {busy:false,refreshing:false,query:'',status:'all',notes:{},clientError:'',timer:null};},
+  watch: {busy(value){this.$emit('busy',value);}},
   computed: {
     attendance() {return this.view.attendance || {teams:[],summary:{}};},
     summary() {return this.attendance.summary || {};},
@@ -123,8 +122,9 @@ Vue.component('event-attendance', {
     key(t,p) {return t.id+'/'+p.email;},
     date(ts) {return ts?new Date(ts*1000).toLocaleString():'';},
     async action(type,team,person) {
-      if(this.busy||this.locked)return;
-      this.busy=true;this.clientError='';
+      const reading=type==='refresh';
+      if(this.busy||this.locked||(reading&&this.refreshing))return;
+      if(reading)this.refreshing=true;else this.busy=true;this.clientError='';
       const key=team&&person?this.key(team,person):null;
       Object.assign(this.form,{
         attendance_action:type,
@@ -137,7 +137,7 @@ Vue.component('event-attendance', {
         if(result?.ok===false||this.view.error)throw new Error(this.view.message||'Check-in request failed.');
         if(key)this.$delete(this.notes,key);
       }catch(e){this.clientError=e.message||'Check-in failed.';}
-      finally{this.busy=false;}
+      finally{if(reading)this.refreshing=false;else this.busy=false;}
     }
   },
   mounted() {
@@ -150,7 +150,7 @@ Vue.component('event-attendance', {
       <h2>Participant check-in</h2>
       <p class="nj-muted">Record each participant's physical arrival. This does not imply
         Supervisely invitation acceptance or completion of an annotation job.</p>
-      </div><button @click="action('refresh')" :disabled="busy||locked">Refresh arrivals</button></div>
+      </div><button @click="action('refresh')" :disabled="busy||locked||refreshing">{{refreshing?'Refreshing…':'Refresh arrivals'}}</button></div>
     <div v-if="clientError" class="nj-message nj-error" role="alert">{{clientError}}</div>
     <div class="nj-metrics">
       <div><span>Participants</span><strong>{{summary.participants||0}}</strong></div>

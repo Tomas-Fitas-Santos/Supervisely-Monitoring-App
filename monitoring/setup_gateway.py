@@ -174,7 +174,17 @@ class SetupGateway(Gateway):
         workspaces, datasets = [], []
         if not monitoring_team_id:
             return {'workspaces': [], 'datasets': []}
+        source_workspace = None
+        if self.sessions:
+            from .db import EventConfig
+            from .event_settings import single_team
+            with self.sessions() as session:
+                config = session.get(EventConfig, 1)
+                if single_team(config):
+                    source_workspace = config.source_workspace_id
         for w in self.api.workspace.get_list(monitoring_team_id):
+            if source_workspace and w.id != source_workspace:
+                continue
             workspaces.append({'id': w.id, 'name': w.name})
             for p in self.api.project.get_list(w.id):
                 if p.type not in ('images', 'videos'):

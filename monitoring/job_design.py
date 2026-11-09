@@ -245,9 +245,10 @@ class PreparedJobs:
     def overview(self, actor, organiser=False):
         with self.sessions() as session:
             rows = []
+            registrations = {r.id:r for r in session.scalars(select(Registration))}
             for job in session.scalars(select(PreparedJob).order_by(
                     PreparedJob.registration_id, PreparedJob.position)):
-                reg = session.get(Registration, job.registration_id)
+                reg = registrations.get(job.registration_id)
                 if not organiser and (not reg or reg.monitor_id != actor):
                     continue
                 rows.append({

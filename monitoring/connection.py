@@ -1,12 +1,14 @@
-"""One-time local connection. Plaintext credentials never enter widget state or exports."""
+"""Supervisely browser logins and the organiser's encrypted polling credential."""
 import os
+import hashlib
+import secrets
 from pathlib import Path
 from urllib.parse import urlparse
 
 from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy import select, update
 
-from .db import EventConfig, EventMember, EventPreferences, SetupState, Team
+from .db import EventConfig, EventMember, EventPreferences, LoginSession, SetupState, Team, now
 from .service import WorkflowError
 
 
@@ -55,11 +57,11 @@ class LocalConnection:
             import supervisely as sly
             return sly.Api(config.server_address, token)
 
-    def save(self, server, token, legacy_monitoring_team_id=None, expected_user_id=None):
+    def save(self, server, token, legacy_monitoring_team_id=None, expected_user_id=None, browser=False):
         """Authenticate the supplied user ID with that user's personal token.
 
-        The organiser binding stays fixed while another authorised monitor
-        connects. Only one local authenticated account is active at a time.
+        Browser logins have independent credentials. Only the organiser's
+        credential may be retained for background event polling.
         """
         import supervisely as sly
 
@@ -106,9 +108,9 @@ class LocalConnection:
                         'The account is not an accepted member of the configured event team.'
                     ) from None
                 registered = session.get(EventMember, int(user.id))
-                if not member or getattr(member, 'disabled', False) or (
-                        getattr(member, 'role', None) != 'admin'
-                        and (not registered or registered.group != 'monitors')):
+                if (not member or getattr(member, 'disabled', False)
+                        or not registered or registered.group != 'monitors'
+                        or getattr(member, 'role', '') not in ('admin', 'manager', 'developer', 'reviewer')):
                     raise WorkflowError(
                         'This account is not approved as a monitor for the event.'
                     )
@@ -120,6 +122,11 @@ class LocalConnection:
                     )
                 from .setup_gateway import SetupGateway
                 SetupGateway(api).organiser(legacy_monitoring_team_id, user.id)
+
+            if browser and old.owner_id is not None and old.owner_id != int(user.id):
+                # Signing in as a monitor does not change shared event settings
+                # and need not wait for an organiser's upload operation.
+                return api, user
 
         encrypted = self.cipher().encrypt(token.strip().encode()).decode()
         with self.sessions.begin() as session:
@@ -136,12 +143,54 @@ class LocalConnection:
                 raise WorkflowError('The event server changed while connecting.')
             if config.owner_id is None:
                 config.owner_id, config.owner_login = int(user.id), user.login
-            config.server_address, config.local_token = server, encrypted
+            config.server_address = server
+            if config.owner_id == int(user.id):
+                config.local_token = encrypted
             prefs = session.get(EventPreferences, 1)
-            prefs.active_local_user_id = int(user.id)
-            prefs.active_local_login = user.login
+            if not browser:
+                prefs.active_local_user_id = int(user.id)
+                prefs.active_local_login = user.login
             session.execute(update(SetupState).where(
                 SetupState.id == 1,
                 SetupState.operation_id == 'connection',
             ).values(operation_id=None))
         return api, user
+
+    def login(self, server, token, expected_user_id, legacy_monitoring_team_id=None):
+        api, user = self.save(server, token, legacy_monitoring_team_id,
+                              expected_user_id, browser=True)
+        secret = secrets.token_urlsafe(32)
+        with self.sessions.begin() as session:
+            session.add(LoginSession(id=self.session_id(secret), user_id=int(user.id),
+                login=user.login, server=api.server_address.rstrip('/'),
+                token=self.cipher().encrypt(token.strip().encode()).decode(),
+                expires_at=now() + 12 * 60 * 60))
+        return secret, user
+
+    @staticmethod
+    def session_id(secret):
+        return hashlib.sha256(str(secret).encode()).hexdigest()
+
+    def session(self, secret):
+        if not secret:
+            return None
+        with self.sessions() as session:
+            row = session.get(LoginSession, self.session_id(secret))
+            return row if row and row.expires_at > now() else None
+
+    def session_api(self, secret):
+        row = self.session(secret)
+        if not row:
+            raise WorkflowError('Sign in with your own Supervisely account to continue.')
+        try:
+            token = self.cipher().decrypt(row.token.encode()).decode()
+        except InvalidToken:
+            raise WorkflowError('Your saved login is unavailable. Sign in again.') from None
+        import supervisely as sly
+        return sly.Api(row.server, token), row.user_id
+
+    def logout(self, secret):
+        with self.sessions.begin() as session:
+            row = session.get(LoginSession, self.session_id(secret))
+            if row:
+                session.delete(row)

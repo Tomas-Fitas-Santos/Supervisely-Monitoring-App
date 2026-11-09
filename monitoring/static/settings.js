@@ -1,8 +1,8 @@
 /* Settings for the existing native event team/workspace and verified IDs. */
 Vue.component('event-settings', {
   props: ['view','form','post','locked'],
-  data() {return {teamId:'',workspaceId:'',monitorId:'',demoDualRole:false,
-    busy:false,error:'',initialized:false};},
+  data() {return {teamId:'',workspaceId:'',monitorId:'',
+    busy:false,refreshing:false,error:'',initialized:false};},
   computed: {
     settings() {return this.view.event_settings||{};},
     isAdmin() {return !!this.view.can_setup;},
@@ -10,6 +10,7 @@ Vue.component('event-settings', {
     nativeReady() {return !!this.settings.single_team;}
   },
   watch: {
+    busy(value){this.$emit('busy',value);},
     settings:{immediate:true,handler(s){
       if(!s)return;
       if(!this.initialized || (!this.busy && !this.error)){
@@ -21,8 +22,9 @@ Vue.component('event-settings', {
   },
   methods: {
     async send(action, values={}) {
-      if(this.busy||this.locked)return;
-      this.busy=true;this.error='';
+      const reading=action==='refresh';
+      if(this.busy||this.locked||(reading&&this.refreshing))return;
+      if(reading)this.refreshing=true;else this.busy=true;this.error='';
       Object.assign(this.form,{settings_action:action},values);
       try {
         const response=await this.post('/settings/action');
@@ -31,21 +33,20 @@ Vue.component('event-settings', {
         if(action==='add_monitor')this.monitorId='';
         return true;
       } catch(e){this.error=e.message||'Settings could not be saved.';return false;}
-      finally{this.busy=false;}
+      finally{if(reading)this.refreshing=false;else this.busy=false;}
     },
     async save() {
       return this.send('save_binding',{team_id:this.teamId,workspace_id:this.workspaceId,
         settings_revision:this.settings.revision});
     },
     async addMonitor() {
-      return this.send('add_monitor',{monitor_user_id:this.monitorId,demo_dual_role:this.demoDualRole});
+      return this.send('add_monitor',{monitor_user_id:this.monitorId});
     }
   },
   template:`<section class="nj-management nj-event-settings">
-    <div class="nj-section-heading"><div><h2>Application settings</h2>
-      <p class="nj-muted">Both DEMO and PRODUCTION connect to a team and workspace
-        already created in Supervisely. The app never creates the native team.</p></div>
-      <button @click="send('refresh')" :disabled="busy||locked">Refresh settings</button>
+    <div class="nj-section-heading"><div><h2>Connect your event</h2>
+      <p class="nj-muted">Enter the existing Supervisely team and workspace where your event will run. You only need to do this once.</p></div>
+      <button @click="send('refresh')" :disabled="busy||locked||refreshing">{{refreshing?'Refreshing…':'Refresh settings'}}</button>
     </div>
     <p v-if="error" role="alert" class="nj-message nj-error">{{error}}</p>
     <div class="nj-panel">
@@ -56,9 +57,8 @@ Vue.component('event-settings', {
       </div>
       <p class="nj-muted">The User ID is checked against your authenticated Supervisely
         account. An ID alone never logs you in or grants monitoring access.
-        On a locally hosted single-user instance you can switch accounts using
-        the personal API token form above. For simultaneous independent monitors,
-        run the app with real multi-user authentication on Supervisely.</p>
+        Each monitor signs in separately with their own personal API token.
+        Only your event admin account can change setup, event rules or resets.</p>
     </div>
     <div class="nj-panel">
       <h3>Existing event resources</h3>
@@ -82,8 +82,7 @@ Vue.component('event-settings', {
         the team is blocked after roster or invitation data exists; changing
         the workspace is blocked after dataset import or distribution.</p>
     </div>
-    <div class="nj-panel">
-      <h3>CSV-declared monitoring staff</h3>
+    <details class="nj-panel"><summary>Advanced: reconcile a monitor already in Supervisely</summary>
       <p class="nj-muted">Import roles in Monitors &amp; Teams first. The app invites each
         CSV-declared monitor with the corresponding native role and registers
         monitoring access after acceptance. The control below can reconcile
@@ -97,7 +96,7 @@ Vue.component('event-settings', {
 
       <button v-if="isAdmin" @click="addMonitor"
         :disabled="busy||locked||!nativeReady||!monitorId">Reconcile registered monitor</button>
-    </div>
+    </details>
     <p class="nj-muted">Theme is selected in the main header and is stored locally
       in this browser. It does not change event records or account permissions.</p>
   </section>`

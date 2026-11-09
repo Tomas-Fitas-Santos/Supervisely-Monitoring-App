@@ -2,6 +2,7 @@
 import csv
 import hashlib
 import io
+from contextlib import nullcontext
 from sqlalchemy import select
 from .db import Audit, EventConfig, EventInvitee, Registration, SharedInvitation, Team, TeamOnboarding
 from .service import WorkflowError
@@ -11,7 +12,7 @@ COLUMNS = ['team_name', 'member_1_email', 'member_2_email', 'member_1_name', 'me
            'member_1_login', 'member_2_login', 'member_1_role', 'member_2_role',
            'monitor_email', 'monitor_login']
 PERSON_COLUMNS = ['team_name', 'participant_email', 'participant_name', 'participant_login',
-                  'participant_role']
+                  'participant_role', 'monitor_email', 'monitor_login']
 
 ROLE_ALIASES = {
     'participant': 'participant', 'annotator': 'participant',
@@ -56,7 +57,7 @@ class Registrations:
             raise WorkflowError('Some CSV rows do not match the header columns.')
         return reader.fieldnames, rows
 
-    def import_csv(self, actor, text, mapping):
+    def import_csv(self, actor, text, mapping, *, session=None, allow_incomplete=False):
         """Import declared event roles before any native invitations are sent.
 
         The pair row lists two participants, who can independently have
@@ -65,19 +66,15 @@ class Registrations:
         Native Admin is NEVER granted by CSV.
         """
         headers, raw = self.columns(text)
-        with self.sessions() as session:
+        if session is not None:
             strict_roles = single_team(session.get(EventConfig, 1))
+        else:
+            with self.sessions() as check_session:
+                strict_roles = single_team(check_session.get(EventConfig, 1))
         if not isinstance(mapping, dict) or set(mapping) - set(COLUMNS + PERSON_COLUMNS):
             raise WorkflowError('Invalid CSV column mapping.')
-        if strict_roles:
-            role_fields = ('participant_role',) if mapping.get('participant_email') else (
-                'member_1_role', 'member_2_role'
-            )
-            if any(mapping.get(field) not in headers for field in role_fields):
-                raise WorkflowError(
-                    'The one-team event CSV must explicitly declare every '
-                    'participant role before any invitation is sent.'
-                )
+        # Participant columns already identify the ordinary participant role.
+        # Optional role columns allow dual-role staff without another setup step.
         if mapping.get('participant_email'):
             if mapping.get('team_name') not in headers or mapping['participant_email'] not in headers:
                 raise WorkflowError('Map the team and participant email columns.')
@@ -87,9 +84,16 @@ class Registrations:
                 grouped.setdefault(name, []).append(row)
             converted = []
             for name, people in grouped.items():
-                if len(people) != 2:
+                if len(people) != 2 and not (allow_incomplete and len(people) == 1):
                     raise WorkflowError(f'Team {name or "(unnamed)"} must have exactly two participant rows.')
                 item = {'team_name': name}
+                for field in ('monitor_email', 'monitor_login'):
+                    values = {str(person.get(mapping.get(field, ''), '') or '').strip()
+                              for person in people}
+                    values.discard('')
+                    if len(values) > 1:
+                        raise WorkflowError(f'Team {name} has conflicting monitor details.')
+                    item[field] = next(iter(values), '')
                 for i, person in enumerate(people, 1):
                     for field in ('email', 'name', 'login', 'role'):
                         item[f'member_{i}_{field}'] = person.get(mapping.get(f'participant_{field}', ''), '')
@@ -116,6 +120,11 @@ class Registrations:
             members = []
             for i in (1, 2):
                 email = row[f'member_{i}_email'].casefold()
+                if not email and allow_incomplete and row[f'member_{i}_name']:
+                    members.append({'email': '', 'name': row[f'member_{i}_name'],
+                                    'login': '', 'role': participant_role(row[f'member_{i}_role']),
+                                    'user_id': None, 'status': 'missing_email'})
+                    continue
                 if i == 2 and not email:
                     continue
                 if (len(email) > 254 or email.count('@') != 1 or
@@ -131,7 +140,7 @@ class Registrations:
                     'login': row[f'member_{i}_login'], 'role': role,
                     'user_id': None, 'status': 'unresolved',
                 })
-            if not members or (strict_roles and len(members) != 2):
+            if not members or (strict_roles and len(members) != 2 and not allow_incomplete):
                 raise WorkflowError(
                     f'Row {number}: every competition pair must contain '
                     'exactly two distinct participants.'
@@ -145,7 +154,7 @@ class Registrations:
                             or not all(manager.split('@', 1))
                             or any(c.isspace() for c in manager)):
                 raise WorkflowError(f'Row {number}: invalid monitor email.')
-            if manager in {m['email'] for m in members} and not any(
+            if manager and manager in {m['email'] for m in members} and not any(
                     m['email'] == manager and m['role'] == 'participant_monitor'
                     for m in members):
                 raise WorkflowError(
@@ -157,17 +166,24 @@ class Registrations:
                 name, members, manager, row['monitor_login'],
             ))
 
-        with self.sessions.begin() as s:
+        with (nullcontext(session) if session is not None else self.sessions.begin()) as s:
             existing = list(s.scalars(select(Registration)))
             for key, name, members, manager, monitor_login in rows:
                 for other in existing:
-                    if other.id != key and {m['email'] for m in other.members}.intersection(
-                            m['email'] for m in members):
+                    if other.id != key and {m['email'] for m in other.members if m.get('email')}.intersection(
+                            m['email'] for m in members if m.get('email')):
                         raise WorkflowError('A participant is already registered to another pair.')
                 reg = s.get(Registration, key)
                 if reg:
                     if [m['email'] for m in reg.members] != [m['email'] for m in members]:
-                        raise WorkflowError('This team name has different members. Resolve its roster explicitly.')
+                        known = {m['email']:m for m in reg.members if m.get('email')}
+                        incoming = {m['email'] for m in members if m.get('email')}
+                        if not allow_incomplete or not set(known).issubset(incoming) or reg.team_id:
+                            raise WorkflowError('This team name has different members. Resolve its roster explicitly.')
+                        # Filling a missing email or completing a one-person
+                        # registration preserves verified existing identities.
+                        reg.members = [dict(known[p['email']]) if p['email'] in known else dict(p)
+                                       for p in members]
                     onboard = s.get(TeamOnboarding, key)
                     if onboard and onboard.manager_email and manager and onboard.manager_email != manager:
                         raise WorkflowError('This pair has a different monitor. Reassign it explicitly.')
@@ -217,6 +233,8 @@ class Registrations:
             for reg in s.scalars(select(Registration)):
                 for person in reg.members:
                     email = person['email']
+                    if not email:
+                        continue
                     role = person.get('role', 'participant')
                     entry = requested.setdefault(email, {
                         'roles': set(), 'logins': set(), 'registration_ids': set(),
@@ -296,8 +314,9 @@ class Registrations:
     def rows(self):
         with self.sessions() as s:
             rows = []
+            onboarding_rows = {r.registration_id: r for r in s.scalars(select(TeamOnboarding))}
             for r in s.scalars(select(Registration).order_by(Registration.team_name)):
-                onboarding = s.get(TeamOnboarding, r.id)
+                onboarding = onboarding_rows.get(r.id)
                 rows.append({'id': r.id, 'team_name': r.team_name, 'members': r.members, 'monitor_id': r.monitor_id,
                     'team_id': r.team_id, 'error': r.error,
                     'ready': onboarding.status == 'ready' if onboarding and onboarding.memberships else all(m.get('user_id') and m['status'] in ('matched', 'verified', 'accepted') for m in r.members),
