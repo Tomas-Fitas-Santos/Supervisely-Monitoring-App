@@ -10,18 +10,21 @@ inside a native Supervisely deployment.
 The runtime is a **native Supervisely application session**, using its authenticated multi-user gateway. A plain publicly exposed Uvicorn container is not an alternative authentication system. The hosted entry point refuses local/test identity overrides and requires PostgreSQL. One application process serves concurrent users; use one shared hosted session for the event. The supplied Dockerfile is a build recipe; no container image has been published by this repository.
 
 1. Run the [real pilot](real-pilot.md), including native membership, invitations, task ownership, correction/acceptance, reviewer handover and two simultaneous authenticated monitors. Record the actual instance version and resource/seat limits. The three supplied email addresses alone are insufficient to execute these checks from a development environment.
-2. Build the image locally, then publish it to a registry accessible by the Supervisely agent. Replace `YOUR_REGISTRY` and `YOUR_TAG` below with your own registry/tag. Docker and registry access are deployment infrastructure, not event configuration.
+2. Build and publish the Docker image **only after** authenticating to
+   your chosen accessible image registry. On Windows, the guarded helper
+   bundles build, optional push and verified release preparation:
 
-   ```bash
-   docker build -t YOUR_REGISTRY/supervisely-monitoring:YOUR_TAG .
-   docker push YOUR_REGISTRY/supervisely-monitoring:YOUR_TAG
+   ```powershell
+   .\\Prepare-Release.ps1 -Image "YOUR_REGISTRY/supervisely-monitoring:YOUR_TAG" -InstanceVersion "X.Y.Z" -Build -Push
    ```
 
-3. Prepare a separate native release source folder, using the same image tag (prefer its immutable digest) and the instance version actually verified in the pilot:
+   Replace both placeholders. `-Push` is explicit and is never run during a
+   local rehearsal. For an image that is **already published**, omit both
+   `-Build` and `-Push`. For Linux shells the equivalent commands are
+   `docker build -t ... .`, `docker push ...`, followed by `python -m monitoring.release --image ... --instance-version X.Y.Z`.
 
-   ```bash
-   python -m monitoring.release --image YOUR_REGISTRY/supervisely-monitoring:YOUR_TAG --instance-version X.Y.Z
-   ```
+3. The helper prepares a separate native release source folder using the same
+   image and the **actual** Supervisely instance version validated in the pilot:
 
    Replace `X.Y.Z` with the numeric actual instance version. The command refuses an untagged image, invalid version or existing output directory. `dist/supervisely-release/` contains application sources, static assets, the sample inputs, native `config.json`, documentation and SHA-256 checksums. It contains no `.env`, runtime database, credentials, test workflows, Python cache or `requirements.txt`. Dependencies are already installed in the image. Use this generated folder as the root of the private Supervisely app release repository. The development repository's root configuration is not a substitute for this instance-specific release.
 
