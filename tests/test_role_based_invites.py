@@ -119,6 +119,21 @@ class FakeApi:
         return NS(json=lambda: {'userId': 201})
 
 
+# Preserve old SDK fake behavior while testing the gateway's new HTTP
+# integration independently. Production always calls the real method.
+REAL_GROUP_POST = SetupGateway._post_group_invitation
+
+
+@pytest.fixture(autouse=True)
+def intercept_group_invite_for_fake_api(monkeypatch):
+    def post_fake(self, team_id, identifier, role_id):
+        return self.api.post('members.add', {
+            'teamId': int(team_id), 'login': identifier,
+            'roleId': int(role_id),
+        }, retries=1, raise_error=True).json()
+    monkeypatch.setattr(SetupGateway, '_post_group_invitation', post_fake)
+
+
 def demo_accounts():
     return {
         'tomas.gaming.21@gmail.com': {
@@ -710,8 +725,77 @@ def test_members_add_page_not_found_aborts_selected_batch_after_one_attempt(sess
     assert result['failed'] == 1
     assert len(writes) == 1
     assert result['errors'][0]['status'] == 'invitation_error'
-    assert 'members.add API route may be unavailable' in result['errors'][0]['error']
+    assert 'group-members invitation route may' in result['errors'][0]['error']
     with sessions() as session:
         assert session.get(SharedInvitation, (15, 'b@example.org')).status == 'invitation_error'
         assert session.get(SharedInvitation, (15, 'c@example.org')).status == 'not_invited'
         assert session.get(SharedInvitation, (15, 'd@example.org')).status == 'not_invited'
+
+
+
+def test_native_cloud_group_invite_matches_observed_web_request(monkeypatch):
+    """Only x-api-key is taken from the organiser SDK; no browser JWT/cookies."""
+    import requests
+    seen = []
+
+    def fake_post(url, **kwargs):
+        seen.append((url, kwargs))
+        return NS(
+            raise_for_status=lambda: None,
+            json=lambda: {'success': True},
+        )
+
+    monkeypatch.setattr(requests, 'post', fake_post)
+    client = NS(server_address='https://app.supervisely.com',
+                token='local-test-token-not-a-real-credential')
+    actual = REAL_GROUP_POST(SetupGateway(client), 125980,
+                             'person@example.org', 71)
+    assert actual == {'success': True}
+    assert len(seen) == 1
+    url, options = seen[0]
+    assert url == 'https://app.supervisely.com/api/groups/125980/members/add'
+    assert options['json'] == {
+        'login': 'person@example.org', 'roleId': 71, 'type': 'core'}
+    assert options['headers']['x-api-key'] == client.token
+    assert options['headers']['x-team-id'] == '125980'
+    assert 'Authorization' not in options['headers']
+    assert 'Cookie' not in options['headers']
+    assert options['allow_redirects'] is False
+    assert options['timeout'] == 20
+
+
+def test_native_cloud_group_invite_http_unauthorized_has_no_browser_fallback(
+        monkeypatch):
+    import requests
+    calls = []
+
+    def fail_request(url, **kwargs):
+        calls.append(url)
+        return NS(
+            status_code=401,
+            json=lambda: {'message': 'Authentication required'},
+            raise_for_status=lambda: (_ for _ in ()).throw(
+                requests.HTTPError('Unauthorised', response=NS(
+                    status_code=401, json=lambda: {'message': 'Authentication required'}))
+            ),
+        )
+
+    monkeypatch.setattr(requests, 'post', fail_request)
+    client = NS(server_address='https://app.supervisely.com',
+                token='local-test-token-not-a-real-credential')
+    with pytest.raises(requests.HTTPError):
+        REAL_GROUP_POST(SetupGateway(client), 125980,
+                        'person@example.org', 71)
+    assert len(calls) == 1
+
+
+def test_cloud_invite_uses_email_even_when_csv_contains_other_verified_login(
+        sessions):
+    accounts = import_invitation_roster(sessions)
+    api = FakeApi(accounts)
+    api.server_address = 'https://app.supervisely.com'
+    result = SharedTeamInvitations(sessions).invite(
+        NS(api=api), 900, selected_emails=['b@example.org'])
+    assert result['invited'] == 1
+    assert api.calls[0]['login'] == 'b@example.org'
+    assert api.calls[0]['roleId'] == 5
