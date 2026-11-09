@@ -183,11 +183,22 @@ individual's row. People already invited or accepted are skipped. Refresh
 invitation status after people accept in Supervisely. Uncertain invitation
 results require inspection before retrying.
 
-Supervisely account logins may differ from email addresses. If needed, include
-`member_1_login`, `member_2_login` and `monitor_login`, or `participant_login`
-in a person-row CSV. Reimport preserves invitation evidence and does not
-silently change an accepted native role. Optional team-assignment adjustments
-are available below the people lists.
+Supervisely account logins may differ from email addresses. **A username
+is not required in the roster for normal invitations.** The app first
+looks up the *exact registered email* in the user directory when permitted.
+If the directory cannot list users, or yields no exact match, the app submits
+the roster email directly as the native API's `members.add.login` identifier;
+some Supervisely instances resolve either a registered email or username in
+that field. The documented SDK formally calls it a *login*, so the final
+acceptance of email-as-login must be verified against this instance.
+
+If the API replies 404 for an email, check the existing Supervisely account,
+supply the verified `member_1_login`, `member_2_login`, `monitor_login` or
+`participant_login` (person-row CSV), or invite through the native UI and
+click **Refresh membership** in the app. Do not blindly resend an invitation
+whose outcome is unknown. Reimport preserves invitation evidence and does
+not silently change an accepted native role. Optional team-assignment
+adjustments are available below the people lists.
 
 ### Dataset preparation
 
