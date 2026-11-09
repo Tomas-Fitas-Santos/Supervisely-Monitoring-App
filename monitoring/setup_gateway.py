@@ -64,9 +64,10 @@ class SetupGateway(Gateway):
     def invite_email(self, team_id, email, role, login=None):
         """Request a real native team invitation for a registered email identity.
 
-        The official members.add endpoint requires a user login. Resolve the
-        exact login from the verified registered email when permission permits;
-        never infer acceptance from the invitation response.
+        The native API's field is named 'login', but some instances also
+        resolve an existing account using its registered email. Resolve a
+        verified login when visible; otherwise pass the exact roster email
+        directly to members.add. Never infer acceptance from the response.
         """
         if login:
             # The organiser supplied a native login explicitly in the roster.
@@ -102,12 +103,13 @@ class SetupGateway(Gateway):
             status = getattr(getattr(exc, 'response', None), 'status_code', None)
             if status == 404:
                 raise InvitationRejected(
-                    'Supervisely returned HTTP 404 for the participant identifier. '
-                    'This endpoint invites an existing Supervisely login, which '
-                    'may differ from the registered email. Verify that the '
-                    'participant has an account on this same server. You can '
-                    'invite their exact login through native Team members, then '
-                    'click Refresh accepted memberships here.'
+                    'Supervisely could not resolve this email or username (HTTP 404). '
+                    'The native API field is named login, even if the Supervisely '
+                    'website also accepts registered email addresses. Check the '
+                    'exact registered email and account server, or add the '
+                    'verified Supervisely username to the roster. You can '
+                    'invite directly in the Supervisely Team members page and '
+                    'then refresh membership here without resending.'
                 ) from None
             if status in (400, 401, 402, 403, 409, 422):
                 raise InvitationRejected(
