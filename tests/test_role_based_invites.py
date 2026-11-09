@@ -401,3 +401,141 @@ def test_direct_email_invite_even_if_global_directory_is_accessible(sessions):
     assert invitation['invited'] == 1
     assert api.calls[0]['login'] == 'b@example.org'
     assert api.calls[0]['login'] != accounts['b@example.org']['login']
+
+
+
+class FailedNativeInvite(RuntimeError):
+    def __init__(self, status, detail):
+        super().__init__('Synthetic API transport status for contract testing')
+        self.response = NS(status_code=status, json=lambda: {'message': detail})
+
+
+@pytest.mark.parametrize('status,detail,guidance', [
+    (404, 'User not found', 'email was not resolved'),
+    (403, 'You cannot invite users', 'Team Admin'),
+    (400, 'Invalid login field', 'registered email'),
+    (409, 'Already a team member', 'already be invited'),
+])
+def test_email_invitation_persists_provider_http_error_without_retry(
+        sessions, status, detail, guidance):
+    api = FakeApi(import_invitation_roster(sessions))
+    original_post = api.post
+    calls = []
+
+    def reject(op, data, **kwargs):
+        if op == 'members.add':
+            calls.append(data)
+            raise FailedNativeInvite(status, detail)
+        return original_post(op, data, **kwargs)
+
+    api.post = reject
+    service = SharedTeamInvitations(sessions)
+    result = service.invite(NS(api=api), 900,
+                            selected_emails=['b@example.org'])
+    assert result['failed'] == 1 and result['invited'] == 0
+    assert len(calls) == 1
+    assert calls[0]['login'] == 'b@example.org'
+    failure = result['errors'][0]
+    assert failure['email'] == 'b@example.org'
+    assert failure['status'] == 'invitation_error'
+    assert f'HTTP {status}' in failure['error']
+    assert detail in failure['error']
+    assert guidance.lower() in failure['error'].lower()
+    with sessions() as session:
+        row = session.get(SharedInvitation, (15, 'b@example.org'))
+        assert row.status == 'invitation_error'
+        assert detail in row.error
+
+
+def test_uncertain_native_invite_never_retries_automatically(sessions):
+    api = FakeApi(import_invitation_roster(sessions))
+    post = api.post
+    calls = []
+
+    def unavailable(op, data, **kwargs):
+        if op == 'members.add':
+            calls.append(data)
+            raise FailedNativeInvite(503, 'Service temporarily unavailable')
+        return post(op, data, **kwargs)
+
+    api.post = unavailable
+    service = SharedTeamInvitations(sessions)
+    first = service.invite(NS(api=api), 900, selected_emails=['a@example.org'])
+    assert first['failed'] == 1 and len(calls) == 1
+    assert first['errors'][0]['status'] == 'unknown'
+    assert 'HTTP 503' in first['errors'][0]['error']
+    retry = service.invite(NS(api=api), 900, selected_emails=['a@example.org'])
+    assert retry['failed'] == 1
+    assert len(calls) == 1   # no blind retry, even for an explicit second click
+
+
+def test_refresh_finds_people_already_joined_in_native_supervisely_team(
+        sessions):
+    from monitoring.db import EventRosterRecord
+    bind_event(sessions)
+    accounts = {
+        'joined.monitor@example.org': {
+            'id': 501, 'login': 'native-monitor-501',
+            'email': 'joined.monitor@example.org', 'name': 'Native monitor',
+            'disabled': False, 'role': 'manager',
+        },
+        'joined.participant@example.org': {
+            'id': 502, 'login': 'native-participant-502',
+            'email': 'joined.participant@example.org', 'name': 'Native participant',
+            'disabled': False, 'role': 'annotator',
+        },
+    }
+    # Simulate members.list returning logins/role IDs but omitting email:
+    # get_team_members provides the real registered addresses.
+    native = [
+        {'userId': 501, 'login': 'native-monitor-501',
+         'roleId': 3, 'activated': True},
+        {'userId': 502, 'login': 'native-participant-502',
+         'roleId': 5, 'activated': True},
+    ]
+    api = FakeApi(accounts, native=native)
+    api.user.get_team_members = lambda tid: [NS(**record)
+                                              for record in accounts.values()]
+    service = SharedTeamInvitations(sessions)
+    service.refresh(NS(api=api), 900)
+    assert not api.calls  # Read-only: zero members.add operations.
+    people = service.people()
+    assert len(people) == 2
+    assert {p['status'] for p in people} == {'accepted'}
+    assert {p['role'] for p in people} == {'monitor', 'participant'}
+    with sessions() as session:
+        assert session.get(EventMember, 501).group == 'monitors'
+        assert session.get(EventMember, 502).group == 'annotators'
+        visible = list(session.scalars(select(EventRosterRecord)))
+        assert len(visible) == 2
+        assert {v.email for v in visible} == set(accounts)
+        assert {v.source_sheet for v in visible} == {'Monitors', 'Participants'}
+    # Idempotent refresh never duplicates roster records.
+    service.refresh(NS(api=api), 900)
+    with sessions() as session:
+        assert len(list(session.scalars(select(EventRosterRecord)))) == 2
+
+
+def test_refresh_preserves_existing_reviewed_roster_roles_without_native_writes(
+        sessions):
+    import_invitation_roster(sessions)
+    api = FakeApi({
+        'a@example.org': {
+            'id': 301, 'login': 'native-301', 'email': 'a@example.org',
+            'role': 'annotator', 'disabled': False,
+        }
+    }, native=[
+        {'userId': 301, 'login': 'native-301',
+         'email': 'a@example.org', 'roleId': 5, 'activated': True},
+    ])
+    service = SharedTeamInvitations(sessions)
+    service.refresh(NS(api=api), 900)
+    assert not api.calls
+    with sessions() as session:
+        expected = session.get(EventInvitee, 'a@example.org')
+        assert expected.event_role == 'participant_monitor'
+        assert expected.native_role == 'reviewer'
+        invitation = session.get(SharedInvitation, (15, 'a@example.org'))
+        assert invitation.status == 'role_mismatch'
+        assert 'reviewer' in invitation.error
+        assert session.get(EventMember, 301) is None
