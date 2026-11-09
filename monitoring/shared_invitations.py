@@ -250,6 +250,7 @@ class SharedTeamInvitations:
                     'annotator': ('participant', 'Participants'),
                     'reviewer': ('participant_monitor', 'Participants')}
         existing_emails = set(session.scalars(select(EventRosterRecord.email)))
+        declared_roles = {v.email: v for v in session.scalars(select(EventInvitee))}
         existing_logins = {str(v.login or '').casefold()
                            for v in session.scalars(select(EventInvitee)) if v.login}
         known_users = {int(v.user_id) for v in session.scalars(select(SharedInvitation).where(
@@ -276,6 +277,15 @@ class SharedTeamInvitations:
                 'Monitors' if role in ('admin', 'developer') else 'Participants'))
             is_owner = user_id is not None and user_id == session.get(EventConfig, 1).owner_id
             supported = role in role_map or (role == 'admin' and is_owner)
+            declared = declared_roles.get(email) if email else None
+            # An existing imported role is authoritative for event intent.
+            # Disagreement with native permissions must be visible for review,
+            # not silently rewritten by discovery.
+            intended_role = declared.event_role if declared else event_role
+            native_role_mismatch = bool(
+                declared and not self._role_accepted(
+                    declared, role, user_id, session.get(EventConfig, 1).owner_id)
+            )
             identity = email if email else (login.casefold() or str(user_id or ''))
             if not identity:
                 continue
@@ -300,13 +310,17 @@ class SharedTeamInvitations:
                 # Do not silently change an organiser-reviewed event role.
                 record.needs_review = (not supported or conflict or
                                        (not email and not record.email) or
-                                       record.event_role != event_role)
+                                       native_role_mismatch or
+                                       record.event_role != intended_role)
             elif not email or email not in existing_emails:
                 session.add(EventRosterRecord(
-                    record_id=record_id, source_sheet=sheet, team_number='',
-                    team_name='', display_name=name, email=email,
-                    event_role=event_role, source_fields=meta,
-                    needs_review=(not supported or conflict or not email),
+                    record_id=record_id,
+                    source_sheet=('Monitors' if intended_role == 'monitor'
+                                  else 'Participants'),
+                    team_number='', team_name='', display_name=name, email=email,
+                    event_role=intended_role, source_fields=meta,
+                    needs_review=(not supported or conflict or not email or
+                                  native_role_mismatch),
                     updated_at=checked_at))
                 existing_emails.add(email)
                 added += 1
