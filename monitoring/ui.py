@@ -75,7 +75,7 @@ def identity(request):
     if external:
         # This scope value is injected only by ExternalShell after a verified
         # HttpOnly session cookie. Never read identity from HTTP headers/forms.
-        email = request.scope.get('state', {}).get('external_email')
+        email = request.scope.get('external_verified_email')
         if not email:
             raise WorkflowError('Sign in using your event monitor email first.')
         token = os.getenv('SUPERVISELY_SERVICE_TOKEN', '')
