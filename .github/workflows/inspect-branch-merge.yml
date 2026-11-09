@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - .github/workflows/inspect-branch-merge.yml
+      - scripts/resolve_pending_merge.py
 jobs:
   inspect:
     runs-on: ubuntu-latest
