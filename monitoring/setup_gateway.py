@@ -7,6 +7,14 @@ class InvitationRejected(WorkflowError):
     """A definitive native validation/permission rejection, safe to retry explicitly."""
 
 
+class InvitationEndpointUnavailable(InvitationRejected):
+    """The server returned 404 Page not found for the members.add API route.
+
+    Stop the selected batch. This is not a per-account 'email not found'
+    verdict, and retrying it for every participant would be misleading.
+    """
+
+
 class SetupGateway(Gateway):
     def invitation_members(self, team_id):
         """Keep raw invitation fields; UserInfo drops activated/inviteEmail.
@@ -213,11 +221,19 @@ class SetupGateway(Gateway):
             }
             if status in guidance:
                 provider = f' Supervisely says: {detail}.' if detail else ''
-                raise InvitationRejected(
+                message = (
                     f'Supervisely HTTP {status} inviting {email} '
                     f'(identifier: {identifier}).{provider} '
                     + guidance[status]
-                ) from None
+                )
+                if status == 404 and 'page not found' in detail.lower():
+                    raise InvitationEndpointUnavailable(
+                        message + ' The members.add API route may be unavailable '
+                        'on this Community/Pro server. Stop bulk invitations; '
+                        'use the Supervisely Team Members website and then '
+                        'refresh the Monitoring App.'
+                    ) from None
+                raise InvitationRejected(message) from None
             # A timeout, interrupted connection or 5xx can follow a committed
             # write. The caller MUST keep status unknown until read-only sync.
             raise WorkflowError(
