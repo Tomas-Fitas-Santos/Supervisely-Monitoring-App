@@ -60,14 +60,14 @@ Vue.component('event-job-planner', {
   template:`<section class="nj-panel nj-job-planner">
     <h3>Configure labeling jobs</h3>
     <p class="nj-muted">Set a total number of sequential jobs per competition pair,
-      image overlap, full videos per pair, and independent video overlap.
+      full videos per pair and independent video overlap.
       The planner creates one numbered logical job manifest per pair and position.</p>
     <p v-if="!ready" class="nj-caution">Configure the event's existing Supervisely team first.</p>
     <div class="nj-columns">
       <div>
-        <h4>Source image/video datasets</h4>
+        <h4>Source video datasets</h4>
         <label v-for="s in sources" :key="s.id" class="nj-check">
-          <input type="checkbox" :value="s.id" v-model="selectedDatasetIds" :disabled="disabled||!ready">
+          <input type="checkbox" :value="s.id" v-model="selectedDatasetIds" :disabled="disabled||!ready||s.kind!=='video'">
           {{s.project}} / {{s.name}} · {{s.kind}} · {{s.items}} files
         </label>
       </div>
@@ -86,20 +86,13 @@ Vue.component('event-job-planner', {
       <label>Complete videos per team
         <input type="number" v-model.number="videosPerTeam" min="0" max="100" step="1" :disabled="disabled">
       </label>
-      <label>Image replicas across teams
-        <input type="number" v-model.number="imageReplicas" min="1" :max="maxReplicas" step="1" :disabled="disabled">
-      </label>
+      
     </div>
     <div class="nj-form-row">
       <label>Video overlap (max teams per video)
         <input type="number" v-model.number="videoReplicas" min="1" :max="maxReplicas" step="1" :disabled="disabled">
       </label>
-      <label>Common images shared with all teams (%)
-        <input type="number" v-model.number="imageCommonPercent" min="0" max="100" step="1" :disabled="disabled">
-      </label>
-      <label>Estimated image effort
-        <input type="number" v-model.number="imageEffort" min="1" step="1" :disabled="disabled">
-      </label>
+      
       <label>Reproducible allocation seed
         <input type="number" v-model.number="seed" min="0" step="1" :disabled="disabled">
       </label>
@@ -115,14 +108,13 @@ Vue.component('event-job-planner', {
     <div v-if="plan && planId" class="nj-panel">
       <h4>Job preparation preview</h4>
       <p>{{plan.total_jobs}} logical jobs across {{plan.team_count}} competition teams ·
-        {{plan.source_images}} source images · {{plan.source_videos}} whole videos ·
+        {{plan.source_videos}} whole videos ·
         effort spread {{plan.workload_spread}}</p>
       <div class="nj-table-scroll"><table class="nj-table">
-        <thead><tr><th>Team</th><th>Images</th><th>Complete videos</th>
+        <thead><tr><th>Team</th><th>Complete videos</th>
           <th>Jobs</th><th>Workload by job</th></tr></thead>
         <tbody><tr v-for="t in plan.teams" :key="t.registration_id">
-          <td>{{pairName(t.registration_id)}}</td><td>{{t.images}}</td>
-          <td>{{t.videos}}</td><td>{{t.jobs}}</td>
+          <td>{{pairName(t.registration_id)}}</td><td>{{t.videos}}</td><td>{{t.jobs}}</td>
           <td>{{t.job_efforts.join(' / ')}}</td>
         </tr></tbody>
       </table></div>
@@ -135,11 +127,10 @@ Vue.component('event-job-planner', {
     <div v-if="prepared.length" class="nj-panel">
       <h4>Prepared jobs ({{prepared.length}})</h4>
       <div class="nj-table-scroll"><table class="nj-table">
-        <thead><tr><th>Team</th><th>Job</th><th>Images</th><th>Videos</th>
+        <thead><tr><th>Team</th><th>Job</th><th>Videos</th>
           <th>Effort</th><th>State</th></tr></thead>
         <tbody><tr v-for="job in prepared" :key="job.id">
-          <td>{{job.team_name}}</td><td>{{job.position}}</td><td>{{job.images}}</td>
-          <td>{{job.videos}}</td><td>{{job.effort}}</td><td>{{job.state}}</td>
+          <td>{{job.team_name}}</td><td>{{job.position}}</td><td>{{job.videos}}</td><td>{{job.effort}}</td><td>{{job.state}}</td>
         </tr></tbody>
       </table></div>
       <p class="nj-muted">Native jobs and sequential release will be enabled
