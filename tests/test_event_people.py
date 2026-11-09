@@ -65,8 +65,17 @@ def test_official_import_preserves_metadata_and_flags_nonconsented_people(servic
     assert result['needs_review']==2
     profiles=manager.overview()
     one=next(p for p in profiles if p['email']=='one@example.test')
+    staff=next(p for p in profiles if p['email']=='staff@example.test')
+    blocked=next(p for p in profiles if p['email']=='three@example.test')
     assert one['source_fields']['phone']=='999000111'
+    assert not one['invitable']  # Pair must be prepared first.
+    assert staff['invitable']  # Monitor invitations do not need a pair.
+    assert not blocked['invitable']  # No consent, cancellation.
     assert manager.prepare_pairs(90)==1
+    prepared=manager.overview()
+    assert next(p for p in prepared if p['email']=='one@example.test')['invitable']
+    assert next(p for p in prepared if p['email']=='two@example.test')['invitable']
+    assert not next(p for p in prepared if p['email']=='three@example.test')['invitable']
     with service.sessions() as session:
         rows=list(session.scalars(select(Registration)))
         assert len(rows)==1
