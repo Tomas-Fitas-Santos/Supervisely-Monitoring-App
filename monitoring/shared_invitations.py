@@ -508,7 +508,18 @@ class SharedTeamInvitations:
                     row.status, row.error = 'invitation_error', str(exc)
                 outcomes['failed'] += 1
                 continue
-            except Exception:
+            except Exception as exc:
+                # The native write may have succeeded before a timeout or
+                # transport failure. Keep the claimed 'unknown' state and show
+                # the actionable error; never quietly mark it retryable.
+                with self.sessions.begin() as session:
+                    row = session.get(SharedInvitation, (tid, email))
+                    row.status = 'unknown'
+                    row.error = (
+                        str(exc) if isinstance(exc, WorkflowError)
+                        else 'Supervisely invitation outcome could not be confirmed. '
+                             'Refresh team memberships before attempting anything else.'
+                    )[:600]
                 outcomes['failed'] += 1
                 continue
             with self.sessions.begin() as session:
@@ -522,5 +533,28 @@ class SharedTeamInvitations:
                     action='shared_email_invited',
                     details={'email': email, 'native_role': native_role}))
             outcomes['invited'] += 1
-        self.refresh(gateway, actor)
+        try:
+            self.refresh(gateway, actor)
+        except Exception:
+            # An invitation may already be present in Supervisely. Failure
+            # to READ membership after a mutation cannot make it safe to retry.
+            with self.sessions.begin() as session:
+                for address in selected:
+                    row = session.get(SharedInvitation, (tid, address))
+                    if row and row.status == 'pending':
+                        row.error = 'Invite requested, but membership refresh failed. Refresh manually before drawing conclusions.'
+        with self.sessions() as session:
+            errors = []
+            for address in selected:
+                row = session.get(SharedInvitation, (tid, address))
+                if row and row.status in (
+                        'invitation_error', 'unknown', 'role_mismatch',
+                        'identity_conflict', 'deactivated', 'not_found'):
+                    errors.append({
+                        'email': address, 'status': row.status,
+                        'error': row.error or
+                                 'Review the native Supervisely team membership.'
+                    })
+            if errors:
+                outcomes['errors'] = errors
         return outcomes
