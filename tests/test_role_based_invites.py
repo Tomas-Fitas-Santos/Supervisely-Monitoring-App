@@ -685,3 +685,33 @@ def test_read_only_diagnostic_does_not_try_inviting_or_global_users_list():
     assert 'api.user.get_list(' not in script
     assert 'api.post(' not in script
     assert 'add_to_team(' not in script
+
+
+
+def test_members_add_page_not_found_aborts_selected_batch_after_one_attempt(sessions):
+    """A missing server route is not an invalid email for every participant."""
+    api = FakeApi(import_invitation_roster(sessions))
+    original_post = api.post
+    writes = []
+
+    def missing_route(op, data, **kwargs):
+        if op == 'members.add':
+            writes.append(data)
+            raise FailedNativeInvite(404, 'Page not found')
+        return original_post(op, data, **kwargs)
+
+    api.post = missing_route
+    result = SharedTeamInvitations(sessions).invite(
+        NS(api=api), 900, selected_emails=[
+            'b@example.org', 'c@example.org', 'd@example.org'])
+    assert result['endpoint_unavailable'] is True
+    assert result['not_attempted'] == 2
+    assert result['invited'] == 0
+    assert result['failed'] == 1
+    assert len(writes) == 1
+    assert result['errors'][0]['status'] == 'invitation_error'
+    assert 'members.add API route may be unavailable' in result['errors'][0]['error']
+    with sessions() as session:
+        assert session.get(SharedInvitation, (15, 'b@example.org')).status == 'invitation_error'
+        assert session.get(SharedInvitation, (15, 'c@example.org')).status == 'not_invited'
+        assert session.get(SharedInvitation, (15, 'd@example.org')).status == 'not_invited'
