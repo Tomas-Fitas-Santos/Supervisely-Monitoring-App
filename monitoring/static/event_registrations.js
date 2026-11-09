@@ -6,7 +6,8 @@ Vue.component('event-registrations', {
   data() {
     return {file:null,busy:false,error:'',search:'',group:'Monitors',
       roleEdits:{},loginEdits:{},nativeEmailEdits:{},pairName:'',pairEmails:[],pairEligible:false,
-      inviteEmails:[],inviteFailures:[],lastSync:null,showFields:false};
+      inviteEmails:[],inviteFailures:[],lastSync:null,
+      invitationAuthBlocked:false,showFields:false};
   },
   computed: {
     profiles(){return this.view.roster_profiles||[];},
@@ -157,6 +158,11 @@ Vue.component('event-registrations', {
     },
     async inviteSelected(){
       if(this.disabled||this.busy)return;
+      if(this.invitationAuthBlocked){
+        this.error='This session already received HTTP 401 for API invitations. '+
+          'Copy selected emails and roles, invite in Supervisely Team Members, then refresh.';
+        return;
+      }
       const chosen=[...this.inviteEmails];
       if(!chosen.length){this.error='Select one or more people first.';return;}
       if(chosen.some(email=>!this.invitableEmails.has(email))){
@@ -177,6 +183,7 @@ Vue.component('event-registrations', {
           throw new Error(this.view.message||'Could not send the selected invitations.');
         this.inviteFailures=result?.invitations?.errors||[];
         if(result?.invitations?.authentication_unavailable){
+          this.invitationAuthBlocked=true;
           this.error='Supervisely rejected personal API-key authentication (HTTP 401). '+
             'No further invitations were attempted; '+
             (result.invitations.not_attempted||0)+
@@ -320,7 +327,7 @@ Vue.component('event-registrations', {
         Copy selected emails &amp; roles
       </button>
       <button class="nj-primary" @click="inviteSelected"
-        :disabled="disabled||busy||!selectedReady.length">
+        :disabled="disabled||busy||!selectedReady.length||invitationAuthBlocked">
         Invite selected ({{selectedReady.length}})
       </button>
     </div>
