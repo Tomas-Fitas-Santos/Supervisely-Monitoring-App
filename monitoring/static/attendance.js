@@ -107,7 +107,7 @@ Vue.component('event-roster-assignment', {
 
 Vue.component('event-attendance', {
   props: ['view','form','post','locked'],
-  data() {return {busy:false,query:'',status:'all',notes:{},clientError:'',timer:null};},
+  data() {return {busy:false,query:'',status:'all',notes:{},tables:{},clientError:'',timer:null};},
   computed: {
     attendance() {return this.view.attendance || {teams:[],summary:{}};},
     summary() {return this.attendance.summary || {};},
@@ -122,6 +122,18 @@ Vue.component('event-attendance', {
   methods: {
     key(t,p) {return t.id+'/'+p.email;},
     date(ts) {return ts?new Date(ts*1000).toLocaleString():'';},
+    async setTable(team) {
+      if(this.busy||this.locked||!team.can_set_table)return;
+      this.busy=true;this.clientError='';
+      Object.assign(this.form,{logistics_action:'set_table',registration_id:team.id,
+        table_number:String(this.tables[team.id]??team.table_number??'').trim()});
+      try {
+        const result=await this.post('/logistics/action');
+        if(result?.ok===false||this.view.error)throw new Error(this.view.message||'Could not save table.');
+        this.$delete(this.tables,team.id);
+      }catch(e){this.clientError=e.message||'Table assignment failed.';}
+      finally{this.busy=false;}
+    },
     async action(type,team,person) {
       if(this.busy||this.locked)return;
       this.busy=true;this.clientError='';
@@ -169,11 +181,18 @@ Vue.component('event-attendance', {
         </select></label>
       </div>
       <div class="nj-table-scroll"><table class="nj-table">
-        <thead><tr><th>Competition team</th><th>Participant</th><th>Monitor</th><th>Arrival</th><th>Action</th></tr></thead>
+        <thead><tr><th>Competition team</th><th>Table number</th><th>Participant</th><th>Monitor</th><th>Arrival</th><th>Action</th></tr></thead>
         <tbody>
           <template v-for="team in teams">
             <tr v-for="person in team.members" :key="team.id+'-'+person.email">
               <td><strong>{{team.name}}</strong><small class="nj-small-text">{{team.present}} / {{team.total}} present</small></td>
+              <td><div class="nj-inline-actions"><input type="number" min="1" max="9999"
+                :aria-label="'Table number for '+team.name"
+                :value="tables[team.id]===undefined?team.table_number:tables[team.id]"
+                @input="$set(tables,team.id,$event.target.value)"
+                :disabled="busy||locked||!team.can_set_table" placeholder="Table">
+                <button @click="setTable(team)" :disabled="busy||locked||!team.can_set_table||
+                  tables[team.id]===undefined||String(tables[team.id])===String(team.table_number)">Save</button></div></td>
               <td>{{person.name}}<small class="nj-small-text">{{person.email}}</small></td>
               <td>{{team.monitor_name}}</td>
               <td><span class="nj-badge" :class="{warning:!person.checked_in}">
