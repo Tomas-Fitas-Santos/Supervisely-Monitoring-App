@@ -662,6 +662,13 @@ def setup_action(request: Request):
             from .event_people import EventPeople
             EventPeople(sessions).set_role(uid, f.get('record_id'), f.get('event_role'))
             message = 'Event role saved. No native invitation or role change was sent.'
+        elif name == 'roster_native_role':
+            from .event_people import EventPeople
+            EventPeople(sessions).change_native_role(
+                gateway, uid, f.get('record_id'), f.get('event_role'),
+                confirmed=f.get('confirm_native_role_change') is True)
+            message = ('Native role update was requested. Refresh Supervisely '
+                       'memberships to verify the effective role and access.')
         elif name == 'roster_prepare_pairs':
             from .event_people import EventPeople
             count = EventPeople(sessions).prepare_pairs(uid)
