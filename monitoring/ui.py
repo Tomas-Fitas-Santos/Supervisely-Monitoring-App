@@ -63,15 +63,6 @@ def event_config():
 
 def identity(request):
     config = event_config()
-    if os.getenv('MONITORING_SIMULATOR') == '1':
-        if not settings.local or request.client.host not in ('127.0.0.1', '::1', 'testclient'):
-            raise WorkflowError('The organiser simulator is available only on loopback.')
-        from .demo import DemoApi
-        state = getattr(request.state, 'state', {})
-        uid = int(state.get('dashboard', {}).get('demo_monitor_id') or 900) if isinstance(state, dict) else 900
-        if uid not in (900, 901):
-            raise WorkflowError('Select a demo monitor.')
-        return uid, Gateway(DemoApi(sessions, uid, settings.home), sessions)
     external = os.getenv('MONITORING_EXTERNAL') == '1'
     if external:
         # This scope value is injected only by ExternalShell after a verified
@@ -403,22 +394,11 @@ def action(request: Request):
                     controller.sync(service, gateway, team, batch, activity=True)
                     Competition(sessions).refresh(gateway, team, batch)
                     message = 'Progress refresh finished; check the sync status below.'
-                elif name in ('units', 'assess', 'preview_submission', 'return_corrections', 'demo_submit', 'video_handover'):
+                elif name in ('units', 'assess', 'preview_submission', 'return_corrections', 'video_handover'):
                     from supervisely.app import DataJson
                     from .db import Submission
                     comp = Competition(sessions)
-                    if name == 'demo_submit':
-                        if os.getenv('MONITORING_SIMULATOR') != '1':
-                            raise WorkflowError('Simulated submissions are unavailable for a live event.')
-                        from .db import EventClosure
-                        with sessions() as s:
-                            if s.get(EventClosure, 1) or not batch.job_ids:
-                                raise WorkflowError('Choose an open, released demo task.')
-                        from .demo import submit_demo
-                        submit_demo(gateway.api, batch)
-                        controller.sync(service, gateway, team, batch)
-                        comp.refresh(gateway, team, batch)
-                    elif name == 'assess':
+                    if name == 'assess':
                         comp.assess(uid, batch.id, f['submission_id'], f['entity_id'], f['frame_index'],
                             f.get('bird_id', 'unit'), f['criterion'], f['verdict'], f.get('note', ''), f.get('assessment_revision', -1), adjudicate=organiser_view)
                     elif name == 'video_handover':
