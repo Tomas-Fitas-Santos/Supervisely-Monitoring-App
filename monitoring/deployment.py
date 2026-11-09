@@ -9,7 +9,7 @@ def production_environment():
         raise WorkflowError('Hosted deployment requires a native Supervisely application session. Use --local to run the app locally.')
     if os.getenv('LOCAL_DEVELOPMENT', '').lower() == 'true':
         raise WorkflowError('Production cannot enable LOCAL_DEVELOPMENT.')
-    if any(os.getenv(k) == '1' for k in ('MONITORING_DEMO', 'MONITORING_SIMULATOR', 'MONITORING_PILOT', 'MONITORING_LIVE_DEMO')):
+    if any(os.getenv(k) == '1' for k in ('MONITORING_DEMO', 'MONITORING_SIMULATOR', 'MONITORING_PILOT', 'MONITORING_LIVE_DEMO', 'MONITORING_REHEARSAL_PAIR')):
         raise WorkflowError('Production cannot enable simulator or local pilot controls.')
     os.environ['LOCAL_DEVELOPMENT'] = 'false'
 
@@ -18,7 +18,7 @@ def external_environment():
     if any(os.getenv(key) for key in ('TASK_ID', 'task_id', 'SLY_APP_TASK_ID')):
         raise WorkflowError('External deployment must not run inside a native Supervisely app session.')
     if any(os.getenv(k) == '1' for k in ('MONITORING_DEMO', 'MONITORING_SIMULATOR',
-            'MONITORING_PILOT', 'MONITORING_LIVE_DEMO')):
+            'MONITORING_PILOT', 'MONITORING_LIVE_DEMO', 'MONITORING_REHEARSAL_PAIR')):
         raise WorkflowError('External hosting cannot use local DEMO or simulator controls.')
     if not os.getenv('SUPERVISELY_SERVICE_TOKEN'):
         raise WorkflowError('SUPERVISELY_SERVICE_TOKEN is required for external hosting.')
