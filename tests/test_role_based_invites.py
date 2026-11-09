@@ -602,3 +602,60 @@ def test_invite_api_uses_one_http_attempt_and_preserves_raw_http_status(sessions
         NS(api=api), 900, selected_emails=['b@example.org'])
     assert result['invited'] == 1
     assert options == [{'retries': 1, 'raise_error': True}]
+
+
+
+def test_directory_exact_email_mismatch_does_not_guess_login(sessions):
+    accounts = import_invitation_roster(sessions)
+    api = FakeApi(accounts)
+    # Visible users may contain similar email prefixes; those are not the
+    # same identity, and a disabled exact match is never invited.
+    api.user.get_list = lambda: [
+        NS(id=700, login='wrong-account',
+           email='b+other@example.org', disabled=False),
+        NS(id=701, login='blocked-account',
+           email='b@example.org', disabled=True),
+    ]
+    result = SharedTeamInvitations(sessions).invite(
+        NS(api=api), 900, selected_emails=['b@example.org'])
+    assert result['invited'] == 0 and result['failed'] == 1
+    assert not api.calls
+    assert 'disabled' in result['errors'][0]['error']
+
+
+def test_directory_duplicate_registered_email_fails_closed(sessions):
+    accounts = import_invitation_roster(sessions)
+    api = FakeApi(accounts)
+    api.user.get_list = lambda: [
+        NS(id=801, login='first', email='b@example.org', disabled=False),
+        NS(id=802, login='second', email='B@EXAMPLE.ORG', disabled=False),
+    ]
+    result = SharedTeamInvitations(sessions).invite(
+        NS(api=api), 900, selected_emails=['b@example.org'])
+    assert result['failed'] == 1 and result['invited'] == 0
+    assert not api.calls
+    assert 'multiple accounts' in result['errors'][0]['error'].lower()
+
+
+def test_native_page_not_found_is_not_misreported_as_invalid_email(sessions):
+    accounts = import_invitation_roster(sessions)
+    api = FakeApi(accounts)
+    original_post = api.post
+    calls = []
+
+    def unavailable(op, data, **kwargs):
+        if op == 'members.add':
+            calls.append(data)
+            raise FailedNativeInvite(404, 'Page not found')
+        return original_post(op, data, **kwargs)
+
+    api.post = unavailable
+    response = SharedTeamInvitations(sessions).invite(
+        NS(api=api), 900, selected_emails=['b@example.org'])
+    assert response['invited'] == 0
+    assert len(calls) == 1
+    assert calls[0]['login'] == accounts['b@example.org']['login']
+    message = response['errors'][0]['error']
+    assert 'Page not found' in message
+    assert 'does NOT establish' in message
+    assert 'identifier:' in message
