@@ -250,8 +250,96 @@ class EventPeople:
                     native_role='reviewer' if event_role == 'participant_monitor'
                     else 'manager' if event_role == 'monitor' else 'annotator',
                     registration_ids=[], login=''))
+            from .registration import Registrations
+            from sqlalchemy.orm.attributes import flag_modified
+            for reg in session.scalars(select(Registration)):
+                changed = False
+                for member in reg.members or []:
+                    if str(member.get('email') or '').casefold() == row.email:
+                        member['role'] = event_role
+                        changed = True
+                if changed:
+                    flag_modified(reg,'members')
             session.add(Audit(team_id=0,batch_id='',actor_id=int(actor),
                 action='event_role_edited',details={'email':row.email, 'role':event_role}))
+        return True
+
+    def change_native_role(self, gateway, actor, record_id, event_role, confirmed=False):
+        """Admin-approved role reconciliation for an ALREADY accepted native member.
+
+        A successful native write is marked unknown until read-only refresh
+        verifies the effective role. Never edit the event owner Admin account.
+        """
+        from .db import EventMember, Registration
+        from .setup_gateway import SetupGateway
+        from sqlalchemy.orm.attributes import flag_modified
+        if not confirmed or event_role not in ROLES:
+            raise WorkflowError('Confirm the real Supervisely role change explicitly.')
+        with self.sessions() as session:
+            person = session.get(EventRosterRecord, str(record_id or ''))
+            if not person or not person.email:
+                raise WorkflowError('Choose a roster person with a valid email.')
+            config = session.get(EventConfig, 1)
+            if not config or not config.monitoring_team_id:
+                raise WorkflowError('Configure the existing Supervisely event team first.')
+            invitation = session.get(SharedInvitation,
+                                     (config.monitoring_team_id, person.email))
+            if not invitation or invitation.status != 'accepted' or not invitation.user_id:
+                raise WorkflowError('A native role can change only for an accepted, verified member.')
+            if int(invitation.user_id) == int(config.owner_id or -1):
+                raise WorkflowError('The event owner must retain Supervisely Admin permissions.')
+            tid, member_id, email = (int(config.monitoring_team_id),
+                                     int(invitation.user_id), person.email)
+        role = ('reviewer' if event_role == 'participant_monitor' else
+                'manager' if event_role == 'monitor' else 'annotator')
+        # The SDK call itself is the only remote mutation. If uncertain, inspect
+        # live team membership rather than blindly retrying.
+        setup_gateway = SetupGateway(gateway.api)
+        role_id = setup_gateway.role_id(role)
+        try:
+            current = gateway.api.user.get_member_info_by_id(tid, member_id)
+            if not current:
+                raise WorkflowError('Native account membership must be verified before changing roles.')
+            if current.role == 'admin':
+                raise WorkflowError('Native Admin roles require manual owner review.')
+            if current.role != role:
+                gateway.api.user.change_team_role(member_id, tid, role_id)
+        except WorkflowError:
+            raise
+        except Exception:
+            raise WorkflowError('Native role change returned an uncertain result. '
+                                'Refresh real Supervisely memberships before trying again.') from None
+        with self.sessions.begin() as session:
+            invite = session.get(SharedInvitation, (tid,email))
+            if not invite or invite.user_id != member_id:
+                raise WorkflowError('Native role may have changed. Refresh membership before continuing.')
+            invite.status = 'unknown'
+            invite.checked_at = None
+            person_entries = session.scalars(select(EventRosterRecord).where(
+                EventRosterRecord.email == email))
+            for entry in person_entries:
+                entry.event_role = event_role
+            expected = session.get(EventInvitee, email)
+            if expected:
+                expected.event_role = event_role
+                expected.native_role = role
+            for reg in session.scalars(select(Registration)):
+                changed = False
+                for m in reg.members or []:
+                    if str(m.get('email') or '').casefold() == email:
+                        m['role'] = event_role
+                        m['status'] = 'unresolved'
+                        changed = True
+                if changed:
+                    flag_modified(reg,'members')
+            # Prevent stale monitoring access until the native role is reconciled.
+            member = session.get(EventMember, member_id)
+            if member and event_role == 'participant':
+                member.group = 'annotators'
+            session.add(Audit(team_id=0,batch_id='',actor_id=int(actor),
+                action='native_role_change_requested',
+                details={'email':email, 'user_id':member_id,
+                         'requested_role':role, 'event_role':event_role}))
         return True
 
     def prepare_pairs(self, actor):
