@@ -53,8 +53,13 @@ production-ready before testing native jobs with multiple real accounts.
 ### Quick checks
 
 ```powershell
-.\\.venv\\Scripts\\python.exe -m pytest -q tests/test_event_people.py tests/test_event_logistics.py tests/test_zip_dataset.py
+.\\Start-App.ps1 -Mode Demo -CheckOnly
+.\\.venv\\Scripts\\python.exe -m pytest -q tests/test_event_people.py tests/test_event_logistics.py tests/test_zip_dataset.py tests/test_role_based_invites.py tests/test_deployment.py tests/test_launch.py
 ```
+
+After launching the app in another terminal, run `./Test-App.ps1` to
+verify the live UI and selected-invite controls. No real invitations are sent
+by either preflight command.
 
 Source-data details: [video-only dataset and job planning](docs/structured-dataset-and-jobs.md).
 The storage and frame-count caps need to be checked against actual hosting
@@ -77,9 +82,24 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 .\Start-App.ps1 -Install
 ```
 
-Open **http://127.0.0.1:8000**. On later launches, run `Start-App.ps1` without
-`-Install`. There is no mode selector. Existing saved event data and encrypted
-credentials in `data/account-pilot/` are retained; the directory name is historical.
+Open **http://127.0.0.1:8000**. On later launches, run
+`Start-App.ps1 -Mode Local` without `-Install`. Use
+`Start-App.ps1 -Mode Demo` when creating a real-account two-person rehearsal
+pair from the imported Monitors sheet. Both modes use the **same** local database,
+real Supervisely sign-in and real invitations; DEMO never switches on a fake
+simulator. Existing saved event data and encrypted credentials in
+`data/account-pilot/` are retained; the directory name is historical.
+
+For a read-only preflight, use `./Start-App.ps1 -Mode Demo -CheckOnly`. After
+starting the server, in a **second** PowerShell terminal run `./Test-App.ps1`.
+It checks live `/healthz`, the HTML dashboard, Vue bundle and selected-user
+invitation controls. The SDK's informational `no-html mode` log does **not**
+mean the custom local HTML shell is missing; the smoke test verifies the page.
+
+For native hosted Supervisely, build and package a compatible image using
+`Prepare-Release.ps1`; see [deployment quickstart](docs/deployment-quickstart.md).
+A native app session, suitable instance privileges, and persistent PostgreSQL
+remain mandatory; the localhost runner is deliberately not a public web server.
 Video-frame conversion also requires `ffmpeg` and `ffprobe`.
 
 Sign in with your Supervisely User ID and personal API token. Browser logins
