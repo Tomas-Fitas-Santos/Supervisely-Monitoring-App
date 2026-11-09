@@ -179,6 +179,18 @@ class SetupGateway(Gateway):
                 f'Supervisely returned an unexpected invitation response for {email}. '
                 'The invitation may have been sent; refresh membership before retrying.'
             )
+        if (reply.get('success') is False or reply.get('ok') is False
+                or reply.get('error')):
+            detail = reply.get('message') or reply.get('error') or 'Native API rejected invitation'
+            if isinstance(detail, dict):
+                detail = detail.get('message') or detail.get('description') or 'Native API error'
+            if not isinstance(detail, str):
+                detail = 'Native API error'
+            detail = ' '.join(detail.split())[:220]
+            raise InvitationRejected(
+                f'Supervisely rejected the invitation for {email}: {detail}. '
+                'Correct the address or role and refresh the team membership before retrying.'
+            )
         return {'user_id': reply.get('userId') or reply.get('id'),
                 'login': email}
 
