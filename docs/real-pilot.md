@@ -1,8 +1,11 @@
 # Validate an event with real accounts
 
-Use the application normally: run `Start-App.ps1`, sign in as the event admin,
-and follow Event setup. There is no separate rehearsal or demonstration version.
-Use the intended roster, source dataset and rules for the event being configured.
+Use the application normally: run `Start-App.ps1 -Mode Demo` for a
+real-account rehearsal (enables the explicit two-staff trial-pair action) or
+`Start-App.ps1 -Mode Local` for regular operation. Sign in as the event admin
+and follow Event setup. Both launch modes use the same authenticated app and
+persistent local event database; neither simulates invitations, memberships or
+native annotation jobs. Use the intended roster, source dataset and rules.
 
 1. Verify the existing team and workspace IDs.
 2. Upload the CSV and confirm that the monitor and participant lists match it.
