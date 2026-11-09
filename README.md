@@ -195,14 +195,27 @@ using its existing organiser's **personal API token** in the `x-api-key`
 header, without copying browser Bearer JWTs, session cookies or other
 temporary browser credentials.
 
-**Authentication limitation:** The successful browser request included
-a separate Bearer/session credential *as well as* `x-api-key`. We cannot
-infer from a browser 200 that the group endpoint will accept the personal
-API key on its own. A personal-token-only live invite must be verified with
-**one uninvited, specifically selected account**, only after revoking the
-credentials accidentally exposed in the original network trace.
-If a 401/403 occurs, **never** copy a browser JWT or cookies into this
-application; invite through Supervisely's website and refresh the app.
+**Confirmed authentication blocker (2026-11-09):** On the
+Supervisely Community/Pro cloud, the captured browser endpoint rejected
+the organiser's valid personal API token used alone with **HTTP 401
+`Invalid token`**, despite successful Team Admin authentication with the
+regular SDK and a browser-successful email invitation. The earlier SDK
+`/public/api/v3/members.add` also returned HTTP 404 `Page not found`.
+The browser request included a separate Bearer/session credential. Thus
+we do **not** have a supported, verified way to send email invitations
+programmatically with a personal API key on this instance.
+
+The app now stops a selected batch after its first HTTP 401 rather than
+attempting everyone with the same rejected authentication method. It
+preserves unattempted selections and reports a per-person API error.
+Use **Copy selected emails & roles**, invite through the
+[Supervisely Team Members UI](https://app.supervisely.com/members/add),
+then click **Refresh participants & monitors from Supervisely** to
+reconcile accepted/pending accounts and monitor permissions. The clipboard
+contains only email addresses and reviewed roles; **never** copy browser
+JWTs/cookies into the Monitoring App. For automated invites, request a
+documented service-token-compatible endpoint or supported OAuth flow
+from Supervisely support.
 
 **Native roles:** `roleId` is resolved from the actual instance role
 directory according to the reviewed CSV role (`annotator`, `manager`,
