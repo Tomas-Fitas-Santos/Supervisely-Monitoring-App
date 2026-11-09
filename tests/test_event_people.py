@@ -28,25 +28,27 @@ def sample(monitors=None, people=None):
     return base64.b64encode(buff.getvalue()).decode()
 
 
-def test_demo_import_keeps_all_staff_then_creates_real_dual_role_pair(service):
-    manager=EventPeople(service.sessions)
-    encoded=sample(monitors=['first@example.test','second@example.test',
-                             'third@example.test'])
-    result=manager.import_workbook(90,encoded)
-    assert result=={'monitors':3,'participants':0,'needs_review':0,'email_overlap':0}
-    profiles=manager.overview()
-    assert len(profiles)==3
-    manager.set_role(90,profiles[0]['id'],'participant_monitor')
-    manager.set_role(90,profiles[1]['id'],'participant_monitor')
-    count=manager.prepare_demo_pair(90,[
-        profiles[0]['email'],profiles[1]['email']])
-    assert count==1
+def test_official_import_keeps_staff_and_registers_dual_role_participants(service):
+    manager = EventPeople(service.sessions)
+    roster = sample(
+        monitors=['first@example.test', 'second@example.test',
+                  'third@example.test'],
+        people=[
+            ['Bird Pair', '1', 'First Bird', 'bird-one@example.test',
+             'participant_monitor', 'Sim', '', 'Confirmado'],
+            ['Bird Pair', '1', 'Second Bird', 'bird-two@example.test',
+             'participant_monitor', 'Sim', '', 'Confirmado'],
+        ])
+    result = manager.import_workbook(90, roster)
+    assert result == {'monitors': 3, 'participants': 2,
+                      'needs_review': 0, 'email_overlap': 0}
+    assert len(manager.overview()) == 5
+    assert manager.prepare_pairs(90) == 1
     with service.sessions() as session:
-        team=session.scalar(select(Registration))
-        assert len(team.members)==2
-        assert {member['role'] for member in team.members}=={'participant_monitor'}
-        assert len(list(session.scalars(select(EventInvitee))))==3
-
+        team = session.scalar(select(Registration))
+        assert len(team.members) == 2
+        assert {member['role'] for member in team.members} == {'participant_monitor'}
+        assert len(list(session.scalars(select(EventInvitee)))) == 5
 
 def test_official_import_preserves_metadata_and_flags_nonconsented_people(service):
     people=[
