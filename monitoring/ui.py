@@ -644,8 +644,8 @@ def setup_action(request: Request):
         f = request_form(request)
         name = f.get('setup_action', 'catalog')
         if single_team(event_config()) and name in (
-            'upload', 'preview', 'distribute', 'demo_sources',
-            'demo_setup', 'groups', 'members', 'team', 'register_team',
+            'upload', 'preview', 'distribute',
+            'groups', 'members', 'team', 'register_team',
             'balance_preview', 'balance_apply', 'assign', 'unassign'
         ):
             raise WorkflowError(
@@ -774,12 +774,15 @@ def setup_action(request: Request):
             from .event_people import EventPeople
             count = EventPeople(sessions).prepare_pairs(uid)
             message = f'{count} eligible pairs registered. Review before sending invitations.'
-        elif name == 'roster_demo_pair':
-            if not settings.local or os.getenv('MONITORING_REHEARSAL_PAIR') != '1':
-                raise WorkflowError('The test pair shortcut is available only in live DEMO mode.')
+        elif name == 'roster_create_pair':
             from .event_people import EventPeople
-            count = EventPeople(sessions).prepare_demo_pair(uid, f.get('emails'))
-            message = f'{count} DEMO pair registered with dual-role real staff accounts.'
+            count = EventPeople(sessions).create_pair(
+                uid, f.get('team_name'), f.get('emails'),
+                confirmed=f.get('confirm_eligibility') is True)
+            # Reconcile the already accepted accounts into the new logical pair.
+            # No invitations, native role changes or team creation take place.
+            SharedTeamInvitations(sessions).refresh(gateway, uid)
+            message = f'{count} two-person competition pair registered from verified team members.'
         elif name == 'registration_excel_preview':
             from .excel_import import excel_to_csv
             response.update(excel_to_csv(f['xlsx_base64'], f.get('sheet_name'),
@@ -883,58 +886,22 @@ def setup_action(request: Request):
             message = 'Team saved. Invitations are pending until accepted in Supervisely. Refresh invitations to confirm readiness.'
         elif name == 'registration_refresh' and single_team(event_config()):
             SharedTeamInvitations(sessions).refresh(gateway, uid)
-            message = 'Shared team memberships refreshed from Supervisely. No invitations resent.'
+            from .event_people import EventPeople
+            people = EventPeople(sessions).overview()
+            discovered = sum((p.get('source_fields') or {}).get('imported_via') == 'supervisely'
+                             for p in people)
+            accepted = sum(p['invitation_status'] == 'accepted' for p in people)
+            message = (
+                f'Supervisely members refreshed. {discovered} account(s) added from native '
+                f'team membership; {accepted} accepted roster record(s) confirmed. '
+                'No invitations were sent and existing pair assignments were preserved.'
+            )
         elif name == 'registration_refresh':
             raise WorkflowError('Configure one existing event team in Settings before refreshing invitations.')
         elif name == 'legacy_registration_refresh':
             from .onboarding import EmailOnboarding
             EmailOnboarding(sessions).refresh(gateway, setup, uid, f.get('registration_id'))
             message = 'Native invitation acceptance and roles checked. Only ready teams can receive tasks.'
-        elif name == 'demo_accept_invitations':
-            if os.getenv('MONITORING_SIMULATOR') != '1' or not settings.local:
-                raise WorkflowError('Only actual Supervisely users can accept invitations in real mode.')
-            from .db import TeamOnboarding
-            from .onboarding import EmailOnboarding
-            with sessions() as session:
-                plan = session.get(TeamOnboarding, f['registration_id'])
-                if not plan:
-                    raise WorkflowError('Choose a created demo team.')
-                for tid in {e['team_id'] for e in plan.memberships}:
-                    gateway.api.accept_invitations(tid)
-            EmailOnboarding(sessions).refresh(gateway, setup, uid, f['registration_id'])
-            message = 'Demo invitation acceptance simulated. No real invitation or email was sent.'
-        elif name == 'demo_prepare':
-            if os.getenv('MONITORING_SIMULATOR') != '1' or not settings.local:
-                raise WorkflowError('Presentation preparation is available only in the isolated organiser simulator.')
-            if data.get('simulator_roster_outdated'):
-                raise WorkflowError('Reset this older demo with a backup before loading the new TEAM 1 / TEAM 2 roster.')
-            from .demo import prepare_presentation
-            prepare_presentation(sessions, settings.home)
-            message = 'Presentation ready. Open Monitoring: one batch is submitted for judging and the next is locked. All native operations were simulated.'
-        elif name == 'demo_reset':
-            if os.getenv('MONITORING_SIMULATOR') != '1':
-                raise WorkflowError('Reset is available only in the isolated organiser simulator.')
-            from .demo import reset_demo
-            reset_demo(sessions, settings.home)
-            data.update(plan_id=None, preview=None, assignment_plan_id=None, assignment_preview=[], unit_page={}, review_preview=None, export_data=None, sources={}, inventory=[])
-            message = 'Demo reset. Previous simulated results were backed up locally. Load the CSV to rehearse again.'
-        elif name == 'demo_setup':
-            raise WorkflowError(
-                'The old sample setup created separate native teams and is disabled. '
-                'Configure the existing event Team ID in Settings and import the DEMO roster.'
-            )
-        elif name in ('demo_csv', 'demo_sources'):
-            if not settings.local or not any(os.getenv(k) == '1' for k in ('MONITORING_SIMULATOR', 'MONITORING_PILOT')):
-                raise WorkflowError('Bundled inputs are available in local --demo, --pilot or --simulator mode.')
-            from .pilot import import_roster, upload_photos
-            if name == 'demo_csv':
-                if os.getenv('MONITORING_SIMULATOR') == '1' and data.get('simulator_roster_outdated'):
-                    raise WorkflowError('Reset this older demo with a backup before loading the new TEAM 1 / TEAM 2 roster.')
-                import_roster(sessions, uid)
-                message = 'One two-person DEMO pair imported. Send real invitations to the existing event team and refresh after email acceptance.'
-            else:
-                upload_photos(setup, gateway, uid, f['operation_id'])
-                message = 'Bundled CC0 bird photos uploaded to the event source workspace.'
         elif name == 'close_event':
             from .event_actions import close_event
             close_event(service, setup, gateway, uid)
@@ -1041,7 +1008,7 @@ def setup_action(request: Request):
         elif name != 'refresh':
             raise WorkflowError('Unknown setup action.')
         display_access(uid, gateway)
-        if name in ('groups', 'upload', 'structured_upload', 'catalog', 'distribute', 'demo_sources', 'demo_prepare', 'demo_setup', 'reset_apply') and setup.groups()['ready']:
+        if name in ('groups', 'upload', 'structured_upload', 'catalog', 'distribute', 'reset_apply') and setup.groups()['ready']:
             data['sources'] = gateway.sources(setup.monitoring_team_id)
         dashboard.display(service.snapshot(uid), message)
         return response
