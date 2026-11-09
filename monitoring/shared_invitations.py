@@ -14,7 +14,10 @@ from .db import (
 )
 from .event_settings import single_team
 from .service import WorkflowError
-from .setup_gateway import InvitationRejected, InvitationEndpointUnavailable, SetupGateway
+from .setup_gateway import (
+    InvitationRejected, InvitationEndpointUnavailable,
+    InvitationAuthenticationUnavailable, SetupGateway,
+)
 
 
 def normal_email(email):
@@ -516,6 +519,16 @@ class SharedTeamInvitations:
                     continue
             try:
                 reply = api.invite_email(tid, email, native_role, login=login or None)
+            except InvitationAuthenticationUnavailable as exc:
+                with self.sessions.begin() as session:
+                    row = session.get(SharedInvitation, (tid, email))
+                    row.status, row.error = 'invitation_error', str(exc)
+                outcomes['failed'] += 1
+                outcomes['authentication_unavailable'] = True
+                # Do not try the same rejected auth strategy for another
+                # recipient in this batch. Everyone else remains untouched.
+                outcomes['not_attempted'] = len(selected) - selected.index(email) - 1
+                break
             except InvitationEndpointUnavailable as exc:
                 with self.sessions.begin() as session:
                     row = session.get(SharedInvitation, (tid, email))
