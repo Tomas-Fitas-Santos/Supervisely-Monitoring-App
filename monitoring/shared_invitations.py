@@ -14,7 +14,7 @@ from .db import (
 )
 from .event_settings import single_team
 from .service import WorkflowError
-from .setup_gateway import InvitationRejected, SetupGateway
+from .setup_gateway import InvitationRejected, InvitationEndpointUnavailable, SetupGateway
 
 
 def normal_email(email):
@@ -516,6 +516,16 @@ class SharedTeamInvitations:
                     continue
             try:
                 reply = api.invite_email(tid, email, native_role, login=login or None)
+            except InvitationEndpointUnavailable as exc:
+                with self.sessions.begin() as session:
+                    row = session.get(SharedInvitation, (tid, email))
+                    row.status, row.error = 'invitation_error', str(exc)
+                outcomes['failed'] += 1
+                outcomes['endpoint_unavailable'] = True
+                # Stop before attempting any further email in this batch.
+                # Unprocessed rows remain untouched/not_invited, not failed.
+                outcomes['not_attempted'] = len(selected) - selected.index(email) - 1
+                break
             except InvitationRejected as exc:
                 with self.sessions.begin() as session:
                     row = session.get(SharedInvitation, (tid, email))
