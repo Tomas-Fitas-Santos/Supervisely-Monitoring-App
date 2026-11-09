@@ -20,7 +20,7 @@ Stop any previous Monitoring App occupying port 8000 before starting the new API
 ```powershell
 git switch main
 git pull --ff-only origin main
-Copy-Item .env.example .env
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 # Edit .env: choose a strong POSTGRES_PASSWORD and set the SAME password in DATABASE_URL.
 docker compose -f compose.local.yaml --env-file .env up -d db
 py -3.12 -m venv .venv
