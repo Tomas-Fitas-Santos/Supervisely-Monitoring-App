@@ -185,6 +185,22 @@ def main():
             index[0] += 1
             return result
         merged = PATTERN.sub(replace, text)
+        if name == "monitoring/ui.py":
+            # An unregistered staff account must never see reception records.
+            # Dashboard rendering should remain usable and fail closed.
+            anchor = "    from .event_people import EventPeople\n"
+            if anchor not in merged:
+                raise RuntimeError("Dashboard staff-import location changed.")
+            merged = merged.replace(anchor, anchor + (
+                "    try:\n"
+                "        reception_view = EventLogistics(sessions).overview(uid, organiser=can_setup)\n"
+                "    except WorkflowError:\n"
+                "        reception_view = {'teams': [], 'summary': {}}\n"
+            ), 1)
+            source = "logistics=EventLogistics(sessions).overview(uid, organiser=can_setup)"
+            if source not in merged:
+                raise RuntimeError("Dashboard reception snapshot location changed.")
+            merged = merged.replace(source, "logistics=reception_view", 1)
         if "<<<<<<<" in merged or "=======" in merged or ">>>>>>>" in merged:
             raise RuntimeError(f"{name}: unresolved markers remain. Nothing changed.")
         resolved[name] = merged
