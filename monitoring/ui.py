@@ -871,16 +871,30 @@ def setup_action(request: Request):
             EmailOnboarding(sessions).provision(gateway, setup, uid, f['registration_id'], f.get('monitor_id', 0))
             message = 'Team saved. Invitations are pending until accepted in Supervisely. Refresh invitations to confirm readiness.'
         elif name == 'registration_refresh' and single_team(event_config()):
-            SharedTeamInvitations(sessions).refresh(gateway, uid)
+            # Read-only team reconciliation. Import people invited directly in
+            # Supervisely without creating invitations or changing native roles.
             from .event_people import EventPeople
+            before = EventPeople(sessions).overview()
+            previous_native = {p['id'] for p in before
+                if (p.get('source_fields') or {}).get('imported_via') == 'supervisely'}
+            SharedTeamInvitations(sessions).refresh(gateway, uid)
             people = EventPeople(sessions).overview()
-            discovered = sum((p.get('source_fields') or {}).get('imported_via') == 'supervisely'
-                             for p in people)
-            accepted = sum(p['invitation_status'] == 'accepted' for p in people)
+            native = {p['id'] for p in people
+                if (p.get('source_fields') or {}).get('imported_via') == 'supervisely'}
+            counts = {state: sum(p['invitation_status'] == state for p in people)
+                      for state in ('accepted', 'pending', 'role_mismatch',
+                                    'identity_conflict', 'invitation_error', 'unknown')}
+            attention = sum(counts[k] for k in
+                ('role_mismatch', 'identity_conflict', 'invitation_error', 'unknown'))
+            response['membership_sync'] = {
+                'new': len(native - previous_native), 'native_visible': len(native),
+                'accepted': counts['accepted'], 'pending': counts['pending'],
+                'needs_attention': attention,
+            }
             message = (
-                f'Supervisely members refreshed. {discovered} account(s) added from native '
-                f'team membership; {accepted} accepted roster record(s) confirmed. '
-                'No invitations were sent and existing pair assignments were preserved.'
+                f'Supervisely synced: {len(native - previous_native)} newly discovered, '
+                f"{counts['accepted']} accepted, {counts['pending']} pending, "
+                f'{attention} require review. No invitations sent or native roles changed.'
             )
         elif name == 'registration_refresh':
             raise WorkflowError('Configure one existing event team in Settings before refreshing invitations.')
