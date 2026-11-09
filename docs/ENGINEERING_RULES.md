@@ -1,0 +1,14 @@
+# Engineering rules — mandatory
+
+1. **Single branch:** Work only on GitHub `main`. Never create, check out for development, or push a new branch without the user's explicit request. Commit incrementally to `main` after checking it has not advanced.
+2. **No destructive migrations:** Do not wipe a local database, reset event records, force-push, or delete existing branches without explicit authorization and backups. Existing branches are read-only historical references, not merged into the rebuild.
+3. **Local first:** Implement, test and validate the full application locally. Deployment infrastructure and hosting expense are postponed; portability is maintained through container-friendly settings.
+4. **No demo mode:** No fake external success, simulator, hard-coded staff, dummy participants or simulated job dispatch. Automated tests may use isolated synthetic fixtures and mocks, never claim real Supervisely operations occurred.
+5. **No secrets or personal data in Git:** This repository is public. Do not commit real rosters, workbooks, exported registration CSVs, participant emails, dataset media, database dumps, API tokens or private keys. Do not merge old branch history containing registrations. Keep a private incident/remediation plan for previously exposed material.
+6. **Explicit contracts:** Typed request/response models and database migrations precede each domain implementation. All currency, time and event timestamps are timezone-aware; database timestamps use UTC.
+7. **Permissions enforced server-side:** Authentication and staff roles must not depend on a browser field. Mutations are audited. No participant needs a monitoring-app account.
+8. **Durable operations:** Use idempotency keys, database transactions and outbox/queue semantics for bulk ticket grants, job publication, state transitions and award allocation.
+9. **No blind API retries:** Supervisely 401/403 is a configuration or permission blocker. For uncertain job-creation outcomes, reconcile remote state before retrying. Never silently create duplicate annotation jobs.
+10. **Responsiveness:** Tab-oriented APIs and incremental updates. No entire-dashboard rebuild or exhaustive Supervisely scans on user clicks. Only the visible tab receives frequent browser updates.
+11. **Quality gates:** Unit, integration and contract tests must pass before declaring a milestone complete. Native Supervisely capabilities that are not verified are recorded as blockers, not promised features.
+12. **User control:** Never start the competition, alter real native team membership, submit actual annotations, or finalize/export source data as a side effect of a test.

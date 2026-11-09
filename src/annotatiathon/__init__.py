@@ -1,0 +1,1 @@
+"""Annotatiathon platform backend."""
