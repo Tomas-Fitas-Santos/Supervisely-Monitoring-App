@@ -382,10 +382,11 @@ def test_selected_invitation_roster_frontend_requires_explicit_selection():
               'monitoring/static/event_registrations.js').read_text(encoding='utf-8')
     handler = (Path(__file__).resolve().parents[1] /
                'monitoring/ui.py').read_text(encoding='utf-8')
-    assert "v-model=\"inviteEmails\"" in source
-    assert "Select matching eligible" in source
-    assert "Invite selected" in source
-    assert "registration_invite_selected" in source
+    assert 'toggleManual(p,$event.target.checked)' in source
+    assert 'Add matching eligible (up to 50)' in source
+    assert 'Copy {{selectedReady.length}} emails for {{manualRoleLabel}}' in source
+    assert "emails.join(', ')" in source
+    assert 'registration_invite_selected' in source
     assert "registration_provision_all" not in source
     assert "selected_emails=addresses" in handler
     assert "if not isinstance(addresses, list) or not addresses:" in handler
@@ -836,8 +837,13 @@ def test_cloud_browser_route_auth_401_aborts_selected_batch(sessions):
 def test_manual_selected_invite_recovery_uses_roster_roles_and_refresh():
     script = (Path(__file__).resolve().parents[1] /
               'monitoring/static/event_registrations.js').read_text(encoding='utf-8')
-    assert 'Copy selected emails &amp; roles' in script
+    assert 'Copy {{selectedReady.length}} emails for {{manualRoleLabel}}' in script
     assert 'copySelectedForSupervisely' in script
+    assert 'emails.join(\', \')' in script
+    assert 'selectNextBatch' in script
+    assert 'selectedReady.length>=50' in script
+    assert 'manualRoleChanged' in script
+    assert 'roster_csv_import' in script
     assert 'monitor:\'Manager\'' in script
     assert 'participant:\'Annotator\'' in script
     assert 'participant_monitor:\'Reviewer\'' in script
@@ -845,4 +851,4 @@ def test_manual_selected_invite_recovery_uses_roster_roles_and_refresh():
     assert 'registration_refresh' in script
     assert 'authentication_unavailable' in script
     assert 'invitationAuthBlocked=true' in script
-    assert '!selectedReady.length||invitationAuthBlocked' in script
+    assert 'invitationAuthBlocked=true' in script
