@@ -5,7 +5,7 @@ Vue.component('event-registrations', {
   props:['view','run','form','post','disabled'],
   data() {
     return {file:null,busy:false,error:'',search:'',group:'Monitors',
-      roleEdits:{},demoEmails:[],showFields:false};
+      roleEdits:{},loginEdits:{},demoEmails:[],showFields:false};
   },
   computed: {
     profiles(){return this.view.roster_profiles||[];},
@@ -59,6 +59,13 @@ Vue.component('event-registrations', {
       if(!await this.run('roster_role',{record_id:person.id,event_role:choice})){
         this.error=this.view.message||'Could not change role.';
       }else this.$delete(this.roleEdits,person.id);
+    },
+    async saveLogin(person){
+      const login=(this.loginEdits[person.id]||'').trim();
+      if(!login)return;
+      if(!await this.run('roster_login',{record_id:person.id,login}))
+        this.error=this.view.message||'Could not save native account login.';
+      else this.$delete(this.loginEdits,person.id);
     },
     async nativeRole(person){
       const choice=this.roleEdits[person.id]||person.event_role;
@@ -176,7 +183,17 @@ Vue.component('event-registrations', {
         <td>{{p.invitation_status}}</td>
         <td><span v-if="p.needs_review" class="nj-badge warning">Review</span>
           <span v-else>Ready to evaluate</span></td>
-        <td><details><summary>Source columns</summary>
+        <td><details><summary>Source columns &amp; Supervisely login</summary>
+          <p class="nj-muted">Set the exact native login when it differs from email.
+            Existing invited account identities require manual review.</p>
+          <div class="nj-inline-actions">
+            <input :value="loginEdits[p.id]===undefined?
+              (p.source_fields?.supervisely_login||''):loginEdits[p.id]"
+              @input="$set(loginEdits,p.id,$event.target.value)"
+              maxlength="180" placeholder="Supervisely login" :disabled="disabled||busy">
+            <button @click="saveLogin(p)" :disabled="disabled||busy||
+              !(loginEdits[p.id]||'').trim()">Save login</button>
+          </div>
           <div v-for="(value,key) in p.source_fields" :key="key">
             <strong>{{key}}</strong>: {{value||'—'}}</div>
         </details></td>
