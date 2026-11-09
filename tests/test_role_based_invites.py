@@ -302,3 +302,76 @@ def test_person_rows_import_the_team_monitor_without_extra_setup(sessions):
     people = SharedTeamInvitations(sessions).people()
     assert len(people) == 3
     assert next(p for p in people if p['role'] == 'monitor')['email'] == 'monitor@example.org'
+
+
+def test_explicit_selected_invites_only_the_named_accounts_and_preserves_roles(sessions):
+    accounts = import_invitation_roster(sessions)
+    api = FakeApi(accounts)
+    gateway = NS(api=api)
+    invitations = SharedTeamInvitations(sessions)
+    result = invitations.invite(
+        gateway, 900, selected_emails=['B@EXAMPLE.ORG', 'monitor@example.org'])
+    assert result == {'invited': 2, 'pending': 0, 'accepted': 0, 'failed': 0}
+    native_to_email = {entry['login']: email for email, entry in accounts.items()}
+    assert {native_to_email[call['login']] for call in api.calls} == {
+        'b@example.org', 'monitor@example.org'}
+    roles = {native_to_email[call['login']]: call['roleId'] for call in api.calls}
+    assert roles == {'b@example.org': 5, 'monitor@example.org': 3}
+    with sessions() as s:
+        assert s.get(SharedInvitation, (15, 'a@example.org')).status == 'not_invited'
+        assert s.get(SharedInvitation, (15, 'b@example.org')).status == 'pending'
+    # Re-selecting already pending people does not resend. Another selection
+    # can be invited later without touching previously unselected accounts.
+    retry = invitations.invite(
+        gateway, 900, selected_emails=['b@example.org', 'monitor@example.org'])
+    assert retry['invited'] == 0 and retry['pending'] == 2
+    assert len(api.calls) == 2
+    later = invitations.invite(gateway, 900, selected_emails=['a@example.org'])
+    assert later['invited'] == 1
+    assert len(api.calls) == 3
+
+
+@pytest.mark.parametrize('selection', [
+    [], 'a@example.org', {'emails':['a@example.org']}, [5],
+    ['a@example.org', 'A@example.org'],
+    ['a@example.org', 'not-in-roster@example.org'],
+])
+def test_selected_invites_reject_invalid_or_empty_batches_without_native_writes(
+        sessions, selection):
+    api = FakeApi(import_invitation_roster(sessions))
+    with pytest.raises(WorkflowError):
+        SharedTeamInvitations(sessions).invite(
+            NS(api=api), 900, selected_emails=selection)
+    assert not api.calls
+
+
+def test_selected_invites_fail_closed_for_unreviewed_roster_records(sessions):
+    from monitoring.db import EventRosterRecord
+    accounts = import_invitation_roster(sessions)
+    with sessions.begin() as s:
+        s.add(EventRosterRecord(
+            record_id='blocked-b', source_sheet='Participants',
+            team_number='2', team_name='Pending Pair',
+            display_name='Blocked registrant', email='b@example.org',
+            event_role='participant', needs_review=True,
+            source_fields={'data_processing_consent': 'Não'}))
+    api = FakeApi(accounts)
+    with pytest.raises(WorkflowError, match='need review'):
+        SharedTeamInvitations(sessions).invite(
+            NS(api=api), 900, selected_emails=['a@example.org', 'b@example.org'])
+    # Verify the entire batch was rejected without partially inviting a.
+    assert not api.calls
+
+
+def test_selected_invitation_roster_frontend_requires_explicit_selection():
+    source = (Path(__file__).resolve().parents[1] /
+              'monitoring/static/event_registrations.js').read_text(encoding='utf-8')
+    handler = (Path(__file__).resolve().parents[1] /
+               'monitoring/ui.py').read_text(encoding='utf-8')
+    assert "v-model=\"inviteEmails\"" in source
+    assert "Select matching eligible" in source
+    assert "Invite selected" in source
+    assert "registration_invite_selected" in source
+    assert "registration_provision_all" not in source
+    assert "selected_emails=addresses" in handler
+    assert "if not isinstance(addresses, list) or not addresses:" in handler
