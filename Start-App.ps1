@@ -10,8 +10,10 @@ param(
 # Native production hosting uses Dockerfile + monitoring.release, not this
 # loopback-only developer launcher.
 $ErrorActionPreference = 'Stop'
+$PreviousRehearsal = [Environment]::GetEnvironmentVariable('MONITORING_REHEARSAL_PAIR', 'Process')
 Push-Location $PSScriptRoot
 try {
+    $env:MONITORING_REHEARSAL_PAIR = if ($Mode -eq 'Demo') { '1' } else { '0' }
     $Python = Join-Path $PSScriptRoot '.venv\Scripts\python.exe'
     if (-not (Test-Path $Python)) {
         & py -3.12 -m venv .venv
@@ -54,5 +56,10 @@ try {
     }
 }
 finally {
+    if ($null -eq $PreviousRehearsal) {
+        [Environment]::SetEnvironmentVariable('MONITORING_REHEARSAL_PAIR', $null, 'Process')
+    } else {
+        $env:MONITORING_REHEARSAL_PAIR = $PreviousRehearsal
+    }
     Pop-Location
 }
