@@ -1,4 +1,4 @@
-"""Two-sheet DEMO/PRODUCTION roster: lossless source row storage and reviewed roles.
+"""Event roster: lossless workbook imports and read-only Supervisely discovery.
 
 Native invitation writes are deliberately separate. Incomplete/cancelled or
 consent-restricted participants remain visible to organisers but never become
@@ -150,7 +150,8 @@ class EventPeople:
                            if item['source_sheet'] == 'Monitors'}
             for old in session.scalars(select(EventRosterRecord).where(
                     EventRosterRecord.source_sheet == 'Monitors')):
-                if old.record_id not in current_ids:
+                if (old.record_id not in current_ids and
+                        (old.source_fields or {}).get('imported_via') != 'supervisely'):
                     old.event_role = 'inactive'
                     old.needs_review = True
             for item in source:
@@ -231,6 +232,10 @@ class EventPeople:
             # eligible pair has been prepared; imported staff are ready without
             # creating competition pairs. The UI must never infer this itself.
             prepared_emails = set(session.scalars(select(EventInvitee.email)))
+            from .db import Registration
+            paired = {str(person.get('email') or '').casefold()
+                      for reg in session.scalars(select(Registration))
+                      for person in (reg.members or []) if person.get('email')}
             return [{
                 'id':p.record_id, 'source_sheet':p.source_sheet,
                 'team_number':p.team_number, 'team_name':p.team_name,
@@ -240,6 +245,10 @@ class EventPeople:
                                   and not p.needs_review
                                   and p.event_role != 'inactive'),
                 'source_fields':p.source_fields,
+                'can_pair': bool(p.email and p.email not in paired and
+                                 p.event_role in ('participant', 'participant_monitor')
+                                 and not p.needs_review and
+                                 invitations.get(p.email) == 'accepted'),
                 'invitation_status':invitations.get(p.email, 'not_invited')
             } for p in session.scalars(select(EventRosterRecord).order_by(
                 EventRosterRecord.source_sheet, EventRosterRecord.team_number,
@@ -447,29 +456,65 @@ class EventPeople:
         return Registrations(self.sessions).import_csv(
             actor, stream.getvalue(), {h:h for h in COLUMNS})
 
-    def prepare_demo_pair(self, actor, emails):
-        """Use two supplied staff emails for a dual-role rehearsal, never synthetic identities."""
+    def create_pair(self, actor, team_name, emails, confirmed=False):
+        """Register two accepted Supervisely accounts as one competition pair.
+
+        Discovery does not infer a person's registration, consent or teammate.
+        The organiser must explicitly verify eligibility and select each pair.
+        No native invitations are sent by this operation.
+        """
         from .registration import COLUMNS, Registrations
-        if not isinstance(emails, list) or len(emails)!=2 or emails[0]==emails[1]:
-            raise WorkflowError('Choose exactly two different DEMO participants.')
+        from .db import Registration
+        team_name = _string(team_name)
+        if not confirmed:
+            raise WorkflowError('Confirm the selected pair and registration eligibility.')
+        if not team_name or len(team_name) > 180:
+            raise WorkflowError('Enter a pair name of at most 180 characters.')
+        if not isinstance(emails, list) or len(emails) != 2:
+            raise WorkflowError('Select exactly two different accepted participants.')
+        selected = [_email(email) for email in emails]
+        if not all(selected) or len(set(selected)) != 2:
+            raise WorkflowError('Select two distinct participants with verified emails.')
         with self.sessions() as session:
-            found = {p.email:p for p in session.scalars(select(EventRosterRecord))}
-        selected=[]
-        for address in emails:
-            person=found.get(_email(address))
-            if not person or person.event_role!='participant_monitor':
-                raise WorkflowError('Both selected DEMO users must first be participant_monitor.')
-            selected.append(person)
-        stream=io.StringIO(newline='')
-        writer=csv.DictWriter(stream,fieldnames=COLUMNS)
+            config = session.get(EventConfig, 1)
+            if not config or not config.monitoring_team_id:
+                raise WorkflowError('Configure the Supervisely event team before registering pairs.')
+            used = {str(m.get('email') or '').casefold()
+                    for reg in session.scalars(select(Registration))
+                    for m in (reg.members or []) if m.get('email')}
+            if any(email in used for email in selected):
+                raise WorkflowError('A selected participant already belongs to a registered pair.')
+            if any(reg.team_name.casefold() == team_name.casefold()
+                   for reg in session.scalars(select(Registration))):
+                raise WorkflowError('A pair already uses this team name.')
+            rows = []
+            for email in selected:
+                invitation = session.get(SharedInvitation, (
+                    config.monitoring_team_id, email))
+                invitee = session.get(EventInvitee, email)
+                matching = list(session.scalars(select(EventRosterRecord).where(
+                    EventRosterRecord.email == email)))
+                if (not invitee or invitee.event_role not in (
+                        'participant', 'participant_monitor') or
+                        not invitation or invitation.status != 'accepted' or
+                        not matching or any(p.needs_review for p in matching)):
+                    raise WorkflowError(
+                        'Both selected people must have accepted membership, '
+                        'approved participant roles and reviewed registration details.')
+                rows.append((invitee, matching[0]))
+        stream = io.StringIO(newline='')
+        writer = csv.DictWriter(stream, fieldnames=COLUMNS)
         writer.writeheader()
         writer.writerow({
-            'team_name':'DEMO Trial Pair',
-            'member_1_email':selected[0].email,'member_2_email':selected[1].email,
-            'member_1_name':selected[0].display_name or selected[0].email,
-            'member_2_name':selected[1].display_name or selected[1].email,
-            'member_1_role':'participant_monitor',
-            'member_2_role':'participant_monitor',
+            'team_name': team_name,
+            'member_1_email': selected[0],
+            'member_2_email': selected[1],
+            'member_1_name': rows[0][1].display_name,
+            'member_2_name': rows[1][1].display_name,
+            'member_1_role': rows[0][0].event_role,
+            'member_2_role': rows[1][0].event_role,
+            'member_1_login': rows[0][0].login,
+            'member_2_login': rows[1][0].login,
         })
         return Registrations(self.sessions).import_csv(
-            actor,stream.getvalue(),{h:h for h in COLUMNS})
+            actor, stream.getvalue(), {h:h for h in COLUMNS})
