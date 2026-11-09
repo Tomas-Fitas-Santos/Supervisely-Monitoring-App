@@ -96,10 +96,18 @@ It checks live `/healthz`, the HTML dashboard, Vue bundle and selected-user
 invitation controls. The SDK's informational `no-html mode` log does **not**
 mean the custom local HTML shell is missing; the smoke test verifies the page.
 
-For native hosted Supervisely, build and package a compatible image using
-`Prepare-Release.ps1`; see [deployment quickstart](docs/deployment-quickstart.md).
-A native app session, suitable instance privileges, and persistent PostgreSQL
-remain mandatory; the localhost runner is deliberately not a public web server.
+For multiuser access on **Supervisely Pro**, use the repository's existing
+external HTTPS hosting path with `Deploy-External.ps1`, Caddy, SMTP-based
+one-time login codes and a persistent PostgreSQL database; see
+[deployment quickstart](docs/deployment-quickstart.md) and
+[external deployment](docs/external-deployment.md). The monitoring app's
+built-in event login does not replace native Supervisely membership.
+
+For an Enterprise private-native-app release (or a separately approved public
+app), use `Prepare-Release.ps1` to package a compatible Docker image; see
+[hosted deployment](docs/production.md). The localhost runner is deliberately
+not a public web server. Neither route automatically completes native
+pair-shared sequential labeling-job dispatch.
 Video-frame conversion also requires `ffmpeg` and `ffprobe`.
 
 Sign in with your Supervisely User ID and personal API token. Browser logins
