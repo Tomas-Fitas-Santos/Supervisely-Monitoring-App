@@ -5,7 +5,8 @@ Vue.component('event-registrations', {
   props:['view','run','form','post','disabled'],
   data() {
     return {file:null,busy:false,error:'',search:'',group:'Monitors',
-      roleEdits:{},loginEdits:{},demoEmails:[],inviteEmails:[],showFields:false};
+      roleEdits:{},loginEdits:{},pairName:'',pairEmails:[],pairEligible:false,
+      inviteEmails:[],showFields:false};
   },
   computed: {
     profiles(){return this.view.roster_profiles||[];},
@@ -17,9 +18,14 @@ Vue.component('event-registrations', {
         (!q||[p.email,p.display_name,p.team_name,p.team_number].some(
           v=>String(v||'').toLowerCase().includes(q))));
     },
-    eligibleDemo(){
-      return this.monitors.filter(p=>
-        (this.roleEdits[p.id]||p.event_role)==='participant_monitor'&&!!p.email);
+    nativeProfiles(){return this.profiles.filter(p=>p.source_fields?.imported_via==='supervisely');},
+    acceptedMembers(){return this.profiles.filter(p=>p.invitation_status==='accepted').length;},
+    unpaired(){
+      const seen=new Set();
+      return this.profiles.filter(p=>{
+        if(!p.can_pair||seen.has(p.email))return false;
+        seen.add(p.email);return true;
+      });
     },
     invitableEmails(){
       return new Set(this.profiles.filter(p=>this.canInvite(p)).map(p=>p.email));
@@ -58,7 +64,7 @@ Vue.component('event-registrations', {
         });
         if(!await this.run('roster_workbook_import',{xlsx_base64:base64}))
           throw new Error(this.view.message||'Workbook import failed.');
-        this.demoEmails=[];this.inviteEmails=[];this.roleEdits={};
+        this.pairEmails=[];this.inviteEmails=[];this.roleEdits={};
       }catch(e){this.error=e.message||'Could not import workbook.';}
       finally{this.busy=false;}
     },
@@ -89,10 +95,20 @@ Vue.component('event-registrations', {
       }))this.error=this.view.message||'Native role change failed; inspect membership.';
       else this.$delete(this.roleEdits,person.id);
     },
-    async demoPair(){
-      if(this.demoEmails.length!==2)return;
-      if(!await this.run('roster_demo_pair',{emails:this.demoEmails}))
-        this.error=this.view.message||'Could not create rehearsal pair.';
+    async createPair(){
+      if(this.disabled||this.busy||this.pairEmails.length!==2||
+         !this.pairName.trim()||!this.pairEligible)return;
+      if(!window.confirm('Register '+this.pairName.trim()+' with exactly these two accepted accounts?\n\n'+
+        this.pairEmails.join('\n')+'\n\nNo new Supervisely invitations will be sent.'))return;
+      this.busy=true;this.error='';
+      try{
+        if(!await this.run('roster_create_pair',{
+          team_name:this.pairName.trim(),emails:[...this.pairEmails],
+          confirm_eligibility:true
+        }))throw new Error(this.view.message||'Could not register the pair.');
+        this.pairName='';this.pairEmails=[];this.pairEligible=false;
+      }catch(e){this.error=e.message||'Could not register the pair.';}
+      finally{this.busy=false;}
     },
     async command(action) {
       if(!await this.run(action))this.error=this.view.message||'Action failed.';
@@ -134,10 +150,20 @@ Vue.component('event-registrations', {
     refresh(){return this.command('registration_refresh');}
   },
   template:`<section class="nj-panel nj-people-roster">
-    <h3>Official registration roster &amp; roles</h3>
-    <p class="nj-muted">Load one workbook with two sheets: Monitors and Participants.
-      The application stores every original column, even when a record cannot be
-      invited. Importing the workbook does not invite anyone.</p>
+    <h3>Supervisely team members &amp; event roster</h3>
+    <p class="nj-muted">Already invited people directly in Supervisely? Refresh the shared
+      team here. New monitors and participants appear in this roster without
+      sending another invitation or changing anyone's native role.</p>
+    <div class="nj-actions">
+      <button class="nj-primary" @click="refresh" :disabled="disabled||busy">
+        Refresh participants &amp; monitors from Supervisely
+      </button>
+      <span class="nj-muted">Last checked: {{view.event_settings?.membership_synced_at?
+        new Date(view.event_settings.membership_synced_at*1000).toLocaleString():'Not yet refreshed'}}</span>
+    </div>
+    <p class="nj-muted">Alternatively, import the official registration workbook with
+      Monitors and Participants sheets. Imported source columns and reviewed
+      event roles are preserved. Importing does not invite anyone.</p>
     <div class="nj-form-row">
       <label>Event roster (.xlsx)
         <input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -157,24 +183,36 @@ Vue.component('event-registrations', {
       <div><span>Participant records</span><strong>{{participants.length}}</strong></div>
       <div><span>Needs review</span><strong>{{reviewCount}}</strong></div>
     </div>
-    <div v-if="monitors.length" class="nj-panel">
-      <h4>DEMO trial — use two real monitor accounts for annotation</h4>
-      <p class="nj-muted">Choose two monitors, set each event role to
-        Participant + Monitor and save. The app will create one logical
-        rehearsal pair; other staff remain monitors. No simulated emails.</p>
+    <p v-if="nativeProfiles.length" class="nj-muted">
+      {{nativeProfiles.length}} native team account(s) discovered that were not
+      already present in the workbook. {{acceptedMembers}} verified accepted
+      member record(s) are visible. Entries without a public account email or
+      with an unrecognized role require review before pairing.
+    </p>
+    <div v-if="unpaired.length" class="nj-panel">
+      <h4>Register a two-person competition pair</h4>
+      <p class="nj-muted">Choose two accepted, unassigned participants discovered
+        from Supervisely or imported from the official roster. The app never
+        guesses partners from team membership.</p>
+      <label>Pair name<input v-model.trim="pairName" maxlength="180"
+        placeholder="Team name" :disabled="disabled||busy"></label>
       <div class="nj-check-group">
-        <label v-for="m in eligibleDemo" :key="m.id" class="nj-check">
-          <input type="checkbox" :value="m.email" v-model="demoEmails"
-            :disabled="disabled||busy||(!demoEmails.includes(m.email)&&demoEmails.length>=2)">
-          {{m.display_name||m.email}}
+        <label v-for="p in unpaired" :key="p.email" class="nj-check">
+          <input type="checkbox" :value="p.email" v-model="pairEmails"
+            :disabled="disabled||busy||(!pairEmails.includes(p.email)&&pairEmails.length>=2)">
+          {{p.display_name||p.email}} ({{p.email}})
         </label>
       </div>
-      <button @click="demoPair" :disabled="disabled||busy||demoEmails.length!==2">
-        Create two-person DEMO pair
+      <label class="nj-check"><input type="checkbox" v-model="pairEligible"
+        :disabled="disabled||busy">I verified both registrations and required
+        participant permissions/consent for this event.</label>
+      <button class="nj-primary" @click="createPair"
+        :disabled="disabled||busy||pairEmails.length!==2||!pairName.trim()||!pairEligible">
+        Register selected pair
       </button>
     </div>
     <div v-if="participants.length" class="nj-panel">
-      <h4>PRODUCTION — prepare eligible pairs</h4>
+      <h4>Prepare eligible pairs from the registration workbook</h4>
       <p class="nj-muted">Eligible complete pairs: {{completeTeams}}.
         Incomplete teams, cancelled registrations, missing emails, records with
         missing processing consent or conflicting roles are retained for review.
@@ -193,8 +231,7 @@ Vue.component('event-registrations', {
       <label>Find name, email or team<input v-model="search" placeholder="Filter records"></label>
     </div>
     <div class="nj-actions">
-      <button @click="refresh" :disabled="disabled||busy">Refresh Supervisely membership statuses</button>
-      <button @click="selectVisibleInvitees" :disabled="disabled||busy||!selectableVisible.length">
+       <button @click="selectVisibleInvitees" :disabled="disabled||busy||!selectableVisible.length">
         Select matching eligible ({{selectableVisible.length}})
       </button>
       <button @click="clearInviteSelection" :disabled="disabled||busy||!inviteEmails.length">
