@@ -18,7 +18,7 @@ from .db import (EventRosterRecord, ExternalLoginChallenge,
 from .service import WorkflowError
 
 CODE_TTL = 600
-SESSION_TTL = 12 * 3600
+SESSION_TTL = 18 * 3600
 MIN_SEND_INTERVAL = 60
 HOURLY_SEND_LIMIT = 12
 MAX_ATTEMPTS = 5
