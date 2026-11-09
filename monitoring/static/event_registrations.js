@@ -60,6 +60,19 @@ Vue.component('event-registrations', {
         this.error=this.view.message||'Could not change role.';
       }else this.$delete(this.roleEdits,person.id);
     },
+    async nativeRole(person){
+      const choice=this.roleEdits[person.id]||person.event_role;
+      if(choice===person.event_role||person.invitation_status!=='accepted')return;
+      const target={monitor:'Manager',participant:'Annotator',
+        participant_monitor:'Reviewer'}[choice];
+      const team=this.view.event_settings?.team_id||'the event team';
+      if(!window.confirm('Change '+person.email+' to '+target+
+        ' in Supervisely Team '+team+'? This changes live permissions immediately.'))return;
+      if(!await this.run('roster_native_role',{
+        record_id:person.id,event_role:choice,confirm_native_role_change:true
+      }))this.error=this.view.message||'Native role change failed; inspect membership.';
+      else this.$delete(this.roleEdits,person.id);
+    },
     async demoPair(){
       if(this.demoEmails.length!==2)return;
       if(!await this.run('roster_demo_pair',{emails:this.demoEmails}))
@@ -153,8 +166,12 @@ Vue.component('event-registrations', {
             <option value="participant">Participant</option>
             <option value="participant_monitor">Participant + Monitor</option>
           </select>
-          <button @click="role(p)" :disabled="disabled||busy||
-            !roleEdits[p.id]||roleEdits[p.id]===p.event_role">Save</button>
+          <button v-if="p.invitation_status!=='accepted'" @click="role(p)"
+            :disabled="disabled||busy||!roleEdits[p.id]||
+              roleEdits[p.id]===p.event_role">Save</button>
+          <button v-else @click="nativeRole(p)" :disabled="disabled||busy||
+              !roleEdits[p.id]||roleEdits[p.id]===p.event_role">
+            Change live role</button>
         </div></td>
         <td>{{p.invitation_status}}</td>
         <td><span v-if="p.needs_review" class="nj-badge warning">Review</span>
