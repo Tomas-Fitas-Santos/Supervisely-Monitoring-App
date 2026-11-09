@@ -25,7 +25,7 @@ Vue.component('nightjar-management', {
       }catch(error){this.clientError=error.message;return false;}
       finally{if(reading)this.loading=false;else this.busy=false;}
     },
-    async reload(){if(!this.view.connected)return;const ok=await this.run(this.section==='dataset'?'sources':'overview');if(ok)this.loaded=true;}
+    async reload(){if(!this.view.connected)return;const ok=await this.run(this.section==='dataset'?'sources':'registration_refresh');if(ok)this.loaded=true;}
   },
   mounted(){if(this.section==='dataset'&&!this.locked&&this.view.connected)this.reload();},
   template: `
