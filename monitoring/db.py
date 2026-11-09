@@ -215,6 +215,27 @@ class ArrivalCheckin(Base):
     note: Mapped[str] = mapped_column(Text, default='')
 
 
+class ExternalLoginChallenge(Base):
+    """No plaintext OTPs; throttle and expiry shared by all app instances."""
+    __tablename__ = 'external_login_challenges'
+    email: Mapped[str] = mapped_column(String(254), primary_key=True)
+    code_digest: Mapped[str] = mapped_column(String(64))
+    expires_at: Mapped[int] = mapped_column(default=0)
+    attempts: Mapped[int] = mapped_column(default=0)
+    last_sent_at: Mapped[int] = mapped_column(default=0)
+    window_started_at: Mapped[int] = mapped_column(default=0)
+    window_count: Mapped[int] = mapped_column(default=0)
+
+
+class ExternalLoginSession(Base):
+    """Only SHA256 session token hashes are stored in PostgreSQL."""
+    __tablename__ = 'external_login_sessions'
+    token_digest: Mapped[str] = mapped_column(String(64), primary_key=True)
+    email: Mapped[str] = mapped_column(String(254), index=True)
+    expires_at: Mapped[int] = mapped_column()
+    created_at: Mapped[int] = mapped_column(default=now)
+
+
 class EventRosterRecord(Base):
     """Complete imported source row, including optional/private source columns."""
     __tablename__ = 'event_roster_records'
