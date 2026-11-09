@@ -1,7 +1,6 @@
 """One structured dataset importer for browser folder and ZIP uploads.
 
-Both inputs yield the same canonical images/videos manifests and the same
-Supervisely source projects. An explicit preview precedes remote mutation.
+Both inputs yield identical category/video/frame manifests and native videos. An explicit preview precedes remote mutation.
 """
 from pathlib import Path, PurePosixPath
 import shutil
@@ -53,11 +52,11 @@ def _canonical(path):
     parts = PurePosixPath(str(path).replace('\\', '/')).parts
     if not parts:
         raise WorkflowError('Dataset file does not have a relative path.')
-    if parts[0].casefold() not in ('images', 'videos'):
+    if len(parts) == 4:
         parts = parts[1:]
-    if not parts:
-        raise WorkflowError('The dataset root cannot itself be a media file.')
-    return '/'.join((parts[0].casefold(), *parts[1:]))
+    if len(parts) != 3:
+        raise WorkflowError('Expected category/video/frame path.')
+    return '/'.join(parts)
 
 
 def _snapshot(setup, actor, ids, mode, staging_directory, *, extract=False,
@@ -86,7 +85,7 @@ def _snapshot(setup, actor, ids, mode, staging_directory, *, extract=False,
         raise WorkflowError('Choose Folder or ZIP for dataset upload.')
     if any(Path(path).suffix.casefold() == '.zip' for _, path in records):
         raise WorkflowError('Folder mode cannot include ZIP files.')
-    manifest = validate_tree([path for _, path in records], require_both=True)
+    manifest = validate_tree([path for _, path in records])
     if extract:
         if expected_hash != manifest['hash']:
             raise WorkflowError('Selected folder changed since preview.')
@@ -133,7 +132,7 @@ def _publish(setup, gateway, actor, operation_id, staged_ids, name, fps, meta,
     remote = [(row['path'], paths[row['path']]) for row in manifest['images']]
     video_mapping = {}
     for i, video in enumerate(manifest['videos']):
-        generated = f"videos/{video['category']}/{video['title']}.mp4"
+        generated = f"{video['category']}/{video['title']}.mp4"
         output = Path(temp_dir) / f'encoded-video-{i:05d}.mp4'
         encode_video([paths[frame] for frame in video['frames']], output, fps=fps)
         remote.append((generated, output))
