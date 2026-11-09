@@ -844,3 +844,5 @@ def test_manual_selected_invite_recovery_uses_roster_roles_and_refresh():
     assert 'https://app.supervisely.com/members/add' in script
     assert 'registration_refresh' in script
     assert 'authentication_unavailable' in script
+    assert 'invitationAuthBlocked=true' in script
+    assert '!selectedReady.length||invitationAuthBlocked' in script
