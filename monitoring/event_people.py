@@ -144,6 +144,15 @@ class EventPeople:
 
         with self.sessions.begin() as session:
             config = session.get(EventConfig, 1)
+            # Re-import is authoritative for the external monitor allowlist:
+            # identities absent from the new sheet lose login permission.
+            current_ids = {item['record_id'] for item in source
+                           if item['source_sheet'] == 'Monitors'}
+            for old in session.scalars(select(EventRosterRecord).where(
+                    EventRosterRecord.source_sheet == 'Monitors')):
+                if old.record_id not in current_ids:
+                    old.event_role = 'inactive'
+                    old.needs_review = True
             for item in source:
                 previous = session.get(EventRosterRecord, item['record_id'])
                 if previous:
