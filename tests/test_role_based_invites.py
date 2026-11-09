@@ -659,3 +659,29 @@ def test_native_page_not_found_is_not_misreported_as_invalid_email(sessions):
     assert 'Page not found' in message
     assert 'does NOT establish' in message
     assert 'identifier:' in message
+
+
+
+def test_community_admin_does_not_probe_unavailable_users_list(sessions):
+    """An authenticated Community/Pro team Admin may have no users.list route."""
+    from unittest.mock import Mock
+    accounts = import_invitation_roster(sessions)
+    api = FakeApi(accounts)
+    api.server_address = 'https://app.supervisely.com'
+    api.user.get_list = Mock(side_effect=AssertionError(
+        'Community users.list endpoint must not be called'))
+    result = SharedTeamInvitations(sessions).invite(
+        NS(api=api), 900, selected_emails=['b@example.org'])
+    assert result['invited'] == 1
+    assert [x for x in api.calls if x['login'] == 'b@example.org']
+    api.user.get_list.assert_not_called()
+
+
+def test_read_only_diagnostic_does_not_try_inviting_or_global_users_list():
+    script = (Path(__file__).resolve().parents[1] /
+              'diagnose_invitation.py').read_text(encoding='utf-8')
+    assert 'LocalConnection(sessions, settings.home).api()' in script
+    assert 'get_team_members(args.team_id)' in script
+    assert 'api.user.get_list(' not in script
+    assert 'api.post(' not in script
+    assert 'add_to_team(' not in script
