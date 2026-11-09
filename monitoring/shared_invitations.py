@@ -276,15 +276,17 @@ class SharedTeamInvitations:
                 'Monitors' if role in ('admin', 'developer') else 'Participants'))
             is_owner = user_id is not None and user_id == session.get(EventConfig, 1).owner_id
             supported = role in role_map or (role == 'admin' and is_owner)
-            if not email and (login.casefold() in existing_logins or user_id in known_users):
-                # An imported roster may already identify this private native
-                # account by login/ID even if the server withholds its email.
-                continue
             identity = email if email else (login.casefold() or str(user_id or ''))
             if not identity:
                 continue
             record_id = hashlib.sha256(
                 f'supervisely:{team_id}:{identity}'.encode('utf-8')).hexdigest()
+            if (not email and
+                    (login.casefold() in existing_logins or user_id in known_users) and
+                    session.get(EventRosterRecord, record_id) is None):
+                # Existing CSV identities may have no visible native email;
+                # avoid adding a second, unlinked roster record.
+                continue
             observed.add(record_id)
             meta = {'imported_via': 'supervisely', 'supervisely_login': login,
                     'supervisely_user_id': str(user_id or ''),
@@ -296,7 +298,8 @@ class SharedTeamInvitations:
                 record.display_name = name
                 record.updated_at = checked_at
                 # Do not silently change an organiser-reviewed event role.
-                record.needs_review = (not supported or conflict or not email or
+                record.needs_review = (not supported or conflict or
+                                       (not email and not record.email) or
                                        record.event_role != event_role)
             elif not email or email not in existing_emails:
                 session.add(EventRosterRecord(
