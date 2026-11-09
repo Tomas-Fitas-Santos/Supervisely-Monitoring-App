@@ -156,11 +156,20 @@ Vue.component('event-registrations', {
         if(!result)
           throw new Error(this.view.message||'Could not send the selected invitations.');
         this.inviteFailures=result?.invitations?.errors||[];
-        if(this.inviteFailures.length){
-          this.error=this.inviteFailures.length+
-            ' account(s) could not be invited or require inspection. See the exact API errors below.';
+        if(result?.invitations?.endpoint_unavailable){
+          this.error='Supervisely returned 404 Page not found for members.add. '+
+            'The batch stopped after the first failure; '+
+            (result.invitations.not_attempted||0)+
+            ' selected account(s) were not attempted. Invite through the native '+
+            'Supervisely Team Members page and refresh this roster.';
+          this.inviteEmails=this.selectedReady;
+        }else{
+          if(this.inviteFailures.length){
+            this.error=this.inviteFailures.length+
+              ' account(s) could not be invited or require inspection. See the exact API errors below.';
+          }
+          this.inviteEmails=[];
         }
-        this.inviteEmails=[];
       }catch(e){this.error=e.message||'Could not send selected invitations.';}
       finally{this.busy=false;}
     },
