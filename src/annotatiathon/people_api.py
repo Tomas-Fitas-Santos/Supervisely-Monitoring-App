@@ -218,7 +218,7 @@ def update_person(
 
 def parse_rows(payload: RosterPayload) -> list[dict]:
     try:
-        reader = csv.DictReader(io.StringIO(payload.csv_text, newline=""))
+        reader = csv.DictReader(io.StringIO(payload.csv_text.lstrip("\ufeff"), newline=""))
         headers = reader.fieldnames or []
         expected = [payload.mapping.name, payload.mapping.email]
         expected += [h for h in (payload.mapping.kind, payload.mapping.team) if h]
