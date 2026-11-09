@@ -2,7 +2,7 @@ name: External monitor authentication checks
 on:
   push:
     branches:
-      - feat/external-monitor-login-20261109
+      - feat/video-only-event-ops-20261109
   workflow_dispatch:
 jobs:
   checks:
