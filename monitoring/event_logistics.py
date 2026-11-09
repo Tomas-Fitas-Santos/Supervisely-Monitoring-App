@@ -142,26 +142,42 @@ class EventLogistics:
             if action in ('issue', 'void_issue', 'undo_redemption'):
                 if not organiser and EventRoster._assigned_id(session, reg) != int(actor):
                     raise WorkflowError('Only the assigned monitor can issue or correct tickets.')
+            from sqlalchemy import update as sql_update
             balance = session.get(FoodDrinkBalance, (reg.id, email, kind))
             if balance is None:
+                if action != 'issue':
+                    raise WorkflowError('No unredeemed ticket is available for this participant.')
                 balance = FoodDrinkBalance(registration_id=reg.id,
                                            member_email=email, kind=kind,
                                            issued=0, redeemed=0)
                 session.add(balance)
+                session.flush()
+            condition = sql_update(FoodDrinkBalance).where(
+                FoodDrinkBalance.registration_id == reg.id,
+                FoodDrinkBalance.member_email == email,
+                FoodDrinkBalance.kind == kind)
             if action == 'issue':
-                balance.issued += count
+                condition = condition.values(issued=FoodDrinkBalance.issued + count)
             elif action == 'redeem':
-                if balance.issued - balance.redeemed < count:
-                    raise WorkflowError('No unredeemed ticket is available for this participant.')
-                balance.redeemed += count
+                condition = condition.where(
+                    FoodDrinkBalance.issued - FoodDrinkBalance.redeemed >= count
+                ).values(redeemed=FoodDrinkBalance.redeemed + count)
             elif action == 'void_issue':
-                if balance.issued - balance.redeemed < count:
-                    raise WorkflowError('Cannot void tickets that were already redeemed.')
-                balance.issued -= count
+                condition = condition.where(
+                    FoodDrinkBalance.issued - FoodDrinkBalance.redeemed >= count
+                ).values(issued=FoodDrinkBalance.issued - count)
             else:
-                if balance.redeemed < count:
-                    raise WorkflowError('There is no redemption to reverse.')
-                balance.redeemed -= count
+                condition = condition.where(FoodDrinkBalance.redeemed >= count).values(
+                    redeemed=FoodDrinkBalance.redeemed - count)
+            # Conditional SQL arithmetic is atomic even with concurrent reception desks.
+            updated = session.execute(condition)
+            if updated.rowcount != 1:
+                if action == 'redeem':
+                    raise WorkflowError('No unredeemed ticket is available for this participant.')
+                if action == 'void_issue':
+                    raise WorkflowError('Cannot void tickets that were already redeemed.')
+                raise WorkflowError('There is no redemption to reverse.')
+            session.refresh(balance)
             session.add(FoodDrinkTransaction(
                 operation_id=operation_id, registration_id=reg.id,
                 member_email=email, kind=kind, action=action,
