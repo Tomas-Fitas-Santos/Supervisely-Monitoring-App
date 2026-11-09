@@ -4,7 +4,9 @@
 Vue.component('event-registrations', {
   props:['view','run','form','post','disabled'],
   data() {
-    return {file:null,busy:false,error:'',search:'',group:'Monitors',
+    return {file:null,csvFile:null,csvSheet:'Participants',busy:false,error:'',
+      search:'',group:'Participants',manualRole:'participant',
+      copiedEmails:[],copyNotice:'',copyCount:0,
       roleEdits:{},loginEdits:{},nativeEmailEdits:{},pairName:'',pairEmails:[],pairEligible:false,
       inviteEmails:[],inviteFailures:[],lastSync:null,
       invitationAuthBlocked:false,showFields:false};
@@ -31,11 +33,30 @@ Vue.component('event-registrations', {
     invitableEmails(){
       return new Set(this.profiles.filter(p=>this.canInvite(p)).map(p=>p.email));
     },
-    selectedReady(){
-      return this.inviteEmails.filter(email=>this.invitableEmails.has(email));
+    roleLabels(){
+      return {monitor:'Manager', participant:'Annotator',
+              participant_monitor:'Reviewer'};
     },
+    manualRoleLabel(){return this.roleLabels[this.manualRole]||'Select a role';},
+    roleEligible(){
+      const seen=new Set();
+      return this.profiles.filter(p=>{
+        if(!this.canSelectManual(p)||seen.has(p.email))return false;
+        seen.add(p.email);return true;
+      });
+    },
+    selectedReady(){
+      const allowed=new Set(this.roleEligible.map(p=>p.email));
+      return [...new Set(this.inviteEmails.filter(email=>allowed.has(email)))].slice(0,50);
+    },
+    batchEmailText(){return this.selectedReady.join(', ');},
     selectableVisible(){
-      return [...new Set(this.selected.filter(p=>this.canInvite(p)).map(p=>p.email))];
+      return [...new Set(this.selected.filter(p=>this.canSelectManual(p))
+        .map(p=>p.email))];
+    },
+    roleRemaining(){
+      const copied=new Set(this.copiedEmails);
+      return this.roleEligible.filter(p=>!copied.has(p.email)).length;
     },
     reviewCount(){return this.participants.filter(p=>p.needs_review).length;},
     completeTeams(){
@@ -50,6 +71,23 @@ Vue.component('event-registrations', {
   },
   methods:{
     fileChanged(e){this.file=e.target.files?.[0]||null;this.error='';},
+    csvFileChanged(e){this.csvFile=e.target.files?.[0]||null;this.error='';},
+    async loadCsv(){
+      if(this.disabled||this.busy||!this.csvFile)return;
+      if(!/\\.csv$/i.test(this.csvFile.name)||this.csvFile.size>2*1024*1024){
+        this.error='Choose a UTF-8 Monitors or Participants .csv below 2 MiB.';return;
+      }
+      this.busy=true;this.error='';
+      try{
+        const text=await this.csvFile.text();
+        if(!await this.run('roster_csv_import',{
+          csv_text:text,source_sheet:this.csvSheet
+        }))throw new Error(this.view.message||'CSV import failed.');
+        this.inviteEmails=[];this.copiedEmails=[];this.copyNotice='';
+        this.roleEdits={};this.csvFile=null;
+      }catch(e){this.error=e.message||'Could not import CSV roster.';}
+      finally{this.busy=false;}
+    },
     async load() {
       if(this.disabled||this.busy||!this.file)return;
       if(!/\.xlsx$/i.test(this.file.name)||this.file.size>3*1024*1024){
@@ -65,7 +103,8 @@ Vue.component('event-registrations', {
         });
         if(!await this.run('roster_workbook_import',{xlsx_base64:base64}))
           throw new Error(this.view.message||'Workbook import failed.');
-        this.pairEmails=[];this.inviteEmails=[];this.roleEdits={};
+        this.pairEmails=[];this.inviteEmails=[];this.copiedEmails=[];
+        this.copyNotice='';this.roleEdits={};
       }catch(e){this.error=e.message||'Could not import workbook.';}
       finally{this.busy=false;}
     },
@@ -127,34 +166,88 @@ Vue.component('event-registrations', {
     },
     asPairs(){return this.command('roster_prepare_pairs');},
     canInvite(person){
-      return Boolean(person.email&&person.invitable&&
+      return Boolean(person.email&&person.invitable&&!person.needs_review&&
         ['not_invited','invitation_error'].includes(person.invitation_status));
     },
-    selectVisibleInvitees(){
-      // Add only the currently filtered, eligible accounts. Preserve selections
-      // from the other tab, never silently add unseen people.
-      this.inviteEmails=[...new Set([...this.selectedReady,...this.selectableVisible])];
+    canSelectManual(person){
+      if(!this.canInvite(person)||person.event_role!==this.manualRole)return false;
+      // One recipient must have one reviewed native role, even when its email
+      // appears on two imported sheets. Unsaved role edits are not accepted.
+      if(this.roleEdits[person.id]&&this.roleEdits[person.id]!==person.event_role)
+        return false;
+      return this.profiles.filter(p=>p.email===person.email).every(p=>
+        !p.needs_review&&p.event_role===this.manualRole);
     },
-    clearInviteSelection(){this.inviteEmails=[];},
-    async copySelectedForSupervisely(){
-      const emails=[...this.selectedReady];
-      if(!emails.length){this.error='Select one or more eligible people first.';return;}
-      const roleLabels={monitor:'Manager',participant:'Annotator',
-        participant_monitor:'Reviewer'};
-      const rows=['Email\tSupervisely role',...emails.map(email=>{
-        const person=this.profiles.find(p=>p.email===email);
-        return email+'\t'+(roleLabels[person?.event_role]||'Needs review');
-      })];
-      const text=rows.join('\n');
-      try{
-        if(!navigator.clipboard?.writeText)throw new Error('Clipboard API unavailable');
-        await navigator.clipboard.writeText(text);
-        this.error='';
-      }catch(_){
-        // Manual paste fallback for non-secure browser origins; never expose
-        // account tokens, only email addresses and approved event roles.
-        window.prompt('Copy selected emails and their assigned roles:',text);
+    manualRoleChanged(){
+      this.inviteEmails=[];this.copyNotice='';
+      this.group=this.manualRole==='monitor'?'Monitors':'Participants';
+    },
+    toggleManual(person, checked){
+      if(!checked){
+        this.inviteEmails=this.inviteEmails.filter(v=>v!==person.email);
+        return;
       }
+      if(!this.canSelectManual(person)){
+        this.error='This recipient does not have the selected approved role.';
+        return;
+      }
+      const existing=this.selectedReady;
+      if(existing.includes(person.email))return;
+      if(existing.length>=50){
+        this.error='Supervisely allows a maximum of 50 recipients per invitation.';
+        return;
+      }
+      this.inviteEmails=[...existing,person.email];this.error='';
+      this.copyNotice='';
+    },
+    selectVisibleInvitees(){
+      const next=[...this.selectedReady];
+      for(const email of this.selectableVisible){
+        if(next.length>=50)break;
+        if(!next.includes(email))next.push(email);
+      }
+      this.inviteEmails=next;
+      this.copyNotice='';this.error='';
+    },
+    selectNextBatch(){
+      const copied=new Set(this.copiedEmails);
+      this.inviteEmails=this.roleEligible.filter(p=>!copied.has(p.email))
+        .slice(0,50).map(p=>p.email);
+      this.copyNotice='';
+      if(!this.inviteEmails.length)
+        this.error='No further eligible emails for this role. Refresh memberships or reset batch progress.';
+      else this.error='';
+    },
+    resetCopyProgress(){
+      this.copiedEmails=[];this.copyNotice='';this.copyCount=0;
+    },
+    clearInviteSelection(){this.inviteEmails=[];this.copyNotice='';},
+    async copySelectedForSupervisely(){
+      // The website accepts comma- or space-separated EMAILS, up to 50, with
+      // a single role selected separately in the Supervisely UI.
+      const emails=this.selectedReady;
+      if(!emails.length||emails.length>50||
+         emails.some(email=>!this.roleEligible.some(p=>p.email===email))){
+        this.error='Choose 1–50 eligible people with exactly the selected role.';
+        return;
+      }
+      const text=emails.join(', ');
+      try{
+        if(!navigator.clipboard?.writeText)
+          throw new Error('Clipboard API unavailable');
+        await navigator.clipboard.writeText(text);
+        this.copyNotice='Copied '+emails.length+' email(s). In Supervisely choose '+
+          this.manualRoleLabel+', paste into New members and click Invite. '+
+          'Copying does NOT mean invitations were sent.';
+      }catch(_){
+        window.prompt('Copy these emails for Supervisely ('+
+          this.manualRoleLabel+'):',text);
+        this.copyNotice='The paste-ready email list was displayed. In Supervisely choose '+
+          this.manualRoleLabel+' and click Invite. Copying is not sending.';
+      }
+      this.copiedEmails=[...new Set([...this.copiedEmails,...emails])];
+      this.copyCount=emails.length;
+      this.error='';
     },
     async inviteSelected(){
       if(this.disabled||this.busy)return;
