@@ -96,7 +96,7 @@ class ExternalShell:
             elif path == '/auth/verify':
                 token = self.auth.verify_code(email, data.get('code'))
                 response = JSONResponse({'ok':True,'message':'Signed in.'})
-                response.set_cookie(COOKIE, token, max_age=12*3600,
+                response.set_cookie(COOKIE, token, max_age=18*3600,
                                     httponly=True, secure=True, samesite='strict',
                                     path='/')
             else:
