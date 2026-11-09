@@ -215,6 +215,21 @@ class ArrivalCheckin(Base):
     note: Mapped[str] = mapped_column(Text, default='')
 
 
+class EventRosterRecord(Base):
+    """Complete imported source row, including optional/private source columns."""
+    __tablename__ = 'event_roster_records'
+    record_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    source_sheet: Mapped[str] = mapped_column(String(20), index=True)
+    team_number: Mapped[str] = mapped_column(String(30), default='')
+    team_name: Mapped[str] = mapped_column(String(180), default='')
+    display_name: Mapped[str] = mapped_column(String(180), default='')
+    email: Mapped[str] = mapped_column(String(254), default='', index=True)
+    event_role: Mapped[str] = mapped_column(String(30), default='participant')
+    source_fields: Mapped[dict] = mapped_column(JSON, default=dict)
+    needs_review: Mapped[bool] = mapped_column(default=False)
+    updated_at: Mapped[int] = mapped_column(default=now)
+
+
 class TeamSeat(Base):
     """Physical table location, independent of native Supervisely team IDs."""
     __tablename__ = 'event_team_seats'
