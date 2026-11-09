@@ -23,8 +23,8 @@ git pull --ff-only origin main
 if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 # Edit .env: choose a strong POSTGRES_PASSWORD and set the SAME password in DATABASE_URL.
 docker compose -f compose.local.yaml --env-file .env up -d db
-py -3.12 -m venv .venv
-.\.venv\Scripts\Activate.ps1
+py -3.12 -m venv .venv-nightjar
+.\.venv-nightjar\Scripts\Activate.ps1
 python -m pip install -e ".[dev]"
 alembic upgrade head
 ```
@@ -40,7 +40,7 @@ A password is prompted securely; it is not passed on the command line. For addit
 Start the backend in **Terminal 1**:
 
 ```powershell
-.\.venv\Scripts\Activate.ps1
+.\.venv-nightjar\Scripts\Activate.ps1
 uvicorn annotatiathon.app:app --reload --host 127.0.0.1 --port 8000
 ```
 
