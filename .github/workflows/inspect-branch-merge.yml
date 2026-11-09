@@ -39,3 +39,16 @@ jobs:
               lines=Path(file).read_text().splitlines()
               print('\n'.join(f'{j+1}: {lines[j]}' for j in range(low-1,min(high,len(lines)))))
           PY
+      - name: Resolve conflicts using checked script
+        run: |
+          python3 scripts/resolve_pending_merge.py
+          test -z "$(git diff --name-only --diff-filter=U)"
+          git diff --cached --check
+          node --check monitoring/static/attendance.js
+          node --check monitoring/static/dashboard.js
+          node --check monitoring/static/job_planner.js
+          node --check monitoring/static/structured_dataset.js
+      - name: Run focused merged tests
+        run: |
+          python -m pip install -r requirements-dev.txt
+          python -m pytest -q tests/test_external_auth.py tests/test_event_people.py tests/test_event_logistics.py tests/test_zip_dataset.py tests/test_auth.py tests/test_launch.py
