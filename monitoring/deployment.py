@@ -6,7 +6,7 @@ from .service import WorkflowError
 
 def production_environment():
     if not any(os.getenv(k) for k in ('TASK_ID', 'task_id', 'SLY_APP_TASK_ID')):
-        raise WorkflowError('Production must run inside a native Supervisely application session. Use --pilot for a local real-account rehearsal.')
+        raise WorkflowError('Hosted deployment requires a native Supervisely application session. Use --local to run the app locally.')
     if os.getenv('LOCAL_DEVELOPMENT', '').lower() == 'true':
         raise WorkflowError('Production cannot enable LOCAL_DEVELOPMENT.')
     if any(os.getenv(k) == '1' for k in ('MONITORING_DEMO', 'MONITORING_SIMULATOR', 'MONITORING_PILOT', 'MONITORING_LIVE_DEMO')):

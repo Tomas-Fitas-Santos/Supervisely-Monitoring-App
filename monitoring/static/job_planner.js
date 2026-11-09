@@ -5,7 +5,7 @@ Vue.component('event-job-planner', {
   props:['view','run','disabled'],
   data() {return {
     selectedDatasetIds:[],selectedRegistrationIds:[],
-    jobsPerTeam:3,videosPerTeam:1,imageReplicas:1,videoReplicas:1,
+    jobsPerTeam:3,videosPerTeam:0,imageReplicas:1,videoReplicas:1,
     imageCommonPercent:0,imageEffort:1,seed:2026,
     previewInputs:'',localError:''
   };},
@@ -58,14 +58,14 @@ Vue.component('event-job-planner', {
     pairName(id) {return this.pairs.find(t=>t.id===id)?.team_name||id;}
   },
   template:`<section class="nj-panel nj-job-planner">
-    <h3>Configure labeling jobs</h3>
-    <p class="nj-muted">Set a total number of sequential jobs per competition pair,
-      full videos per pair and independent video overlap.
-      The planner creates one numbered logical job manifest per pair and position.</p>
+    <h3>2. Distribute whole videos to teams</h3>
+    <p>Choose the video datasets and teams, set the number of jobs, then review the distribution. A video is never split.</p>
     <p v-if="!ready" class="nj-caution">Configure the event's existing Supervisely team first.</p>
     <div class="nj-columns">
       <div>
         <h4>Source video datasets</h4>
+        <button v-if="sources.length" @click="selectedDatasetIds=sources.filter(s=>s.kind==='video').map(s=>s.id)" :disabled="disabled||!ready">Select all videos</button>
+        <p v-if="!sources.length" class="nj-muted">Upload a video dataset above, then reload the lists.</p>
         <label v-for="s in sources" :key="s.id" class="nj-check">
           <input type="checkbox" :value="s.id" v-model="selectedDatasetIds" :disabled="disabled||!ready||s.kind!=='video'">
           {{s.project}} / {{s.name}} · {{s.kind}} · {{s.items}} files
@@ -73,6 +73,8 @@ Vue.component('event-job-planner', {
       </div>
       <div>
         <h4>Competition teams</h4>
+        <button v-if="pairs.length" @click="selectedRegistrationIds=pairs.map(p=>p.id)" :disabled="disabled||!ready">Select all teams</button>
+        <p v-if="!pairs.length" class="nj-muted">Add teams in “2. Add teams” before preparing jobs.</p>
         <label v-for="p in pairs" :key="p.id" class="nj-check">
           <input type="checkbox" :value="p.id" v-model="selectedRegistrationIds" :disabled="disabled||!ready">
           {{p.team_name}} · {{p.membership_status==='ready'?'Accepted':'Waiting for native email acceptance'}}
@@ -86,8 +88,8 @@ Vue.component('event-job-planner', {
       <label>Complete videos per team
         <input type="number" v-model.number="videosPerTeam" min="0" max="100" step="1" :disabled="disabled">
       </label>
-      
     </div>
+    <details class="nj-advanced"><summary>Advanced: video overlap and workload balancing</summary>
     <div class="nj-form-row">
       <label>Video overlap (max teams per video)
         <input type="number" v-model.number="videoReplicas" min="1" :max="maxReplicas" step="1" :disabled="disabled">
@@ -97,10 +99,12 @@ Vue.component('event-job-planner', {
         <input type="number" v-model.number="seed" min="0" step="1" :disabled="disabled">
       </label>
     </div>
+    </details>
     <p class="nj-muted">Videos are never split across teams or jobs. A complete video counts as
       one indivisible media item, weighted by its frame count. Team workloads
       and all planned jobs are displayed before confirmation.</p>
     <p v-if="localError" class="nj-message nj-error">{{localError}}</p>
+    <p v-if="prepared.length" class="nj-message">Jobs are prepared. Use “Reset dataset preparation” above to change the distribution and prepare them again.</p>
     <button @click="preview" class="nj-primary"
       :disabled="disabled||!ready||!selectedDatasetIds.length||!selectedRegistrationIds.length||!!prepared.length">
       Preview distribution and jobs

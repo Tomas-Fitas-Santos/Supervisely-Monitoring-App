@@ -78,11 +78,13 @@ class Setup:
 
     def roster(self):
         with self.sessions() as s:
-            states = {r.team_id: s.get(TeamOnboarding, r.id) for r in s.scalars(select(Registration)) if r.team_id}
+            onboarding = {r.registration_id:r for r in s.scalars(select(TeamOnboarding))}
+            states = {r.team_id: onboarding.get(r.id) for r in s.scalars(select(Registration)) if r.team_id}
+            batch_teams = set(s.scalars(select(Batch.team_id).distinct()))
             return [{'id': t.id, 'name': t.name, 'monitor_id': t.monitor_id,
                      'annotator_ids': t.annotator_ids, 'revision': t.revision,
                      'membership_status': states[t.id].status if states.get(t.id) and states[t.id].memberships else 'ready',
-                     'has_batches': s.scalar(select(Batch.id).where(Batch.team_id == t.id).limit(1)) is not None}
+                     'has_batches': t.id in batch_teams}
                     for t in s.scalars(select(Team).order_by(Team.id))]
 
     def snapshot(self):
@@ -106,9 +108,14 @@ class Setup:
         people = {u['id']: u for u in groups['monitors'] + groups['annotators']}
         teams = self.roster()
         with self.sessions() as s:
+            registrations = {r.team_id:r for r in s.scalars(select(Registration)) if r.team_id}
+            onboarding = {r.registration_id:r for r in s.scalars(select(TeamOnboarding))}
+            active_states = list(s.execute(select(Batch.team_id, Batch.state).where(Batch.state != 'locked')))
+            releasing = {tid for tid, state in active_states if state == 'releasing'}
+            unlocked = {tid for tid, state in active_states}
             for team in teams:
-                reg = s.scalar(select(Registration).where(Registration.team_id == team['id']))
-                plan = s.get(TeamOnboarding, reg.id) if reg else None
+                reg = registrations.get(team['id'])
+                plan = onboarding.get(reg.id) if reg else None
                 team['participants'] = [people.get(uid, {'id': uid, 'login': f'User {uid}', 'name': f'User {uid}'})
                                         for uid in team['annotator_ids']]
                 if plan and plan.memberships:
@@ -119,12 +126,10 @@ class Setup:
                     team['checked_at'] = plan.checked_at
                 else:
                     team['memberships'] = []
-                team['can_assign'] = not bool(s.scalar(select(Batch.id).where(
-                    Batch.team_id == team['id'], Batch.state == 'releasing').limit(1)))
+                team['can_assign'] = team['id'] not in releasing
                 if plan and plan.memberships and plan.status != 'ready':
                     team['can_assign'] = False
-                team['can_unassign'] = not bool(s.scalar(select(Batch.id).where(
-                    Batch.team_id == team['id'], Batch.state != 'locked').limit(1)))
+                team['can_unassign'] = team['id'] not in unlocked
         monitors = list(groups['monitors'])
         known = {m['id'] for m in monitors}
         for uid in sorted({t['monitor_id'] for t in teams if t['monitor_id']} - known):
@@ -150,6 +155,9 @@ class Setup:
             if owner != actor:
                 raise WorkflowError('Only the connected organiser can create the event groups.')
         with self.sessions() as s:
+            config = s.get(EventConfig, 1)
+            if config.owner_id is not None and config.owner_id != actor:
+                raise WorkflowError('Only the event organiser can manage setup and reset the event.')
             demo = s.scalar(select(Batch).where(Batch.id.like('demo-%')).limit(1))
             if demo and any(a['source_id'].startswith('demo-') for a in demo.assets):
                 raise WorkflowError('This database contains synthetic demo data. Use a fresh pilot.db in DATABASE_URL and restart the app.')

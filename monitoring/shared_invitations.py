@@ -3,12 +3,12 @@
 All live invitation writes are explicit, use the role declared in the imported
 CSV, and never create a new native team. DEMO and PRODUCTION use the same path.
 """
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm.attributes import flag_modified
 
 from .db import (
     Audit, EventConfig, EventInvitee, EventMember, EventPreferences,
-    Registration, SharedInvitation, TeamOnboarding, now,
+    Registration, RosterContact, SharedInvitation, TeamOnboarding, now,
 )
 from .event_settings import single_team
 from .service import WorkflowError
@@ -45,17 +45,57 @@ class SharedTeamInvitations:
             )
         return int(config.monitoring_team_id)
 
-    def _targets(self, session, registration_id=None):
+    def _targets(self, session, registration_id=None, audience='everyone', email=None):
         """One native invite per identity even if a monitor oversees many pairs."""
         invitees = list(session.scalars(select(EventInvitee).order_by(EventInvitee.email)))
         if not invitees:
-            raise WorkflowError('Import the current CSV with explicit roles first.')
+            raise WorkflowError('Upload a roster before sending invitations.')
         if registration_id is not None:
             reg_id = str(registration_id)
             if not session.get(Registration, reg_id):
                 raise WorkflowError('Competition pair was not found.')
             invitees = [v for v in invitees if reg_id in (v.registration_ids or [])]
+        if audience == 'monitors':
+            invitees = [v for v in invitees if v.event_role in ('monitor', 'participant_monitor')]
+        elif audience == 'participants':
+            invitees = [v for v in invitees if v.event_role in ('participant', 'participant_monitor')]
+        elif audience == 'person':
+            address = normal_email(email)
+            invitees = [v for v in invitees if v.email == address]
+            if not invitees:
+                raise WorkflowError('This person is not in the imported roster.')
+        elif audience != 'everyone':
+            raise WorkflowError('Choose monitors, participants, everyone or one person.')
         return invitees
+
+    def people(self):
+        """Show imported people immediately, without making any native request."""
+        with self.sessions() as session:
+            config = session.get(EventConfig, 1)
+            tid = config.monitoring_team_id if config else None
+            registrations = {r.id: r for r in session.scalars(select(Registration))}
+            invitations = {r.email: r for r in session.scalars(select(SharedInvitation).where(
+                SharedInvitation.team_id == tid))} if tid else {}
+            names = {m['email']: m.get('name') or '' for r in registrations.values()
+                     for m in r.members if m.get('email')}
+            contacts = list(session.scalars(select(RosterContact)))
+            names.update({p.email:p.name for p in contacts if p.email and p.name})
+            result = []
+            for entry in session.scalars(select(EventInvitee).order_by(EventInvitee.email)):
+                invited = invitations.get(entry.email)
+                result.append({'id': entry.email,
+                    'email': entry.email, 'name': names.get(entry.email) or entry.login or entry.email,
+                    'login': entry.login, 'role': entry.event_role,
+                    'teams': [registrations[rid].team_name for rid in entry.registration_ids if rid in registrations],
+                    'status': invited.status if invited else 'not_invited',
+                    'error': invited.error if invited else '',
+                })
+            for contact in contacts:
+                if not contact.email:
+                    result.append({'id': contact.id, 'email': '', 'name': contact.name,
+                        'login': '', 'role': contact.role, 'teams': [contact.team_name] if contact.team_name else [],
+                        'status': 'missing_email', 'error': 'Email missing in the roster. Add it and upload the file again to invite this person.'})
+            return result
 
     def summary(self):
         with self.sessions() as session:
@@ -64,10 +104,11 @@ class SharedTeamInvitations:
                 select(SharedInvitation).where(SharedInvitation.team_id == team_id)
             )}
             declared = {v.email: v for v in session.scalars(select(EventInvitee))}
+            onboarding_rows = {r.registration_id:r for r in session.scalars(select(TeamOnboarding))}
             result = {}
             for reg in session.scalars(select(Registration).order_by(Registration.team_name)):
                 people = [normal_email(m.get('email')) for m in reg.members if m.get('email')]
-                onboard = session.get(TeamOnboarding, reg.id)
+                onboard = onboarding_rows.get(reg.id)
                 monitor_email = normal_email_or_blank(onboard.manager_email if onboard else '')
                 emails = list(dict.fromkeys(people + ([monitor_email] if monitor_email else [])))
                 members = []
@@ -263,18 +304,15 @@ class SharedTeamInvitations:
                         if invite and invite.status == 'accepted' and invite.user_id:
                             reg.monitor_id = int(invite.user_id)
                     else:
-                        # DEMO can start with both pair members being monitors.
-                        # Assign the first accepted dual-role participant; the
-                        # second remains available for manual reassignment.
-                        import os
-                        if os.getenv('MONITORING_PILOT') == '1':
-                            for person in reg.members:
-                                if person.get('role') == 'participant_monitor':
-                                    invited = session.get(SharedInvitation, (
-                                        tid, normal_email(person['email'])))
-                                    if invited and invited.status == 'accepted' and invited.user_id:
-                                        reg.monitor_id = int(invited.user_id)
-                                        break
+                        # Use the first accepted participant with monitoring
+                        # duties when the CSV has no separate monitor.
+                        for person in reg.members:
+                            if person.get('role') == 'participant_monitor' and person.get('email'):
+                                invited = session.get(SharedInvitation, (
+                                    tid, normal_email(person['email'])))
+                                if invited and invited.status == 'accepted' and invited.user_id:
+                                    reg.monitor_id = int(invited.user_id)
+                                    break
             prefs = session.get(EventPreferences, 1)
             prefs.membership_synced_at = now_at
             session.add(Audit(team_id=tid, batch_id='', actor_id=int(actor),
@@ -282,11 +320,11 @@ class SharedTeamInvitations:
                 details={'invitees_checked': len(entries)}))
         return self.summary()
 
-    def invite(self, gateway, actor, registration_id=None):
+    def invite(self, gateway, actor, registration_id=None, audience='everyone', email=None):
         """Invite roles from CSV, once, with no blind retry of unknown writes."""
         with self.sessions() as session:
             tid = self._event_team(session)
-            selected = [v.email for v in self._targets(session, registration_id)]
+            selected = [v.email for v in self._targets(session, registration_id, audience, email)]
         api = SetupGateway(gateway.api)
         self.refresh(gateway, actor)
         outcomes = {'invited': 0, 'pending': 0, 'accepted': 0, 'failed': 0}
@@ -306,9 +344,13 @@ class SharedTeamInvitations:
                 outcomes['failed'] += 1
                 continue
             with self.sessions.begin() as session:
-                row = session.get(SharedInvitation, (tid, email))
-                row.status = 'unknown'
-                row.error = 'Native invitation outcome unconfirmed. Inspect before retrying.'
+                claimed = session.execute(update(SharedInvitation).where(
+                    SharedInvitation.team_id == tid, SharedInvitation.email == email,
+                    SharedInvitation.status.in_(('not_invited', 'invitation_error'))
+                ).values(status='unknown', error='Native invitation outcome unconfirmed. Inspect before retrying.'))
+                if claimed.rowcount != 1:
+                    outcomes['failed'] += 1
+                    continue
             try:
                 reply = api.invite_email(tid, email, native_role, login=login or None)
             except InvitationRejected as exc:

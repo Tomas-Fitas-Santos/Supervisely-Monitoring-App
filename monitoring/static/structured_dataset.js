@@ -1,4 +1,4 @@
-/* Same verified dataset import UX for DEMO and PRODUCTION.
+/* Verified dataset uploads for the event.
  * Browser file selection only stages into this monitoring app; the second,
  * explicit confirmation uploads the reviewed sources into Supervisely.
  */
@@ -17,6 +17,7 @@ Vue.component('event-structured-upload', {
         : 'Dataset folder containing species / video title / frames';
     }
   },
+  watch: {busy(value){this.$emit('busy',value);}},
   methods: {
     newSelection() {this.uploadIds=[];this.preview=null;this.progress='';this.error='';},
     chooseMode(mode) {if(this.busy)return;this.mode=mode;this.files=[];this.newSelection();},
@@ -61,8 +62,8 @@ Vue.component('event-structured-upload', {
       Object.assign(this.form,payload,{setup_action:operation});
       try{
         const result=await this.post('/setup/action');
-        if(result?.ok===false||this.view.error)
-          throw new Error(this.view.message||'Dataset operation failed.');
+        if(result?.ok===false||(operation!=='chunk'&&this.view.error))
+          throw new Error(result?.message||this.view.message||'Dataset operation failed.');
         return result;
       }finally{
         delete this.form.chunk;
@@ -128,10 +129,14 @@ Vue.component('event-structured-upload', {
     }
   },
   template:`<section class="nj-panel nj-structured-upload">
-    <h3>Upload event dataset</h3>
-    <p class="nj-muted">Both DEMO and PRODUCTION accept an entire dataset folder or
-      a ZIP containing that same folder. Under the dataset root, use species/morphology
-      folders, then a named folder for each video containing its ordered frames.</p>
+    <h3>Upload a video dataset</h3>
+    <p>Choose a dataset folder or ZIP. Inspect the files, then confirm before uploading to Supervisely.</p>
+    <details><summary>Required video-only folder layout</summary><pre>Dataset/
+  bird_species_or_morphology/
+    named_video/
+      frame_0001.jpg
+      frame_0002.jpg
+</pre><p class="nj-muted">Video folders contain ordered frames. Do not add separate images/ or videos/ folders.</p></details>
     <div class="nj-upload-modes">
       <button :class="{selected:mode==='folder'}" @click="chooseMode('folder')" :disabled="busy">Dataset folder</button>
       <button :class="{selected:mode==='zip'}" @click="chooseMode('zip')" :disabled="busy">ZIP archive</button>
@@ -148,7 +153,7 @@ Vue.component('event-structured-upload', {
       <label>Supervisely dataset name
         <input v-model="sourceName" maxlength="180" :disabled="busy||locked">
       </label>
-      <label>Video frames per second
+      <label>Video playback speed (frames / second)
         <input type="number" v-model.number="fps" min="1" max="60" step="1" :disabled="busy||locked">
       </label>
     </div>

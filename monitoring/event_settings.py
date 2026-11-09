@@ -183,9 +183,8 @@ class EventSettings:
                     'monitor role. Review it in Supervisely before registering.'
                 )
         if demo_dual_role:
-            import os
-            if os.getenv('MONITORING_PILOT') != '1' or target.event_role != 'participant_monitor':
-                raise WorkflowError('DEMO dual-role monitoring requires participant_monitor in the CSV.')
+            if target.event_role != 'participant_monitor':
+                raise WorkflowError('Dual-role monitoring requires participant_monitor in the CSV.')
         login = str(getattr(member, 'login', '') or '').strip()
         if not login:
             raise WorkflowError('Cannot verify native account login for this User ID.')

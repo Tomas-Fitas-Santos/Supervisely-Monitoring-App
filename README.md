@@ -64,135 +64,142 @@ resources; a Pro subscription does not by itself provide local staging disk.
 
 # Supervisely Monitoring App — Técnico Nightjar Annotatiathon
 
-This development branch implements the local **DEMO** and the shared architecture
-for **PRODUCTION** using **one pre-existing native Supervisely team** and **one
-pre-existing workspace**. No native teams are created by the new workflow.
+One application manages event setup, invitations, participant check-in and
+annotation monitoring. Each event uses one existing Supervisely team and source
+workspace. The CSV, dataset and event rules define the setup.
 
-**Integration boundary:** dataset source uploads, invitation reconciliation and
-logical job preparation are implemented but require actual Supervisely
-integration validation. Native pair-shared sequential labeling-job activation,
-submission/correction return and end-to-end event scoring are not yet complete
-for the new single-team architecture. App-level prepared jobs are **not**
-native Supervisely labeling jobs.
+## Start the app
 
-## Windows quick start
-
-Use Python 3.12 and a Git checkout of
-`feat/single-team-settings-theme-20261105`. From the repository root:
+Use Python 3.12. From the repository root on Windows:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-.\Start-App.ps1 -Mode Demo -Install
+.\Start-App.ps1 -Install
 ```
 
-Open **http://127.0.0.1:8000**. On later launches run
-`.\Start-App.ps1 -Mode Demo` without `-Install`.
-This is a **live API DEMO**, not offline simulation. The local SQLite database,
-encrypted connection and staging are in `data/account-pilot/`.
+Open **http://127.0.0.1:8000**. On later launches, run `Start-App.ps1` without
+`-Install`. There is no mode selector. Existing saved event data and encrypted
+credentials in `data/account-pilot/` are retained; the directory name is historical.
+Video-frame conversion also requires `ffmpeg` and `ffprobe`.
 
-**Requirements:** Python 3.12, the dependencies from `requirements.txt`
-(the launcher installs them), and `ffmpeg` and `ffprobe` for video-frame
-conversion. There is no Node build for normal local operation.
+Sign in with your Supervisely User ID and personal API token. Browser logins
+are independent, last up to 12 hours, and have a Sign out button. The event
+admin controls setup and resets. Registered monitors sign in with their own
+accounts to review their assigned teams. A saved polling token does not sign
+browsers in automatically. Use separate browser profiles for separate accounts
+on one computer.
 
-For offline-only development, explicitly use
-`.\Start-App.ps1 -Mode Simulator`. The simulator has a separate database
-and sends no real invitations/uploads.
+## Set up the event
 
-## Sign in and configure
+**Event setup** displays one step at a time, with **Back** and **Continue**:
 
-Connect the organiser's **actual Supervisely numeric User ID**, personal
-API token and Supervisely server inside the web app. The configured DEMO
-organiser is `tomas.dos.santos@tecnico.ulisboa.pt`, not the older sample
-Gmail account. This account must already be an **Admin** of the native event
-team. No credentials are included in the repository.
+1. **Connect event**: verify the existing Supervisely Team ID and Workspace ID.
+2. **People & invitations**: upload the roster CSV or Excel file. Monitor and
+   participant lists appear immediately; uploading does not send invitations.
+3. **Prepare data**: upload a dataset folder or ZIP, or use existing source
+   datasets. Select teams, preview the distribution, then prepare jobs.
+4. **Set event rules**: enter the event name, annotation instructions and scoring.
+   Save and freeze the rules when ready, then finish setup.
 
-Open **Settings**, verify the existing **Team ID** and its **Workspace ID**.
-The login form verifies that the token belongs to the supplied User ID.
+Completed steps remain accessible. Invitation acceptance does not prevent
+preparing the rest of the event. Participant Check-in and Monitoring remain
+separate operational views. Only the event owner can configure or reset an event.
 
-## CSV roles: one source of truth before inviting
+### CSV and invitations
 
-Import the DEMO roster using **Monitors & Teams → Load bundled demo CSV**,
-or select the role-aware `.csv` or `.xlsx` workbook.
-The bundled file is `examples/organiser-demo/registrations.csv`.
+Download a CSV template from the upload panel. The simplest format is:
 
-The pair-row CSV uses `team_name`, `member_1_email`,
-`member_2_email`, optional native `member_1_login` and
-`member_2_login`, and explicit `member_1_role` and `member_2_role`.
-Each pair has two different participants.
+```csv
+team_number,team_name,participant_name,participant_email
+1,Team A,Ana,ana@example.org
+1,Team A,Bruno,bruno@example.org
+```
 
-| Declared event role | Native Supervisely role requested | In-app responsibility |
-| --- | --- | --- |
-| `participant` | `annotator` | Annotation work |
-| `monitor` (via `monitor_email`) | `manager` | Supervision |
-| `participant_monitor` | `reviewer` | Both labeling and reviewing/monitoring |
+Upload the supplied workbook directly: both **Monitors** and **Participants**
+sheets are read together, regardless of sheet order. Empty sheets are skipped.
+Team numbers distinguish pairs with the same name. Names, emails and optional
+Supervisely logins populate the lists automatically, with no column-matching step.
+Incomplete pairs and people missing emails remain visible; correct the source
+file and upload it again to complete them. Invitation and check-in status from
+the spreadsheet are never treated as verified account evidence.
 
-A **separate monitor** can be provided via `monitor_email` and
-`monitor_login`; the same staff monitor can supervise multiple logical
-pairs. The CSV may also use **one participant per row**, with
-`participant_email`, `participant_role` and `team_name`: two rows
-form one logical pair.
+A separate monitor CSV can use `monitor_name,monitor_email`. Pair-row CSVs using
+`team_name,member_1_email,member_2_email,monitor_email` also work. The same monitor
+can oversee several teams and is listed and invited once. Each competition team
+needs two participants before jobs can be prepared.
 
-The DEMO CSV contains **one competition pair** and both participants are
-`participant_monitor` (native `reviewer` role). The organiser remains
-the existing native **Admin**, and the CSV never elevates someone to Admin.
-The app stores the expected role *before* a native invitation is sent.
+Participant columns imply the `participant` role. Optional `member_1_role`,
+`member_2_role` or `participant_role` columns may specify `participant_monitor`
+when someone also monitors. A person listed in both workbook sheets is recognized
+automatically as a participant and monitor, appears in both lists and receives
+one native invitation.
 
-**The native Supervisely invitation endpoint accepts existing account
-logins, which may differ from email addresses.** If email-only invitation
-fails with HTTP 404, confirm the participant's real login with Supervisely
-and populate the corresponding `*_login` CSV field. Do not guess it.
-A verified account-email mismatch is blocked. Users must have real
-accounts on the same Supervisely server. The server may send invitations
-by email, or may add accepted members directly depending on the instance.
+| Event role | Supervisely role |
+| --- | --- |
+| Participant | Annotator |
+| Monitor | Manager |
+| Participant and monitor | Reviewer |
+| Event admin | Existing Admin; never granted through a CSV |
 
-Click **Send invitations with CSV roles**, then ask users to accept any
-pending invitation in Supervisely. **Refresh accepted memberships** verifies
-both the real native membership and role; it does not resend invitations.
-Pending/unknown outcomes are not retried blindly. Pre-existing accepted
-roles are never silently changed on CSV reimport.
+Use **Invite all monitors**, **Invite all participants**, **Invite everyone**,
+or **Invite** on an individual's row. People already invited or accepted are
+skipped. Refresh invitation status after people accept in Supervisely.
+Uncertain invitation results require inspection before retrying.
 
-## Interface
+Supervisely account logins may differ from email addresses. If needed, include
+`member_1_login`, `member_2_login` and `monitor_login`, or `participant_login`
+in a person-row CSV. Reimport preserves invitation evidence and does not
+silently change an accepted native role. Optional team-assignment adjustments
+are available below the people lists.
 
-- **Monitors & Teams**: role-aware CSV/Excel import; native invitations;
-  accepted/pending/error status; balanced or manual monitor assignment.
-- **Dataset**: browser folder or ZIP containing one named root with
-  `images/` and `videos/`; staging, validation, source upload after
-  confirmation; logical job distribution preview.
-- **Participant Check-in**: physical arrival tracked independently of
-  native acceptance, with an audited undo action.
-- **Monitoring**: legacy native-job monitoring and review components.
-  Their new single-team sequential-job integration is incomplete.
-- **Settings**: account/Team ID/Workspace ID configuration and monitor
-  registration. The main header provides light/dark mode.
+### Dataset preparation
 
-For the required media tree, complete-frame videos, conversion and
-job-planner limits, read
-[structured dataset and jobs](docs/structured-dataset-and-jobs.md).
-For a step-by-step live rehearsal, read
-[the current DEMO walkthrough](examples/organiser-demo/README.md).
+See [dataset structure and job planning](docs/structured-dataset-and-jobs.md)
+for the folder/ZIP layout and complete-video requirements. Staging and validation
+happen before explicit confirmation of the Supervisely upload. Prepared jobs
+are durable application records. Shared native sequential-job activation,
+correction return and end-to-end scoring still require integration completion
+and real Supervisely account validation.
 
-## Verification
+### Reset and appearance
 
-Run the new read-only/local tests from the repository root:
+Every admin setup step and operational tab offers a reset preview and explicit
+confirmation. Resets save event records in a database backup and retain native
+teams, memberships, invitations, uploaded files and annotations. The invitation
+ledger is retained to prevent duplicate sends on reimport. Active labeling jobs
+are checked and stopped before their local records are cleared. An uncertain
+stop preserves local records for inspection.
+
+- Reset people clears the roster, assignments, arrivals, jobs and results.
+- Reset dataset preparation clears staged upload records, job plans and results;
+  existing native sources can be reused.
+- Reset rules restores defaults and clears jobs and results.
+- Reset check-in clears arrivals only.
+- Restart event clears jobs, submissions, judging, scores and closure while
+  retaining people, sources and scoring settings. Prepare jobs again.
+- Start setup again also clears the team/workspace binding.
+
+Any reset that clears jobs unlocks rules and clears the old deadline. The last
+reset backup can be downloaded by the admin; it excludes credentials and native
+media files and is not an automatic undo operation.
+
+Light/dark mode applies to the whole page and is saved in the browser. Buttons
+wrap on small screens, with separate group-invitation and individual controls.
+
+## Hosting and verification
+
+Local hosting stays on loopback. For shared hosting, use the same application
+with Supervisely's authenticated multi-user gateway and persistent PostgreSQL:
+[hosted deployment](docs/production.md). Hosting changes authentication and storage,
+not event setup or invitation rules.
+
+Install test dependencies and run focused checks:
 
 ```powershell
-.\Start-App.ps1 -Mode Demo -Install
-# In a second PowerShell terminal:
 .\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
-.\.venv\Scripts\python.exe -m pytest -q tests/test_role_based_invites.py tests/test_zip_dataset.py tests/test_job_design.py
+.\.venv\Scripts\python.exe -m pytest -q tests/test_role_based_invites.py tests/test_registration.py tests/test_auth.py tests/test_event_reset.py tests/test_launch.py
 ```
 
-These commands do **not** verify that your live instance accepts the
-invitation routes, that Reviewer-role users can label a pair-shared job, or
-that unfinished native sequential release works. Test real invited
-accounts separately before event deployment.
-
-Do not run tests against a production PostgreSQL database: the fixture
-drops/recreates its test schema if `TEST_DATABASE_URL` is set.
-Do not commit personal API tokens, production attendee lists or private
-annotation exports.
-
-`Start-App.ps1 -Mode Event` runs the local event command, whereas
-`python -m monitoring.run --production` requires a hosted authenticated
-multi-user context and PostgreSQL; the latter is not a production-ready
-single-team event release yet.
+Tests use local fixtures. Do not set `TEST_DATABASE_URL` to a live event database;
+the test fixture recreates that schema. Real-account validation is required
+before relying on native job activation or stopping for an event.

@@ -42,19 +42,29 @@ class Service:
     def snapshot(self, user_id, organiser=False):
         with self.sessions() as s:
             teams = list(s.scalars((select(Team) if organiser else select(Team).where(Team.monitor_id == user_id)).order_by(Team.name)))
+            from collections import defaultdict
+            from .db import EventClosure, Submission, TaskProgress
+            team_ids = [t.id for t in teams]
+            visible_batches = select(Batch.id).where(Batch.team_id.in_(team_ids))
+            batches_by_team, reviews_by_batch = defaultdict(list), defaultdict(list)
+            for batch in s.scalars(select(Batch).where(Batch.team_id.in_(team_ids)).order_by(Batch.position)):
+                batches_by_team[batch.team_id].append(batch)
+            for review in s.scalars(select(Review).where(Review.batch_id.in_(visible_batches)).order_by(Review.updated_at.desc())):
+                reviews_by_batch[review.batch_id].append(review)
+            jobs = {row.job_id:row.details for row in s.scalars(select(TaskProgress).where(TaskProgress.batch_id.in_(visible_batches)))}
+            closed = s.get(EventClosure, 1) is not None
+            captured = set(s.scalars(select(Submission.batch_id).where(Submission.batch_id.in_(visible_batches)).distinct())) if closed else set()
             result = []
             for team in teams:
-                batches = list(s.scalars(select(Batch).where(Batch.team_id == team.id).order_by(Batch.position)))
+                batches = batches_by_team[team.id]
                 entries = []
-                from .db import EventClosure, Submission
-                closed = s.get(EventClosure, 1) is not None
                 for b in batches:
                     statuses = b.remote_status.split(',')
                     submitted = (b.state not in ('locked', 'releasing') and bool(statuses)
                         and all(v in ('on_review', 'completed', 'review_completed') for v in statuses))
-                    if closed and s.scalar(select(Submission.id).where(Submission.batch_id == b.id).limit(1)):
+                    if closed and b.id in captured:
                         submitted = True
-                    reviews = list(s.scalars(select(Review).where(Review.batch_id == b.id).order_by(Review.updated_at.desc())))
+                    reviews = reviews_by_batch[b.id]
                     entries.append({
                         'id': b.id, 'position': b.position, 'kind': b.kind, 'state': b.state,
                         'job_ids': b.job_ids, 'remote_status': b.remote_status,
@@ -67,16 +77,11 @@ class Service:
                                      'decision': r.decision, 'note': r.note, 'monitor_id': r.monitor_id,
                                      'updated_at': r.updated_at} for r in reviews],
                         'open_flags': sum(r.decision == 'correction' for r in reviews),
-                        'jobs': self._jobs(s, b),
+                        'jobs': [jobs[jid] for jid in b.job_ids if jid in jobs],
                     })
                 result.append({'id': team.id, 'name': team.name, 'monitor_id': team.monitor_id, 'revision': team.revision,
                                'annotator_ids': team.annotator_ids, 'batches': entries})
             return {'teams': result, 'refreshed_at': now(), 'user_id': user_id, 'organiser_view': organiser}
-
-    @staticmethod
-    def _jobs(session, batch):
-        from .db import TaskProgress
-        return [row.details for row in session.scalars(select(TaskProgress).where(TaskProgress.job_id.in_(batch.job_ids)))]
 
     def spec(self, user_id, team_id, batch_id, organiser=False):
         with self.sessions() as s:

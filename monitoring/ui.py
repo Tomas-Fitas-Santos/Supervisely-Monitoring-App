@@ -3,12 +3,14 @@ import os
 import json
 import threading
 from dataclasses import replace
+from functools import wraps
 from pathlib import Path
 
 import supervisely as sly
 from fastapi import Request
 from starlette.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
+from starlette.middleware.gzip import GZipMiddleware
 from sqlalchemy import select, update
 
 from . import controller
@@ -25,6 +27,7 @@ from .registration import Registrations
 from .event_settings import EventSettings, single_team
 from .shared_invitations import SharedTeamInvitations
 from .job_design import PreparedJobs
+from .request_api import RequestApi
 
 sly.env.enable_multiuser_app_mode()
 settings = Settings.load()
@@ -36,6 +39,7 @@ connection = LocalConnection(sessions, settings.home)
 connection_lock = threading.Lock()
 dashboard = Dashboard()
 app = sly.Application(layout=dashboard, static_dir=str(Path(__file__).parent / 'static'))
+app.get_server().add_middleware(GZipMiddleware, minimum_size=2048, compresslevel=4)
 log = logging.getLogger(__name__)
 
 
@@ -48,10 +52,7 @@ def health():
             session.execute(text('SELECT 1'))
     except Exception:
         return JSONResponse({'status': 'unavailable'}, status_code=503)
-    mode = ('simulator' if os.getenv('MONITORING_SIMULATOR') == '1' else
-            'demo' if os.getenv('MONITORING_LIVE_DEMO') == '1' and settings.local else
-            'pilot' if os.getenv('MONITORING_PILOT') == '1' and settings.local else
-            'local' if settings.local else 'production')
+    mode = 'local' if settings.local else 'production'
     return {'status': 'ok', 'mode': mode}
 
 
@@ -112,13 +113,7 @@ def identity(request):
     elif settings.local:
         if request.client.host not in ('127.0.0.1', '::1', 'testclient'):
             raise WorkflowError('Local development is only available on loopback.')
-        api = connection.api()
-        if api is None and config.owner_id is None and os.getenv('API_TOKEN'):
-            api = sly.Api.from_env()  # Compatibility with existing configured pilots.
-        if api is None:
-            if config.owner_id is None and os.getenv('LOCAL_USER_ID'):
-                return int(os.environ['LOCAL_USER_ID']), None
-            raise WorkflowError('Connect your Supervisely account to start the event.')
+        api, session_uid = connection.session_api(request.cookies.get('nightjar_session'))
     else:
         api = getattr(request.state, 'api', None)
         uid = sly.env.user_from_multiuser_app()
@@ -127,12 +122,15 @@ def identity(request):
     if external:
         # First external login may initialise the organiser binding.
         config = event_config()
+    api = RequestApi(api)
     expected_server = config.server_address or settings.server_address
     if api.server_address.rstrip('/') != expected_server:
         raise WorkflowError('The session belongs to a different Supervisely server.')
     profile = api.user.get_my_info()
     if settings.local:
         uid = int(profile.id)
+        if uid != session_uid:
+            raise WorkflowError('Your Supervisely account changed. Sign in again.')
     elif not external and int(profile.id) != int(uid):
         raise WorkflowError('Session identity and API credential do not match.')
     uid = int(uid)
@@ -153,7 +151,7 @@ def identity(request):
             roster_member = s.get(EventMember, uid)
             if roster_member and roster_member.group == 'annotators':
                 raise WorkflowError("Annotators use the Supervisely web app. Only the Monitors group can use this app.")
-            if (uid != config.owner_id and member.role != 'admin'
+            if (uid != config.owner_id
                     and (not roster_member or roster_member.group != 'monitors')):
                 raise WorkflowError("You are not in this event's Monitors group.")
     elif config.owner_id is not None:
@@ -178,17 +176,10 @@ def identity(request):
     return uid, gateway
 
 
-def connection_view(connected=False):
+def connection_view(connected=False, uid=None, login=None):
     config = event_config()
-    from .pilot import accounts
-    with sessions() as session:
-        from .db import EventPreferences
-        prefs = session.get(EventPreferences, 1)
-        active_login = prefs.active_local_login if prefs and prefs.active_local_login else config.owner_login
-        active_uid = prefs.active_local_user_id if prefs and prefs.active_local_user_id else config.owner_id
     return {'local': settings.local, 'connected': connected, 'server_address': config.server_address or settings.server_address,
-            'login': active_login or '', 'user_id': active_uid, 'groups_ready': bool(config.monitoring_team_id and config.annotator_team_id),
-            'pilot_email': accounts()['organiser_email'] if os.getenv('MONITORING_PILOT') == '1' else ''}
+            'login': (login or '') if connected else '', 'user_id': uid if connected else None, 'groups_ready': bool(config.monitoring_team_id and config.annotator_team_id)}
 
 
 def display_access(uid, gateway):
@@ -202,20 +193,23 @@ def display_access(uid, gateway):
             pass
     data = DataJson()['dashboard']
     data.update(can_setup=can_setup, connected=gateway is not None,
-                directory=setup.directory() if gateway else {}, connection=connection_view(gateway is not None),
+                directory=setup.directory() if gateway else {}, connection=connection_view(gateway is not None, uid, gateway.api.user.get_my_info().login if gateway else None),
                 event_settings=EventSettings(sessions).snapshot(uid))
     from .attendance import EventRoster
     from .event_logistics import EventLogistics
     from .event_people import EventPeople
+    try:
+        reception_view = EventLogistics(sessions).overview(uid, organiser=can_setup)
+    except WorkflowError:
+        reception_view = {'teams': [], 'summary': {}}
     data.update(roster_profiles=EventPeople(sessions).overview() if can_setup else [],
-                logistics=EventLogistics(sessions).overview(uid, organiser=can_setup),
+                logistics=reception_view,
                 competition=Competition(sessions).config(),
                 leaderboard=Competition(sessions).leaderboard() if gateway else [],
                 registration_rows=Registrations(sessions).rows() if can_setup else [],
+                registration_people=SharedTeamInvitations(sessions).people() if can_setup else [],
                 attendance=EventRoster(sessions).overview(uid, can_setup),
-                prepared_jobs=PreparedJobs(sessions).overview(uid, organiser=can_setup),
-                simulator=os.getenv('MONITORING_SIMULATOR') == '1',
-                pilot=os.getenv('MONITORING_PILOT') == '1' and settings.local)
+                prepared_jobs=PreparedJobs(sessions).overview(uid, organiser=can_setup))
     if can_setup and single_team(event_config()):
         native = SharedTeamInvitations(sessions).summary()
         for row in data['registration_rows']:
@@ -231,6 +225,10 @@ def display_access(uid, gateway):
     from .db import EventClosure
     with sessions() as s:
         from .db import Simulation
+        from .db import Audit
+        last_reset = s.scalar(select(Audit).where(Audit.action == 'event_reset').order_by(Audit.id.desc()).limit(1))
+        data['reset_version'] = last_reset.id if last_reset else 0
+        data['reset_backup_id'] = last_reset.details.get('backup_id') if last_reset and can_setup else None
         simulation = s.get(Simulation, 1)
         data['simulator_roster_outdated'] = bool(simulation and simulation.data.get('fixture_version') != 2)
         data['closed'] = s.get(EventClosure, 1) is not None
@@ -260,14 +258,13 @@ def clear_access():
     DataJson()['dashboard'].update(setup={}, catalog={}, can_setup=False, plan_id=None, preview=None,
                                    assignment_plan_id=None, assignment_preview=[],
                                    directory={}, sources={}, connected=False, review_preview=None,
-                                   registration_rows=[], event_settings={}, attendance={'teams': [], 'monitors': [], 'summary': {}},
+                                   registration_rows=[], registration_people=[], event_settings={}, attendance={'teams': [], 'monitors': [], 'summary': {}},
                                    logistics={'teams': [], 'summary': {}},
                                    roster_profiles=[], roster_import_result=None,
                                    roster_plan_id=None, roster_balance_preview=None,
                                    prepared_jobs=[], media_preview=None, job_plan_id=None, job_preview=None,
                                    unit_page={}, leaderboard=[], export_data=None,
-                                   simulator=os.getenv('MONITORING_SIMULATOR') == '1',
-                                   pilot=os.getenv('MONITORING_PILOT') == '1' and settings.local,
+                                   reset_plan_id=None, reset_preview=None, reset_backup_id=None,
                                    connection=connection_view(False))
 
 
@@ -289,9 +286,8 @@ def local_connect(values):
         else:
             candidate = connection
             url, new_engine, new_sessions = settings.database_url, engine, sessions
-        api, user = candidate.save(values.get('server'), values.get('token'),
-                                   settings.monitoring_team_id if not synthetic else None,
-                                   expected_user_id=values.get('user_id'))
+        secret, user = candidate.login(values.get('server'), values.get('token'),
+                                   values.get('user_id'), settings.monitoring_team_id if not synthetic else None)
         if synthetic:
             settings = replace(settings, database_url=url, monitoring_team_id=0)
             engine, sessions = new_engine, new_sessions
@@ -302,7 +298,7 @@ def local_connect(values):
             temp = settings.home / 'settings.pending'
             temp.write_text(json.dumps({'database_url': url}))
             temp.replace(preferences)
-        return {'ok': True, 'login': user.login}
+        return secret, {'ok': True, 'login': user.login}
 
 
 @app.get_server().post('/connection')
@@ -315,11 +311,28 @@ async def connect(request: Request):
         return JSONResponse({'ok': False, 'message': 'Open the connection screen on this app.'}, status_code=403)
     try:
         values = await request.json()
-        return await run_in_threadpool(local_connect, values)
+        secret, result = await run_in_threadpool(local_connect, values)
+        connection.logout(request.cookies.get('nightjar_session'))
+        response = JSONResponse(result)
+        response.set_cookie('nightjar_session', secret, httponly=True,
+                            secure=request.url.scheme == 'https', samesite='strict', max_age=43200)
+        response.headers['Cache-Control'] = 'no-store'
+        return response
     except WorkflowError as exc:
         return JSONResponse({'ok': False, 'message': str(exc)}, status_code=400)
     except Exception:
         return JSONResponse({'ok': False, 'message': 'Could not save the connection. Check your server and token.'}, status_code=400)
+
+
+@app.get_server().post('/logout')
+def logout(request: Request):
+    if not settings.local:
+        return JSONResponse({'ok': False}, status_code=403)
+    connection.logout(request.cookies.get('nightjar_session'))
+    response = JSONResponse({'ok': True})
+    response.delete_cookie('nightjar_session')
+    response.headers['Cache-Control'] = 'no-store'
+    return response
 
 
 def request_form(request):
@@ -328,6 +341,19 @@ def request_form(request):
     if not isinstance(state, dict) or not isinstance(state.get('dashboard'), dict):
         raise WorkflowError('Missing dashboard request state. Reload the app and try again.')
     return dict(state['dashboard'])
+
+
+def with_dashboard_view(handler):
+    """Return the current user's model with the action, avoiding a second HTTP call."""
+    @wraps(handler)
+    def respond(request: Request):
+        result = handler(request)
+        if getattr(request, 'headers', {}).get('x-nightjar-view') != '1':
+            return result
+        from supervisely.app import DataJson
+        view = DataJson()['dashboard']
+        return {**(result or {'ok': not view.get('error', False)}), 'dashboard': view}
+    return respond
 
 
 def refresh_access_after_error(uid, gateway):
@@ -341,6 +367,7 @@ def refresh_access_after_error(uid, gateway):
 
 
 @app.get_server().post('/dashboard/action')
+@with_dashboard_view
 def action(request: Request):
     uid = None
     gateway = None
@@ -456,6 +483,7 @@ def action(request: Request):
 
 
 @app.get_server().post('/settings/action')
+@with_dashboard_view
 def settings_action(request: Request):
     """Verify existing native resources and account IDs, without creating them."""
     from supervisely.app import DataJson
@@ -550,6 +578,7 @@ def logistics_action(request: Request):
 
 
 @app.get_server().post('/attendance/action')
+@with_dashboard_view
 def attendance_action(request: Request):
     """Authenticated and pair-scoped event-arrival check-in."""
     from supervisely.app import DataJson
@@ -592,6 +621,7 @@ def attendance_action(request: Request):
 
 
 @app.get_server().post('/setup/action')
+@with_dashboard_view
 def setup_action(request: Request):
     from supervisely.app import DataJson
     uid = None
@@ -601,11 +631,12 @@ def setup_action(request: Request):
         uid, gateway = identity(request)
         gateway = SetupGateway(gateway.api, sessions) if gateway else None
         f = request_form(request) if isinstance(getattr(getattr(request, 'state', None), 'state', None), dict) else {}
-        if f.get('setup_action') == 'overview':
+        if f.get('setup_action') in ('overview', 'sources'):
             if gateway is None:
                 raise WorkflowError('Connect to Supervisely to view event people and datasets.')
             display_access(uid, gateway)
-            DataJson()['dashboard']['sources'] = gateway.sources(setup.monitoring_team_id)
+            if f.get('setup_action') == 'sources':
+                DataJson()['dashboard']['sources'] = gateway.sources(setup.monitoring_team_id)
             dashboard.display(service.snapshot(uid), 'Event lists reloaded.')
             return {'ok': True}
         setup.authorize(gateway, uid)
@@ -625,9 +656,34 @@ def setup_action(request: Request):
         message = ''
         response = {'ok': True}
         data = DataJson()['dashboard']
+        if name == 'chunk':
+            offset = setup.stage(uid, f['upload_id'], f['filename'], f['size'], f['offset'], f['chunk'], f.get('relative_path'))
+            return {'ok': True, 'upload_offset': offset}
         if name == 'catalog':
             data['catalog'] = gateway.catalog(setup.monitoring_team_id)
             message = 'Live Supervisely users and datasets loaded.'
+        elif name == 'reset_preview':
+            from .reset import EventReset
+            pid, summary = EventReset(setup).preview(uid, f.get('reset_scope'))
+            data.update(reset_plan_id=pid, reset_preview=summary)
+            message = 'Review what will be cleared, then confirm the reset.'
+        elif name == 'reset_apply':
+            from .reset import EventReset
+            backup_id = EventReset(setup).apply(gateway, uid, f.get('reset_plan_id'))
+            data.update(reset_plan_id=None, reset_preview=None, reset_backup_id=backup_id,
+                        plan_id=None, preview=None, assignment_plan_id=None, assignment_preview=[],
+                        roster_plan_id=None, roster_balance_preview=None, job_plan_id=None, job_preview=None,
+                        media_preview=None, unit_page={}, review_preview=None, export_data=None,
+                        inventory=[], catalog={}, sources={})
+            message = 'Reset complete. Previous event records were backed up. Continue setup using the steps above.'
+        elif name == 'reset_backup':
+            from .db import ResetBackup
+            with sessions() as session:
+                backup = session.get(ResetBackup, str(f.get('reset_backup_id')))
+                if not backup:
+                    raise WorkflowError('The reset backup was not found.')
+                response['backup'] = {'scope': backup.scope, 'created_at': backup.created_at, 'tables': backup.data}
+            message = 'Reset backup ready to download.'
         elif name == 'rules':
             Competition(sessions).save_rules(uid, f['rules_revision'], f['rules'], f.get('freeze_rules') is True)
             message = 'Event rules frozen.' if f.get('freeze_rules') else 'Event rules saved.'
@@ -731,9 +787,31 @@ def setup_action(request: Request):
             message = ('Excel worksheet loaded for header mapping. '
                        'Validate and import the rows to save the roster.')
         elif name == 'registration_import':
-            count = Registrations(sessions).import_csv(uid, f['csv_text'], f['csv_mapping'])
-            message = f'{count} registration rows checked. Existing teams and invitation status were preserved.'
+            if f.get('csv_mapping') is not None:
+                count = Registrations(sessions).import_csv(uid, f['csv_text'], f['csv_mapping'])
+                message = f'{count} teams imported.'
+            else:
+                from .roster_import import import_roster
+                if f.get('xlsx_base64'):
+                    from .excel_import import roster_tables
+                    tables = roster_tables(f['xlsx_base64'])
+                else:
+                    tables = [('CSV', f.get('csv_text', ''))]
+                imported = import_roster(sessions, uid, tables)
+                response['imported'] = imported
+                message = (f"Imported {imported['monitors']} monitors, {imported['participants']} participants "
+                           f"and {imported['teams']} teams.")
+                if imported['missing_emails']:
+                    message += f" {imported['missing_emails']} people need an email before they can be invited."
+        elif name == 'registration_invite':
+            result = SharedTeamInvitations(sessions).invite(gateway, uid,
+                audience=f.get('invite_audience', 'everyone'), email=f.get('invite_email'))
+            response['invitations'] = result
+            message = (f"{result['invited']} invitations sent · {result['pending']} already pending · "
+                       f"{result['accepted']} already accepted · {result['failed']} need attention.")
         elif name == 'email_team':
+            if not single_team(event_config()):
+                raise WorkflowError('Configure the existing Supervisely team before importing or inviting a pair.')
             import csv
             import io
             from .registration import COLUMNS
@@ -924,8 +1002,6 @@ def setup_action(request: Request):
         elif name == 'unassign':
             setup.unassign_monitor(uid, key, f['setup_team_id'], f['setup_revision'], f['expected_monitor_id'])
             message = 'Team removed from this monitor. It is now unassigned.'
-        elif name == 'chunk':
-            data['upload_offset'] = setup.stage(uid, f['upload_id'], f['filename'], f['size'], f['offset'], f['chunk'], f.get('relative_path'))
         elif name == 'upload':
             result = setup.upload(gateway, uid, key, f['upload_ids'], f['workspace_id'], f['name'], f['kind'], f.get('meta'))
             data['catalog'] = gateway.catalog(setup.monitoring_team_id)
@@ -947,10 +1023,8 @@ def setup_action(request: Request):
             message = 'Inspection recorded. Setup is unblocked; this operation will not be retried.'
         elif name != 'refresh':
             raise WorkflowError('Unknown setup action.')
-        data.update(setup=setup.snapshot(), directory=setup.directory(), connected=True,
-                    can_setup=True, connection=connection_view(True))
         display_access(uid, gateway)
-        if name in ('groups', 'upload', 'structured_upload', 'catalog', 'distribute', 'demo_sources', 'demo_prepare', 'demo_setup'):
+        if name in ('groups', 'upload', 'structured_upload', 'catalog', 'distribute', 'demo_sources', 'demo_prepare', 'demo_setup', 'reset_apply') and setup.groups()['ready']:
             data['sources'] = gateway.sources(setup.monitoring_team_id)
         dashboard.display(service.snapshot(uid), message)
         return response

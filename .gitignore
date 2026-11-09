@@ -15,3 +15,4 @@ Nightjar_Annnotations/
 # External hosting credentials
 .env.external
 .env.external.*.local
+/docs/Annotatiathon_OFFICIAL_Roster.xlsx
