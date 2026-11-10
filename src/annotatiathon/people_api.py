@@ -1,4 +1,4 @@
-"""Roster and team management. No Supervisely request runs in these endpoints."""
+"""Roster and team management, including verified joined-member role synchronization."""
 import csv
 import hashlib
 import io
@@ -7,12 +7,13 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from .auth import AuthContext, normalized_email, requires
 from .db import get_db
 from .events_api import current_event
+from .supervisely_client import NativeAPIError, change_member_role
 from .models import (
     AuditEvent,
     CompetitionTeam,
@@ -20,6 +21,9 @@ from .models import (
     MonitorAssignment,
     MonitorPairMember,
     Person,
+    StaffAccount,
+    StaffSession,
+    SuperviselyConfig,
 )
 
 router = APIRouter(prefix="/api/v1", tags=["people"])
@@ -264,6 +268,68 @@ def create_person(
     return person_record(person, payload.team_name)
 
 
+def enforce_native_role(
+    db: Session, person: Person, desired_kind: str, *, reconcile: bool = False,
+) -> bool:
+    """Synchronize a joined member before changing their event role locally.
+
+    Returns whether a remote write was required. Nothing is silently changed
+    in Supervisely when a person has not joined yet.
+    """
+    if person.kind == desired_kind and not reconcile:
+        return False
+    if person.supervisely_user_id is None:
+        if person.membership_status == "joined":
+            raise HTTPException(
+                status_code=409,
+                detail="This joined member has no verified Supervisely ID. Refresh and link their account first.",
+            )
+        return False
+    config = db.get(SuperviselyConfig, 1)
+    if config is None or not config.team_id:
+        raise HTTPException(status_code=409, detail="Configure the Supervisely team before editing this member.")
+    target_role = "manager" if desired_kind == "monitor" else "annotator"
+    original = person.supervisely_role
+    if original == target_role and not reconcile:
+        return False
+    try:
+        updated = change_member_role(
+            config, user_id=person.supervisely_user_id,
+            target_role=target_role, expected_role=original,
+        )
+    except NativeAPIError as exc:
+        raise HTTPException(
+            status_code=409 if exc.code in {
+                "stale_role", "member_missing", "admin_protected", "role_unverified",
+            } else 502,
+            detail=str(exc),
+        ) from exc
+    person.supervisely_role = updated.role
+    person.supervisely_login = updated.login
+    return original != updated.role
+
+
+def align_staff_access(db: Session, person: Person) -> None:
+    """Participant role revokes monitoring access and existing sessions.
+
+    A re-promoted person may recover their former Nightjar staff account only
+    when it was disabled by this role conversion.
+    """
+    staff = db.scalar(select(StaffAccount).where(StaffAccount.email == person.email))
+    if staff is None or "organiser" in staff.roles:
+        return
+    fields = dict(person.source_fields or {})
+    if person.kind == "participant":
+        if "monitor" in staff.roles:
+            staff.active = False
+            fields["nightjar_disabled_for_role"] = True
+            db.execute(delete(StaffSession).where(StaffSession.staff_id == staff.id))
+    elif fields.pop("nightjar_disabled_for_role", False):
+        if "monitor" in staff.roles:
+            staff.active = True
+    person.source_fields = fields
+
+
 @router.patch("/people/{person_id}")
 def update_person(
     person_id: str, payload: PersonUpdate,
@@ -271,15 +337,33 @@ def update_person(
     db: Session = Depends(get_db),
 ):
     event = current_event(db, ctx, writable=True)
-    person = db.get(Person, person_id)
-    if person is None or person.event_id != event.id:
+    person = db.scalar(select(Person).where(
+        Person.id == person_id, Person.event_id == event.id,
+    ).with_for_update())
+    if person is None:
         raise HTTPException(status_code=404, detail="Person not found.")
     fields = payload.model_fields_set
+    desired_kind = payload.kind if "kind" in fields and payload.kind else person.kind
+    if desired_kind != person.kind:
+        privileged = db.scalar(select(StaffAccount).where(
+            StaffAccount.email == person.email,
+        ))
+        if privileged is not None and "organiser" in privileged.roles:
+            raise HTTPException(
+                status_code=409, detail="The organiser account must retain its admin/monitor role.",
+            )
     if "email" in fields and payload.email is not None and payload.email != person.email:
+        if person.supervisely_user_id is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="Cannot change a verified Supervisely identity's email. Unlink it first.",
+            )
         if db.scalar(select(Person).where(
             Person.email == payload.email, Person.event_id == event.id
         )):
             raise HTTPException(status_code=409, detail="This email already exists.")
+    native_changed = enforce_native_role(db, person, desired_kind)
+    if "email" in fields and payload.email is not None:
         person.email = payload.email
     if "name" in fields and payload.name is not None:
         person.name = payload.name.strip()
@@ -293,10 +377,35 @@ def update_person(
         )
     if "active" in fields and payload.active is not None:
         person.active = payload.active
-    audit(db, ctx.staff.id, event.id, "person.update", person.id, {"fields": sorted(fields)})
+    align_staff_access(db, person)
+    audit(db, ctx.staff.id, event.id, "person.update", person.id, {
+        "fields": sorted(fields), "supervisely_role_updated": native_changed,
+        "native_user_id": person.supervisely_user_id,
+    })
     db.commit()
     team = db.get(CompetitionTeam, person.team_id) if person.team_id else None
     return person_record(person, team.name if team else None)
+
+
+@router.post("/people/{person_id}/supervisely-role")
+def sync_person_supervisely_role(
+    person_id: str,
+    ctx: AuthContext = Depends(requires("organiser", mutation=True)),
+    db: Session = Depends(get_db),
+):
+    event = current_event(db, ctx, writable=True)
+    person = db.scalar(select(Person).where(
+        Person.id == person_id, Person.event_id == event.id,
+    ).with_for_update())
+    if person is None or not person.active:
+        raise HTTPException(status_code=404, detail="Active person not found.")
+    native_changed = enforce_native_role(db, person, person.kind, reconcile=True)
+    audit(db, ctx.staff.id, event.id, "person.supervisely.role.sync", person.id, {
+        "kind": person.kind, "supervisely_role_updated": native_changed,
+        "native_user_id": person.supervisely_user_id,
+    })
+    db.commit()
+    return person_record(person)
 
 
 
@@ -385,6 +494,17 @@ def import_report(db: Session, rows: list[dict], apply: bool, actor: str,
         CompetitionTeam.event_id == event_id
     ))}
     created = changed = unchanged = 0
+    # CSV imports must not silently diverge from a joined Supervisely role.
+    # Per-person edits provide an atomic verified native role transition.
+    for row in rows:
+        existing_person = existing.get(row["email"])
+        if (existing_person is not None and existing_person.kind != row["kind"]
+                and (existing_person.supervisely_user_id is not None
+                     or existing_person.membership_status == "joined")):
+            raise ValueError(
+                "CSV changes a joined person's role. Edit that person's role "
+                "individually to synchronize Supervisely first."
+            )
     for row in rows:
         found = existing.get(row["email"])
         desired = row["team_name"]
