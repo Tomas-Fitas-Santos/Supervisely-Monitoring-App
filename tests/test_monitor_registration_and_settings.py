@@ -269,7 +269,7 @@ def test_auto_sync_imports_participant_and_monitor_then_organiser_can_approve(
 
 
 def test_organiser_can_revoke_signup_for_approved_monitor(setup):
-    http, maker, sent = setup
+    http, _maker, sent = setup
     csrf = login(http)
     added = http.post("/api/v1/people",headers={"X-CSRF-Token": csrf},
         json={"name": "Roster Monitor", "email": "roster@example.org",
