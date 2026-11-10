@@ -64,14 +64,22 @@ jobs:
           Path(".env.live").write_text(source)
           Path(".nightjar-live-data").mkdir(exist_ok=True)
           PY
+      - name: Prepare disposable CI-only Nginx gate credentials
+        run: |
+          mkdir -p .nightjar-live-auth
+          docker run --rm --mount "type=bind,source=$PWD/.nightjar-live-auth,target=/auth" httpd:2.4-alpine \
+            /usr/local/apache2/bin/htpasswd -cbm /auth/.htpasswd nightjar-gate ci_gate_only_for_tests
       - name: Validate live-test Compose configuration
         run: docker compose --env-file .env.live -f compose.live.yaml config --quiet
       - name: Build and start live-test web, API, migration, and database
         run: docker compose --env-file .env.live -f compose.live.yaml up -d --build web
       - name: Verify live-test reverse proxy, frontend, and database readiness
         run: |
-          curl --fail --silent --show-error --retry 15 --retry-delay 3 http://127.0.0.1:8080/health/ready
-          curl --fail --silent --show-error http://127.0.0.1:8080/ | grep -qi '<html'
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/)" = "401"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -d '{}' http://127.0.0.1:8080/api/v1/auth/login)" = "401"
+          curl --user nightjar-gate:ci_gate_only_for_tests --fail --silent --show-error --retry 15 --retry-delay 3 http://127.0.0.1:8080/health/ready
+          curl --user nightjar-gate:ci_gate_only_for_tests --fail --silent --show-error http://127.0.0.1:8080/ | grep -qi '<html'
+          test "$(curl --user nightjar-gate:ci_gate_only_for_tests -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -d '{}' http://127.0.0.1:8080/api/v1/auth/login)" = "422"
           docker compose --env-file .env.live -f compose.live.yaml exec -T api python -c "from pathlib import Path; p=Path('/data/.test-writable'); p.write_text('ok'); p.unlink()"
       - name: Build real Supervisely SDK worker image
         run: docker compose --env-file .env.live -f compose.live.yaml --profile native build worker
