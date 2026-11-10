@@ -28,6 +28,7 @@ from sqlalchemy.orm import Session
 
 from .annotation_schema import AnnotationSchemaError, ensure_project_annotation_classes
 from .db import session_factory
+from .events_api import seed_categories
 from .full_reset_api import clear_event_data, safe_dataset_paths
 from .models import (
     AuditEvent,
@@ -828,6 +829,8 @@ def process_event_reset(db: Session, api, config: SuperviselyConfig) -> dict | N
         if locked is None or locked.status != "resetting":
             raise NativeWorkerError("reset_event_identity_changed")
         clear_event_data(db, event_id)
+        # Keep the restored event usable immediately for the ticket desk.
+        seed_categories(db, event_id)
         # Other operations are now obsolete and must not resume.
         db.query(NativeOperation).filter(
             NativeOperation.event_id == event_id,
