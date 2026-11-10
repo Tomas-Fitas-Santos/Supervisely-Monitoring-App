@@ -63,9 +63,11 @@ export function refreshSuperviselyRoster(
   if (!force && Date.now() - lastMembershipRefresh < 60_000) {
     return Promise.resolve(null);
   }
-  lastMembershipRefresh = Date.now();
   membershipRefreshPending = api<SuperviselyRefresh>(
     "/people/supervisely/refresh", "POST", undefined, csrfToken
-  );
+  ).then(result => {
+    lastMembershipRefresh = Date.now();
+    return result;
+  });
   return membershipRefreshPending.finally(() => { membershipRefreshPending = null; });
 }
