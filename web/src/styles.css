@@ -117,3 +117,13 @@ input,select{border:1px solid #dfe5ed;border-radius:9px;background:white;padding
 .coverage-matrix th:first-child{background:#f3f6f8;z-index:2}
 .coverage-matrix th:not(:first-child){white-space:normal;min-width:86px;max-width:142px}
 .coverage-matrix td:not(:first-child){text-align:right;font-variant-numeric:tabular-nums}
+
+.dataset-recovery-actions{display:flex;align-items:center;flex-wrap:wrap;gap:9px;margin-top:14px}
+.dataset-status.interrupted,.dataset-status.failed{background:#fff0e7;color:#9c5925}
+.dataset-status.uploading,.dataset-status.validating{background:#e9f2fc;color:#3b638c}
+
+.annotation-inspector{margin-top:12px;margin-bottom:14px;padding:13px;border:1px solid #dce8e4;border-radius:10px;background:#fafdfb}
+.annotation-inspector strong{display:block;margin-bottom:6px;font-size:12px}
+.annotation-inspector details{margin-top:8px}
+.annotation-inspector summary{font-size:12px;font-weight:700;color:#2c635d;cursor:pointer}
+.annotation-inspector pre{margin:10px 0 0;padding:12px;max-height:280px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;border-radius:7px;background:#f0f4f5;font-size:11px}

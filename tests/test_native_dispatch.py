@@ -297,6 +297,13 @@ def test_initial_release_and_next_after_both_submit(configured):
         ))
         media_id = first_job.media_ids[0]
         first_id = first_job.id
+    snapshot = http.get("/api/v1/review/jobs/"+first_id+"/annotations/"+media_id)
+    assert snapshot.status_code == 200, snapshot.text
+    assert snapshot.json()["source_media_id"] == media_id
+    assert snapshot.json()["annotation"]["labels"][0]["class"] == "bird"
+    assert snapshot.json()["native_image_id"] in {
+        image.id for image in sdk.images[sdk.datasets[0].id]
+    }
     review = http.put("/api/v1/review/jobs/"+first_id+"/frames", json={
         "media_id": media_id, "verdict": "good", "correct_keypoints": 1,
     }, headers={"X-CSRF-Token": csrf})

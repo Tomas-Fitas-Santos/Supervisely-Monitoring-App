@@ -15,7 +15,10 @@ dataset. Its media is isolated from every *other pair job*. The SDK does not
 promise simultaneous collaborative editing; that behavior requires live proof.
 """
 import argparse
+import json
 import logging
+import os
+import shutil
 import time
 from collections import defaultdict
 from pathlib import Path, PurePosixPath
@@ -321,6 +324,89 @@ def sync_one(db: Session, api, job: LabelingJob) -> str:
     return job.status
 
 
+def capture_job_annotations(db: Session, api, job: LabelingJob) -> bool:
+    """Copy *only annotation JSON* next to immutable local source media.
+
+    Each source asset can have many independent pair-job annotation snapshots.
+    The correction round is part of the directory name so retries cannot
+    overwrite a previously reviewed revision. A manifest is published atomically.
+    """
+    if job.status not in {"on_review", "completed"}:
+        return False
+    dataset = db.get(MediaDataset, job.dataset_id)
+    if dataset is None or dataset.status != "ready":
+        raise NativeWorkerError("annotation_source_dataset_missing")
+    destination = (
+        Path(dataset.root_path) / "annotations" / job.id /
+        ("round-" + str(job.correction_round))
+    )
+    if (destination / "manifest.json").is_file():
+        return False
+    if destination.exists():
+        raise NativeWorkerError("annotation_snapshot_incomplete")
+    assets = {
+        item.id: item for item in db.scalars(select(MediaAsset).where(
+            MediaAsset.dataset_id == dataset.id,
+            MediaAsset.event_id == job.event_id,
+            MediaAsset.id.in_(job.media_ids),
+        ))
+    }
+    mappings = {
+        item.media_id: item for item in db.scalars(select(NativeMediaInstance).where(
+            NativeMediaInstance.job_id == job.id,
+            NativeMediaInstance.event_id == job.event_id,
+        ))
+    }
+    if len(assets) != len(job.media_ids) or set(mappings) != set(job.media_ids):
+        raise NativeWorkerError("annotation_media_mapping_incomplete")
+    if any(m.native_dataset_id != job.native_dataset_id for m in mappings.values()):
+        raise NativeWorkerError("annotation_dataset_mapping_changed")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_name(destination.name + ".partial")
+    if temporary.exists():
+        shutil.rmtree(temporary)
+    temporary.mkdir()
+    captured = epoch()
+    try:
+        rows = []
+        for media_id in job.media_ids:
+            asset = assets[media_id]
+            native = mappings[media_id]
+            annotation = api.annotation.download_json(native.native_image_id)
+            if not isinstance(annotation, dict):
+                raise NativeWorkerError("native_annotation_invalid")
+            row = {
+                "source_media_id": media_id,
+                "source_relative_path": asset.relative_path,
+                "source_sha256": asset.sha256,
+                "native_dataset_id": native.native_dataset_id,
+                "native_image_id": native.native_image_id,
+                "annotation": annotation,
+            }
+            with (temporary / (media_id + ".json")).open(
+                "w", encoding="utf-8"
+            ) as stream:
+                json.dump(row, stream, ensure_ascii=False, separators=(",", ":"))
+            rows.append({
+                "source_media_id": media_id,
+                "native_image_id": native.native_image_id,
+                "source_relative_path": asset.relative_path,
+            })
+        with (temporary / "manifest.json").open("w", encoding="utf-8") as stream:
+            json.dump({
+                "schema": "nightjar-annotation-snapshot-v1",
+                "event_id": job.event_id, "dataset_id": dataset.id,
+                "job_id": job.id, "correction_round": job.correction_round,
+                "captured_at": captured, "media": rows,
+                "annotation_state": "current_supervisely_snapshot",
+            }, stream, ensure_ascii=False, separators=(",", ":"))
+        os.replace(temporary, destination)
+    except BaseException:
+        shutil.rmtree(temporary, ignore_errors=True)
+        raise
+    return True
+
+
 def sync_all(db: Session, api, config: SuperviselyConfig) -> dict:
     event_plans = list(db.scalars(select(LabelingPlan).where(
         LabelingPlan.status.in_(["running", "paused"]),
@@ -352,7 +438,32 @@ def sync_all(db: Session, api, config: SuperviselyConfig) -> dict:
                 if queue_publish(db, next_job).status == "pending":
                     queued += 1
             db.commit()
-    return {"changed_jobs": changed, "pending_operations": queued}
+    # Read-only annotation sync is recoverable without new SQL queues:
+    # missing snapshots are retried on the next worker poll, even after review.
+    # Limit the work per poll so job-status and publishing checks remain responsive.
+    snapshots = 0
+    failures = 0
+    for plan in event_plans:
+        if snapshots >= 5:
+            break
+        candidates = list(db.scalars(select(LabelingJob).where(
+            LabelingJob.plan_id == plan.id,
+            LabelingJob.event_id == plan.event_id,
+            LabelingJob.status.in_(["on_review", "completed"]),
+        )))
+        for candidate in candidates:
+            if snapshots >= 5:
+                break
+            try:
+                if capture_job_annotations(db, api, candidate):
+                    snapshots += 1
+            except Exception:  # noqa: BLE001 - next poll retries read-only annotation fetch
+                failures += 1
+                logger.warning("Annotation snapshot pending retry for job %s", candidate.id)
+    return {
+        "changed_jobs": changed, "pending_operations": queued,
+        "annotation_snapshots": snapshots, "annotation_sync_errors": failures,
+    }
 
 
 def process_once(db: Session, api, config: SuperviselyConfig) -> dict | None:
@@ -630,7 +741,7 @@ def run_worker(*, once: bool, poll_seconds: int) -> None:
                 operation = process_once(db, api, config)
                 export = process_export_once(db, api)
                 sync_result = sync_all(db, api, config)
-                if correction or operation or export or sync_result["changed_jobs"]:
+                if correction or operation or export or sync_result["changed_jobs"] or sync_result["annotation_snapshots"]:
                     logger.info("Nightjar worker: correction=%s publish=%s export=%s sync=%s",
                                 correction, operation, export, sync_result)
             except Exception as exc:  # noqa: BLE001 - keep long-lived worker alive

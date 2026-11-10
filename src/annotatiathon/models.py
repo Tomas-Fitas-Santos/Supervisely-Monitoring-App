@@ -375,6 +375,7 @@ class MediaDataset(Base):
     created_by: Mapped[str] = mapped_column(ForeignKey("staff_accounts.id"))
     created_at: Mapped[int] = mapped_column(Integer, default=epoch)
     completed_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_activity_at: Mapped[int] = mapped_column(Integer, default=epoch)
     error_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
 

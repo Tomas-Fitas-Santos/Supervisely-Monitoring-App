@@ -1,4 +1,5 @@
 """Event-specific annotation review with auditable per-frame quality scores."""
+import json
 import mimetypes
 from collections import Counter
 from pathlib import Path
@@ -19,6 +20,7 @@ from .models import (
     JobReview,
     LabelingJob,
     MediaAsset,
+    MediaDataset,
     MonitorAssignment,
     NativeJobBinding,
     NativeOperation,
@@ -65,6 +67,40 @@ def verify_monitor(db: Session, ctx: AuthContext, job: LabelingJob) -> None:
     ))
     if link is None:
         raise HTTPException(status_code=403, detail="Team is assigned to another monitor.")
+
+
+@router.get("/jobs/{job_id}/annotations/{media_id}")
+def read_native_annotation(
+    job_id: str, media_id: str,
+    ctx: AuthContext = Depends(requires(*VIEWERS)),
+    db: Session = Depends(get_db),
+):
+    """Read the latest completed local annotation snapshot for an assigned frame."""
+    event = current_event(db, ctx)
+    job = get_job(db, event.id, job_id)
+    if "monitor" in ctx.staff.roles and "organiser" not in ctx.staff.roles:
+        verify_monitor(db, ctx, job)
+    if media_id not in job.media_ids:
+        raise HTTPException(status_code=404, detail="Frame not assigned to this job.")
+    ds = db.get(MediaDataset, job.dataset_id)
+    if ds is None or ds.event_id != event.id:
+        raise HTTPException(status_code=404, detail="Dataset not found.")
+    snapshot = (
+        Path(ds.root_path) / "annotations" / job.id /
+        ("round-" + str(job.correction_round))
+    )
+    # Manifest exists only after the full round has been published atomically.
+    if not (snapshot / "manifest.json").is_file():
+        raise HTTPException(
+            status_code=404, detail="Submitted annotations are still syncing."
+        )
+    file = snapshot / (media_id + ".json")
+    if not file.is_file():
+        raise HTTPException(status_code=404, detail="Frame annotation not yet available.")
+    try:
+        return json.loads(file.read_text(encoding="utf-8"))
+    except (ValueError, OSError) as exc:
+        raise HTTPException(status_code=409, detail="Local annotation snapshot is unreadable.") from exc
 
 
 class ReviewInput(BaseModel):

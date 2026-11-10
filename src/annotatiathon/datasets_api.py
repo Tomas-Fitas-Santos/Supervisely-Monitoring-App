@@ -11,7 +11,7 @@ from pathlib import Path, PurePosixPath
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from .auth import AuthContext, requires
@@ -21,6 +21,8 @@ from .events_api import current_event
 from .models import (
     AuditEvent,
     DatasetStagedFile,
+    LabelingJob,
+    LabelingPlan,
     MediaAsset,
     MediaDataset,
     epoch,
@@ -30,6 +32,7 @@ router = APIRouter(prefix="/api/v1/datasets", tags=["datasets"])
 VIEWERS = ("organiser", "monitor", "observer", "reception", "activity", "distribution")
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
 MAX_CHUNK_BYTES = 16 * 1024 * 1024
+STALE_UPLOAD_SECONDS = 300  # A browser cannot hold the source File after reload.
 
 
 class DatasetCreate(BaseModel):
@@ -39,14 +42,20 @@ class DatasetCreate(BaseModel):
 
 
 def dataset_view(ds: MediaDataset) -> dict:
+    # Display old/orphaned imports as interrupted even if the browser disappeared
+    # before it could explicitly stop the transfer. Never mutate in a GET.
+    status = ds.status
+    if status == "uploading" and epoch() - ds.last_activity_at >= STALE_UPLOAD_SECONDS:
+        status = "interrupted"
     return {
         "id": ds.id, "name": ds.name, "event_id": ds.event_id,
-        "upload_kind": ds.upload_kind, "status": ds.status,
+        "upload_kind": ds.upload_kind, "status": status,
         "source_bytes": ds.source_bytes, "image_count": ds.image_count,
         "frame_count": ds.frame_count, "video_count": ds.video_count,
         "native_project_id": ds.native_project_id,
         "native_dataset_id": ds.native_dataset_id,
         "created_at": ds.created_at, "completed_at": ds.completed_at,
+        "last_activity_at": ds.last_activity_at,
         "error_code": ds.error_code,
     }
 
@@ -103,7 +112,7 @@ def create_upload(
     root = Path(get_settings().local_data_dir).resolve() / event.id
     ds = MediaDataset(
         event_id=event.id, name=payload.name.strip(), upload_kind=payload.upload_kind,
-        root_path="", created_by=ctx.staff.id,
+        root_path="", created_by=ctx.staff.id, last_activity_at=epoch(),
     )
     db.add(ds)
     db.flush()
@@ -125,6 +134,7 @@ def create_upload(
 def upload_status(
     dataset_id: str,
     relative_path: str | None = Query(default=None, max_length=1024),
+    include_files: bool = Query(default=False),
     ctx: AuthContext = Depends(requires("organiser")),
     db: Session = Depends(get_db),
 ):
@@ -139,6 +149,11 @@ def upload_status(
               "complete_files": sum(
                   f.received_bytes == f.expected_bytes for f in files
               )}
+    if include_files:
+        result["file_progress"] = [{
+            "relative_path": f.relative_path,
+            "received_bytes": f.received_bytes, "expected_bytes": f.expected_bytes,
+        } for f in files]
     if relative_path:
         rel = str(safe_relative(relative_path))
         found = next((f for f in files if f.relative_path == rel), None)
@@ -147,6 +162,88 @@ def upload_status(
             "expected_bytes": found.expected_bytes,
         } if found else None)
     return result
+
+
+@router.post("/{dataset_id}/interrupt")
+def interrupt_upload(
+    dataset_id: str,
+    ctx: AuthContext = Depends(requires("organiser", mutation=True)),
+    db: Session = Depends(get_db),
+):
+    """Explicitly stop an incomplete transfer; existing chunks stay resumable."""
+    event = current_event(db, ctx, writable=True)
+    ds = get_dataset(db, event.id, dataset_id, lock=True)
+    if ds.status not in {"uploading", "interrupted"}:
+        raise HTTPException(status_code=409, detail="Only unfinished uploads can be interrupted.")
+    ds.status = "interrupted"
+    ds.error_code = "upload_interrupted"
+    db.commit()
+    return dataset_view(ds)
+
+
+@router.post("/{dataset_id}/resume")
+def resume_upload(
+    dataset_id: str,
+    ctx: AuthContext = Depends(requires("organiser", mutation=True)),
+    db: Session = Depends(get_db),
+):
+    """Resume using the original files reselected in the browser."""
+    event = current_event(db, ctx, writable=True)
+    ds = get_dataset(db, event.id, dataset_id, lock=True)
+    if ds.status == "uploading":
+        if epoch() - ds.last_activity_at < STALE_UPLOAD_SECONDS:
+            raise HTTPException(status_code=409, detail="Upload is still active.")
+    elif ds.status != "interrupted":
+        raise HTTPException(status_code=409, detail="Dataset cannot be resumed.")
+    ds.status = "uploading"
+    ds.error_code = None
+    ds.last_activity_at = epoch()
+    db.commit()
+    return dataset_view(ds)
+
+
+@router.delete("/{dataset_id}")
+def delete_incomplete_dataset(
+    dataset_id: str,
+    ctx: AuthContext = Depends(requires("organiser", mutation=True)),
+    db: Session = Depends(get_db),
+):
+    """Remove orphan upload rows and their staging directory; never touch native media."""
+    event = current_event(db, ctx, writable=True)
+    ds = get_dataset(db, event.id, dataset_id, lock=True)
+    if ds.status == "uploading" and epoch() - ds.last_activity_at < STALE_UPLOAD_SECONDS:
+        raise HTTPException(
+            status_code=409, detail="Stop the active upload before deleting it."
+        )
+    if ds.status not in {"uploading", "interrupted", "failed"}:
+        raise HTTPException(
+            status_code=409, detail="Only incomplete uploads can be deleted."
+        )
+    if ds.native_project_id is not None or ds.native_dataset_id is not None:
+        raise HTTPException(
+            status_code=409, detail="Dataset has Supervisely references and cannot be deleted."
+        )
+    if (db.scalar(select(LabelingPlan.id).where(LabelingPlan.dataset_id == ds.id))
+            or db.scalar(select(LabelingJob.id).where(LabelingJob.dataset_id == ds.id))
+            or db.scalar(select(MediaAsset.id).where(MediaAsset.dataset_id == ds.id))):
+        raise HTTPException(
+            status_code=409, detail="Dataset has dependent records and cannot be deleted."
+        )
+    expected = (Path(get_settings().local_data_dir).resolve() / event.id / ds.id)
+    if not ds.root_path or root_dir(ds) != expected or expected.is_symlink():
+        raise HTTPException(status_code=409, detail="Unsafe dataset directory; inspect manually.")
+    # Failure to delete files leaves the database record intact for a safe retry.
+    if expected.exists():
+        shutil.rmtree(expected)
+    db.execute(delete(DatasetStagedFile).where(DatasetStagedFile.dataset_id == ds.id))
+    db.delete(ds)
+    db.add(AuditEvent(
+        staff_id=ctx.staff.id, event_id=event.id, action="dataset.delete_incomplete",
+        target_type="media_dataset", target_id=dataset_id,
+        details={"name": ds.name, "source_bytes": ds.source_bytes},
+    ))
+    db.commit()
+    return {"deleted": True, "dataset_id": dataset_id}
 
 
 @router.put("/uploads/{dataset_id}/chunk")
@@ -214,6 +311,7 @@ async def receive_chunk(
         raise
     entry.received_bytes += written
     ds.source_bytes += written
+    ds.last_activity_at = epoch()
     if ds.source_bytes > settings.max_dataset_bytes:
         with target.open("r+b") as stream:
             stream.truncate(offset)

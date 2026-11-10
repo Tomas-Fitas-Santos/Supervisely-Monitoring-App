@@ -163,3 +163,31 @@ Disbanding deactivates the pair membership and team, and deactivates local
 monitor responsibility assignments. It does not delete people, native
 membership, annotation jobs or event audit history. For tests that generated
 jobs, create a new event rather than erasing provenance.
+
+## Dataset upload recovery and cleanup
+
+Dataset media are imported to the Nightjar private local disk before any
+Supervisely labeling job is published. Uploading never silently publishes
+media to Supervisely. The browser transfer coordinator runs outside the
+Dataset page component, so moving between Nightjar tabs does not cancel it.
+
+If the browser is reloaded, closed, or loses network access, the browser's
+`File` references are not retained. After five minutes without accepted
+chunks, an unfinished dataset displays as `interrupted`. Reselect the **same**
+ZIP or folder and click **Resume with selected files**; the uploader checks
+stored file paths, lengths and byte offsets to avoid re-sending accepted chunks.
+Resuming requires the original files; it cannot fabricate missing bytes.
+
+The organiser can **Stop upload** and **Delete incomplete dataset**. Delete
+removes the dataset row, its staged-file rows and its partial private directory,
+but refuses deletion of completed imports, imports with any planned jobs/media
+inventory, or imports with Supervisely IDs. It does not delete any remote
+Supervisely projects, datasets, images or annotations. Records from older
+browser sessions that remain `uploading` are treated as interrupted after
+the inactivity timeout.
+
+`0014_dataset_upload_recovery` adds `last_activity_at` to the SQL table;
+run Alembic migrations before starting the updated web API. Transfers continue
+when moving between pages of one open browser tab; guaranteed continuation
+after closing the browser would require a server-side source such as a
+server-local upload directory or a separate trusted desktop uploader.

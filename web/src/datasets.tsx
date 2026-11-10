@@ -2,27 +2,21 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type React from "react";
 import {
   AlertTriangle, Archive, CheckCircle2, CloudUpload, FileArchive,
-  FolderOpen, HardDrive, Layers3, RefreshCw
+  FolderOpen, HardDrive, Layers3, RefreshCw, RotateCcw, Trash2, PauseCircle
 } from "lucide-react";
 import { api, type Auth } from "./api";
+import { beginDatasetTransfer, clearDatasetTransfer, getDatasetTransfer,
+  validateDatasetSources,
+  stopDatasetTransfer, watchDatasetTransfer, type DatasetTransferState } from "./dataset_transfer";
 
 type Dataset={id:string;name:string;upload_kind:"zip"|"folder";
   status:string;source_bytes:number;image_count:number;frame_count:number;
-  video_count:number;created_at:number;error_code:string|null;
+  video_count:number;created_at:number;last_activity_at:number;error_code:string|null;
   native_project_id:number|null};
 type Morph={name:string;kind:string;count:number};
 type Summary={dataset:Dataset;morphologies:Morph[];total_assets:number};
-type UploadResponse={received_bytes:number;expected_bytes:number;complete:boolean};
-const CHUNK=8*1024*1024;
 const formatBytes=(n:number)=>n>=1e9?(n/1e9).toFixed(2)+" GB":n>=1e6?
   (n/1e6).toFixed(1)+" MB":(n/1000).toFixed(1)+" KB";
-const fileRelative=(file:File,kind:"zip"|"folder")=>kind==="zip"?"source.zip":
-  (file.webkitRelativePath||file.name).replaceAll("\\","/");
-const uploadError=async(response:Response)=>{
-  const body=await response.json().catch(()=>({}));
-  throw new Error(typeof body.detail==="string"?body.detail:
-    "Upload failed ("+response.status+")");
-};
 
 export function DatasetScreen({auth}:{auth:Auth}) {
   const admin=auth.staff.roles.includes("organiser");
@@ -33,8 +27,8 @@ export function DatasetScreen({auth}:{auth:Auth}) {
   const [name,setName]=useState("");
   const [files,setFiles]=useState<File[]>([]);
   const [busy,setBusy]=useState(false);
-  const [uploading,setUploading]=useState(false);
-  const [progress,setProgress]=useState({done:0,total:0,files:0,count:0});
+  const [transfer,setTransfer]=useState<DatasetTransferState|null>(getDatasetTransfer);
+  useEffect(()=>watchDatasetTransfer(setTransfer),[]);
   const [error,setError]=useState("");
   const [notice,setNotice]=useState("");
   const refresh=useCallback(async()=>{
@@ -45,6 +39,8 @@ export function DatasetScreen({auth}:{auth:Auth}) {
     }catch(e){setError((e as Error).message);}
   },[]);
   useEffect(()=>{void refresh();},[refresh]);
+  useEffect(()=>{if(transfer && !transfer.running)void refresh();},
+    [transfer?.datasetId,transfer?.phase,transfer?.running,refresh]);
   useEffect(()=>{
     if(!selected){setSummary(null);return;}
     const item=datasets.find(x=>x.id===selected);
@@ -59,59 +55,76 @@ export function DatasetScreen({auth}:{auth:Auth}) {
       if(m.kind==="image")row.images+=m.count;else row.frames+=m.count;
       return acc;
     },{})||{},[summary]);
-  async function transfer(ds:Dataset,chosen:File[]){
-    const total=chosen.reduce((sum,file)=>sum+file.size,0);
-    let done=0;
-    setProgress({done:0,total,files:0,count:chosen.length});
-    for(let index=0;index<chosen.length;index++){
-      const file=chosen[index];
-      const rel=fileRelative(file,ds.upload_kind);
-      if(!rel){throw new Error("One file lacks a dataset-relative path.");}
-      if(file.size===0){throw new Error("Empty files are not supported: "+rel);}
-      let offset=0;
-      const encoded=encodeURIComponent(rel);
-      while(offset<file.size){
-        const end=Math.min(offset+CHUNK,file.size);
-        const response=await fetch("/api/v1/datasets/uploads/"+ds.id+
-          "/chunk?relative_path="+encoded+"&offset="+offset+"&total="+file.size,{
-          method:"PUT",credentials:"same-origin",
-          headers:{"X-CSRF-Token":auth.csrf_token,"Content-Type":"application/octet-stream"},
-          body:file.slice(offset,end),
-        });
-        if(!response.ok)await uploadError(response);
-        const receipt=await response.json() as UploadResponse;
-        const delivered=receipt.received_bytes-offset;
-        if(delivered<=0)throw new Error("Server did not acknowledge chunk progress.");
-        offset=receipt.received_bytes;done+=delivered;
-        setProgress({done,total,files:index,count:chosen.length});
-      }
-      setProgress({done,total,files:index+1,count:chosen.length});
-    }
-  }
-  async function ingest(e:React.FormEvent){
+  async function ingest(e:React.FormEvent) {
     e.preventDefault();
     if(!files.length){setError("Choose a ZIP archive or dataset folder first.");return;}
-    setBusy(true);setUploading(true);setError("");setNotice("");
+    if(transfer?.running){setError("Another dataset transfer is already running.");return;}
+    setBusy(true);setError("");setNotice("");
     let created:Dataset|null=null;
-    try{
+    try {
+      validateDatasetSources(files,mode);
       created=await api<Dataset>("/datasets/uploads","POST",{
         name:name.trim()||files[0].name.replace(/\.zip$/i,""),
         upload_kind:mode
       },auth.csrf_token);
       setSelected(created.id);
-      await transfer(created,files);
-      const result=await api<Dataset>(
-        "/datasets/"+created.id+"/finalize","POST",undefined,auth.csrf_token
-      );
-      setNotice("Dataset validated and saved: "+result.image_count+" images and "+
-        result.frame_count+" video frames from "+result.video_count+" videos.");
+      beginDatasetTransfer({
+        datasetId:created.id,name:created.name,kind:mode,
+        files,csrf:auth.csrf_token,resume:false
+      });
+      setNotice("Transfer started. You can navigate to other Nightjar pages.");
       setFiles([]);setName("");
       await refresh();
-    }catch(e){
-      setError((e as Error).message+
-        (created?" The incomplete upload remains available in the database.":""));
+    }catch(e) {
+      setError((e as Error).message+(created?" The unfinished record can be removed below.":""));
       await refresh();
-    }finally{setBusy(false);setUploading(false);}
+    }finally{setBusy(false);}
+  }
+  async function resumeSelected() {
+    if(!dataset||!files.length)return;
+    if(dataset.upload_kind!==mode){
+      setError("Select the same upload format as the interrupted dataset.");return;
+    }
+    try {
+      setError("");setNotice("");
+      beginDatasetTransfer({
+        datasetId:dataset.id,name:dataset.name,kind:dataset.upload_kind,
+        files,csrf:auth.csrf_token,resume:true,
+      });
+      setFiles([]);
+      setNotice("Resuming original files from server-verified upload offsets.");
+    }catch(e){setError((e as Error).message);}
+  }
+  async function stopSelected() {
+    if(!dataset)return;
+    setBusy(true);setError("");
+    try {
+      await stopDatasetTransfer(dataset.id,auth.csrf_token);
+      setNotice("Upload stopped. Partial files can be resumed or deleted.");
+      await refresh();
+    }catch(e){setError((e as Error).message);}
+    finally{setBusy(false);}
+  }
+  async function deleteSelected() {
+    if(!dataset||dataset.status==="ready")return;
+    if(!window.confirm("Delete the incomplete dataset '"+dataset.name+
+      "' and all its partial local files? This cannot be undone."))return;
+    setBusy(true);setError("");setNotice("");
+    try {
+      if(transfer?.running && transfer.datasetId===dataset.id){
+        await stopDatasetTransfer(dataset.id,auth.csrf_token);
+      }
+      // Older browser sessions may have left the database row uploading.
+      if(dataset.status==="uploading"){
+        await api("/datasets/"+dataset.id+"/interrupt","POST",undefined,auth.csrf_token);
+      }
+      await api("/datasets/"+dataset.id,"DELETE",undefined,auth.csrf_token);
+      clearDatasetTransfer(dataset.id);
+      setSelected("");
+      setNotice("Incomplete dataset and its partial local files deleted.");
+      await refresh();
+    }catch(e){setError((e as Error).message);}
+    finally{setBusy(false);}
   }
   return <div className="page-body">
     <div className="page-heading"><div><span className="eyebrow">DATA · IMPORT & INVENTORY</span>
@@ -132,7 +145,7 @@ export function DatasetScreen({auth}:{auth:Auth}) {
     <div className="content-grid datasets-layout">
       {admin&&<section className="panel">
         <span className="eyebrow">PRIVATE LOCAL STORAGE</span><h3>Import dataset</h3>
-        <p className="muted small">Expected directory structure: dataset-name/images/morphology/images and dataset-name/videos/morphology/video-title/frames. A ZIP can wrap the dataset folder.</p>
+        <p className="muted small">Expected structure: dataset-name/images/morphology/image.jpg and dataset-name/videos/morphology/video-title/frame.jpg. A ZIP can wrap the dataset folder.</p>
         <form className="form-stack" onSubmit={e=>void ingest(e)}>
           <label>Dataset name<input maxLength={200} value={name} placeholder="BirdGaze 2026"
             onChange={e=>setName(e.target.value)}/></label>
@@ -154,11 +167,15 @@ export function DatasetScreen({auth}:{auth:Auth}) {
           <p className="muted small">{files.length} file(s) selected · {formatBytes(
             files.reduce((sum,f)=>sum+f.size,0)
           )}</p>
-          {uploading&&<div className="dataset-progress"><progress max={progress.total||1}
-              value={progress.done}/><span>{formatBytes(progress.done)} / {formatBytes(progress.total)}
-              · {progress.files}/{progress.count} files</span></div>}
-          <button className="btn primary" disabled={busy||!files.length}>
-            <CloudUpload size={16}/> {busy?"Uploading and validating…":"Upload & validate"}
+          {transfer?.running&&<div className="dataset-progress">
+            <strong className="small">{transfer.phase==="validating"?"Validating local media":
+              "Uploading "+transfer.name+" in this browser tab"}</strong>
+            <progress max={transfer.total||1} value={transfer.done}/>
+            <span>{formatBytes(transfer.done)} / {formatBytes(transfer.total)}
+              · {transfer.files}/{transfer.count} files · Safe to navigate within Nightjar</span>
+          </div>}
+          <button className="btn primary" disabled={busy||!files.length||Boolean(transfer?.running)}>
+            <CloudUpload size={16}/> {busy?"Preparing…":transfer?.running?"Transfer active…":"Upload & validate"}
           </button>
         </form>
         <div className="settings-note" style={{marginTop:16}}><AlertTriangle size={17}/>
@@ -177,6 +194,25 @@ export function DatasetScreen({auth}:{auth:Auth}) {
           <p className="muted small">{dataset.image_count} stand-alone images ·
             {dataset.frame_count} video frames · {dataset.video_count} atomic video groups</p>
           <p className="muted small">Local status: {dataset.status} · Native project: {dataset.native_project_id||"Not published"}</p>
+          {transfer?.datasetId===dataset.id&&transfer.error&&
+            <p className="alert danger" role="alert">{transfer.error}</p>}
+          {admin&&dataset.status!=="ready"&&<div className="dataset-recovery-actions">
+            {transfer?.datasetId===dataset.id&&transfer.running?
+              <button type="button" className="btn secondary" disabled={busy||transfer.phase==="validating"}
+                onClick={()=>void stopSelected()}><PauseCircle size={15}/> Stop upload</button>:
+              <>
+                <button type="button" className="btn secondary"
+                  disabled={busy||!files.length||Boolean(transfer?.running)}
+                  onClick={()=>void resumeSelected()}><RotateCcw size={15}/> Resume with selected files</button>
+                {dataset.status==="uploading"&&<button type="button" className="btn secondary"
+                  disabled={busy} onClick={()=>void stopSelected()}>
+                  <PauseCircle size={15}/> Mark interrupted</button>}
+              </>
+            }
+            <button type="button" className="btn danger-outline"
+              disabled={busy||Boolean(transfer?.running&&transfer.datasetId!==dataset.id)}
+              onClick={()=>void deleteSelected()}><Trash2 size={15}/> Delete incomplete dataset</button>
+          </div>}
         </div>}
       </section>
     </div>

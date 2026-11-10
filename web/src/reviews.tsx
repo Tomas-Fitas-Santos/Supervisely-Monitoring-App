@@ -15,6 +15,10 @@ type Review={id:string;media_id:string;verdict:"good"|"bad"|"incomplete";
   correct_keypoints:number;missing_keypoints:number;incorrect_keypoints:number;
   visible_keypoints:number;occluded_keypoints:number;
   temporal_consistency:boolean|null;notes:string;keypoint_score:number;reviewed_at:number};
+type AnnotationSnapshot={
+  source_media_id:string;source_relative_path:string;source_sha256:string;
+  native_dataset_id:number;native_image_id:number;annotation:Record<string,unknown>
+};
 type Reviews={count:number;keypoint_score:number;reviewed_frames:number;
   total_frames:number;items:Review[];status:string;review_status:string};
 
@@ -26,6 +30,7 @@ export function QualityScreen({auth}:{auth:Auth}) {
   const [reviews,setReviews]=useState<Reviews|null>(null);
   const [page,setPage]=useState(1);
   const [assetId,setAssetId]=useState("");
+  const [annotation,setAnnotation]=useState<AnnotationSnapshot|null>(null);
   const [verdict,setVerdict]=useState<"good"|"bad"|"incomplete">("good");
   const [correct,setCorrect]=useState(0);
   const [missing,setMissing]=useState(0);
@@ -66,6 +71,16 @@ export function QualityScreen({auth}:{auth:Auth}) {
   const selected=jobs.find(j=>j.id===jobId);
   const asset=media?.items.find(a=>a.id===assetId);
   const stored=reviews?.items.find(r=>r.media_id===assetId);
+  useEffect(()=>{
+    let valid=true;
+    setAnnotation(null);
+    if(jobId&&assetId){
+      void api<AnnotationSnapshot>("/review/jobs/"+jobId+"/annotations/"+assetId)
+        .then(result=>{if(valid)setAnnotation(result);})
+        .catch(()=>{if(valid)setAnnotation(null);});
+    }
+    return()=>{valid=false;};
+  },[jobId,assetId,selected?.correction_round]);
   useEffect(()=>{
     setVerdict(stored?.verdict||"good");
     setCorrect(stored?.correct_keypoints||0);
@@ -187,6 +202,18 @@ export function QualityScreen({auth}:{auth:Auth}) {
             <small>{asset.video_group||"Stand-alone image"}</small></div>
           <img className="review-preview" alt={"Bird frame "+asset.relative_path}
             src={"/api/v1/review/datasets/"+selected.dataset_id+"/assets/"+asset.id+"/image"}/>
+          <div className="annotation-inspector">
+            <strong>Supervisely annotation</strong>
+            {annotation?
+              <>
+                <p className="muted small">Synced to the local dataset · Native image #{annotation.native_image_id}</p>
+                <details><summary>Inspect annotation JSON for this frame</summary>
+                  <pre>{JSON.stringify(annotation.annotation,null,2)}</pre>
+                </details>
+              </>:
+              <p className="muted small">Awaiting annotation synchronization from the returned labeling job.
+                The original local frame remains available for review.</p>}
+          </div>
           {canReview&&reviewable&&<div className="review-entry">
             <label>Verdict<select value={verdict} onChange={e=>setVerdict(
               e.target.value as "good"|"bad"|"incomplete")}>
