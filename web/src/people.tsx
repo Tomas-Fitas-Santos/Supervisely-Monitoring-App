@@ -4,7 +4,7 @@ import {
   Check, ChevronLeft, ChevronRight, ClipboardCopy, FileSpreadsheet, Filter,
   Plus, RefreshCw, Search, Upload, UserRound, UsersRound, X
 } from "lucide-react";
-import { api, type Auth, type PeopleResponse, type Person, type Team, type TeamResponse } from "./api";
+import { api, refreshSuperviselyRoster, type Auth, type PeopleResponse, type Person, type Team, type TeamResponse } from "./api";
 import { NativeMembershipPanel } from "./native";
 import { MonitorAssignmentsPanel } from "./monitoring";
 import { MonitorPairPanel } from "./monitor_pairs";
@@ -122,6 +122,21 @@ export function PeopleScreen({auth}:{auth:Auth}) {
     const timer=window.setInterval(()=>{if(!document.hidden)void refresh();},5000);
     return ()=>window.clearInterval(timer);
   },[refresh]);
+  async function syncNative(){
+    try {
+      const result=await refreshSuperviselyRoster(auth.csrf_token,true);
+      await refresh();
+      if(result?.status==="needs_review"){
+        setMessage("Supervisely identities need review. Open membership sync to resolve conflicts.");
+      }else if(result?.status==="ok"){
+        setMessage("Supervisely synced: "+result.created+" added, "+result.updated+
+          " updated, "+result.unmatched_native+" unlinked. "+
+          (result.role_warnings?"Some roles need review.":""));
+      }else if(result?.status==="archived"){
+        setMessage("Archived events are read-only.");
+      }
+    }catch(e){setError("Supervisely sync: "+(e as Error).message);}
+  }
   const activeTeam=teams.find(t=>t.id===selectedTeam);
   const shownTeams=teams.filter(t=>t.type==="monitoring"||
     !search||t.name.toLowerCase().includes(search.toLowerCase())||
@@ -192,7 +207,7 @@ export function PeopleScreen({auth}:{auth:Auth}) {
       <h2>People & Teams</h2><p className="muted">Manage your event roster and prepare invitations for the shared Supervisely team.</p>
     </div><div className="heading-actions">
       <span className="last-refresh">{updated?"Updated "+updated.toLocaleTimeString():"Loading…"}</span>
-      <button className="btn secondary" onClick={()=>void refresh()}><RefreshCw size={16}/> Sync view</button>
+      <button className="btn secondary" onClick={()=>void syncNative()}><RefreshCw size={16}/> Refresh from Supervisely</button>
       {admin&&<button className="btn primary" onClick={()=>openEdit()}><Plus size={17}/> Add person</button>}
     </div></div>
     {error&&<div className="alert danger" role="alert">{error}</div>}
@@ -205,7 +220,7 @@ export function PeopleScreen({auth}:{auth:Auth}) {
     {admin&&<div className="toolbar-secondary">
       <button className="btn secondary" onClick={()=>setShowImporter(v=>!v)}><FileSpreadsheet size={17}/>
         {showImporter?"Close roster import":"Import CSV roster"}</button>
-      <span className="muted small">Sync view refreshes local PostgreSQL only. Use the native sync panel below to check real Supervisely membership.</span>
+      <span className="muted small">Refresh from Supervisely updates joined participants and monitors, and adds new members with verified native email. Unmatched identities require review below.</span>
     </div>}
     {showImporter&&admin&&<RosterImporter auth={auth} onComplete={()=>{setShowImporter(false);void refresh();}}/>}
     {admin&&<NativeMembershipPanel auth={auth} onApplied={()=>void refresh()}/>}
