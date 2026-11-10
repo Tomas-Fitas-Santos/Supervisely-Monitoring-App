@@ -97,8 +97,13 @@ def eligible_monitor(db: Session, email: str) -> Person | None:
         ).order_by(Person.created_at.desc())
     )
     return next(
-        (person for person in records
-         if (person.source_fields or {}).get("source") != "supervisely_member_sync"),
+        (
+            person for person in records
+            if (person.source_fields or {}).get(
+                "monitor_registration_approved",
+                (person.source_fields or {}).get("source") != "supervisely_member_sync",
+            ) is True
+        ),
         None,
     )
 
