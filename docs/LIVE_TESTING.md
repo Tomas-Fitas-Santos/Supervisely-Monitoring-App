@@ -175,6 +175,108 @@ Inside the **HTTPS tunnel**:
 Do not run native job dispatch until the shared configuration is valid.
 A signed-in organiser account alone does not prove Supervisely permissions.
 
+## 6A. Enable monitor account creation for real external testers
+
+This is the normal application login flow. **No pre-created Nightjar staff
+accounts are needed for the monitors.** The organiser must first import an
+active monitor roster and have access to a working SMTP mailbox.
+
+### Configure an SMTP sender once
+
+Open the private, Git-ignored environment file in the Windows repository
+root:
+
+```powershell
+notepad .env.live
+```
+
+Fill the following settings using an SMTP account your organisation permits.
+The exact host, password and sending policies depend on the email provider:
+
+```dotenv
+SMTP_HOST=your-provider-smtp-host
+SMTP_PORT=587
+SMTP_USERNAME=your-smtp-username
+SMTP_PASSWORD=your-smtp-app-password
+SMTP_SENDER=your-authorised-sender-address
+SMTP_USE_SSL=false
+```
+
+Port **587** uses STARTTLS and `SMTP_USE_SSL=false`. For a provider that
+specifies SMTP over implicit TLS, configure its **465** port and
+`SMTP_USE_SSL=true`. Do not guess or reuse the Nightjar password as the
+SMTP credential. Some accounts use an application password, and institutional
+email administrators may disable basic SMTP authentication.
+
+Never commit or share `.env.live`. Passwords are read by the **backend
+only**; monitors will never see these settings.
+
+Apply the SMTP settings without deleting any existing data:
+
+```powershell
+docker compose --env-file .env.live -f compose.live.yaml up -d --force-recreate api
+```
+
+### Verify actual email delivery
+
+1. Sign in to Nightjar as the organiser using the HTTPS tunnel link.
+2. Open **Settings → Monitor account verification emails**.
+3. Confirm the panel shows **Configured**.
+4. Click **Send test to my organiser email** and confirm the message
+   reaches the organiser inbox (also inspect spam/junk).
+   A successful API response means the email was submitted to SMTP,
+   **not necessarily delivered** to the inbox.
+5. If the test fails, inspect `docker compose ... logs --tail=80 api`
+   (do not share logs containing secrets).
+
+### Test self-registration with another real monitor
+
+1. In **People & Teams**, import the event CSV with the **`event_role`**
+   column mapped to Role (`monitor` / `participant`, not Supervisely's
+   `native_role`). Ensure the monitor's email is spelled correctly.
+2. Native-only auto-discovered monitors must be approved explicitly
+   using **Edit → Approve for Nightjar registration**. Existing
+   authorised CSV monitors are eligible unless expressly denied.
+3. Share the current temporary HTTPS URL with one of the approved monitors.
+   Keep Docker Desktop and `cloudflared` running.
+4. The monitor clicks **Create monitor account**, enters their roster
+   email, and requests an eight-digit verification code.
+5. They enter the code and create/confirm their own 12+-character Nightjar
+   password. The code expires after 10 minutes and can be resent after
+   one minute. The account creation is single-use; existing accounts sign in.
+6. Nightjar then signs the monitor in using the newly created account.
+   Monitor role privileges are server-enforced; a participant's address
+   cannot sign up for a monitoring account.
+7. In Settings, the monitor sees the organiser's shared Team ID and
+   Workspace ID read-only, and can separately verify their own
+   Supervisely identity with a personal API token (discarded after
+   verification).
+
+A Nightjar staff account is independent of a Supervisely membership:
+**registration does not invite that person to Supervisely**. Use the
+separate People & Teams native invite workflow to grant Supervisely
+Manager access. If a verified native team member is not a Manager, the
+Nightjar authorization checks can refuse access until the organiser
+reconciles their role.
+
+### Troubleshooting account registration
+
+- **Email verification not ready:** Configure SMTP in `.env.live` and
+  recreate `api` as above; test delivery from organiser Settings.
+- **No email after requesting code:** The public request intentionally
+  gives a generic reply for unknown, ineligible and existing accounts.
+  Check the exact roster email, active event and approval status, or
+  whether the account already exists; use the Settings test to check SMTP.
+- **Verification code expired/invalid:** Request a fresh code. At most
+  five incorrect attempts are allowed per challenge.
+- **Staff login denied after role change:** Confirm the person is still
+  an active approved monitor and, if joined, has the right Supervisely
+  Manager role. The organiser remains Admin.
+- **Role update appears stuck:** The People & Teams Edit dialog now
+  displays the progress and actual failure inside the modal. Native
+  member roles are now read individually, not by scanning the entire
+  Supervisely team. Refresh membership if a remote write is unverified.
+
 ## 7. Enable the real Supervisely worker only when ready
 
 Once the organiser has verified the shared team/workspace and token:
