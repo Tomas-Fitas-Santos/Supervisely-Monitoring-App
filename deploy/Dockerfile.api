@@ -16,6 +16,6 @@ CMD ["uvicorn", "annotatiathon.app:app", "--host", "0.0.0.0", "--port", "8000", 
 
 FROM base AS native
 USER root
-RUN apt-get update &&     apt-get install -y --no-install-recommends libgl1 libglib2.0-0 ffmpeg &&     rm -rf /var/lib/apt/lists/* &&     python -m pip install --no-cache-dir ".[native]"
+RUN apt-get update &&     apt-get install -y --no-install-recommends libgl1 libglib2.0-0 libmagic1 ffmpeg &&     rm -rf /var/lib/apt/lists/* &&     python -m pip install --no-cache-dir ".[native]"
 USER nightjar
 CMD ["python", "-m", "annotatiathon.native_worker", "--loop", "--poll-seconds", "12"]
