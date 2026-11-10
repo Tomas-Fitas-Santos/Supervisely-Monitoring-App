@@ -35,10 +35,12 @@ never global user roles.
 5. Reclassifying a monitor to participant also disables that person's
    Nightjar monitoring login and revokes active sessions. Re-promoting
    can re-enable an account disabled by this role conversion.
-6. If a person has **not joined Supervisely**, the event role changes locally,
-   and the invitation UI tells the organiser to invite that person with
-   the corresponding native role. Nightjar does not pretend to change
-   unknown or pending native accounts.
+6. If a person is **not yet invited to Supervisely**, the event role can be
+   changed locally, and the organiser then invites them with the corresponding
+   native role. If an invitation was **already reported sent or is pending**,
+   Nightjar blocks the role change until the native invitation is reviewed or
+   the member joins; it cannot reliably mutate a pending native invitation
+   without a verified Supervisely member ID.
 7. Existing joined member roles **cannot be changed through a bulk CSV import**.
    The import refuses those changes and directs the organiser to the individual
    Edit operation so remote failures cannot leave a partially applied batch.
