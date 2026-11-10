@@ -219,7 +219,7 @@ export function TicketsScreen({auth}:{auth:Auth}) {
         </form>}
         <div className="settings-note" style={{marginTop:18}}><AlertTriangle size={18}/>
           <p>Warnings never stop a distribution. Recipients and issuing staff remain recorded for auditing.</p></div>
-      </section>
+      </section>}
     </div>
     {section==="history"&&<>
     <section className="panel" style={{marginTop:22}}>
