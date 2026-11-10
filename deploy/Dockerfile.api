@@ -1,0 +1,21 @@
+# Same application image for FastAPI and Alembic. The optional "native"
+# target adds the Supervisely SDK for the job worker.
+FROM python:3.12-slim AS base
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_DISABLE_PIP_VERSION_CHECK=1
+WORKDIR /app
+COPY pyproject.toml /app/
+COPY src/ /app/src/
+RUN python -m pip install --no-cache-dir .
+COPY alembic.ini /app/alembic.ini
+COPY migrations/ /app/migrations/
+COPY deploy/docker-entrypoint.sh /usr/local/bin/nightjar-entrypoint
+RUN chmod 0755 /usr/local/bin/nightjar-entrypoint &&     groupadd --gid 10001 nightjar && useradd --uid 10001 --gid 10001 --no-create-home nightjar &&     mkdir -p /data && chown -R 10001:10001 /data /app
+USER nightjar
+ENTRYPOINT ["/usr/local/bin/nightjar-entrypoint"]
+CMD ["uvicorn", "annotatiathon.app:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]
+
+FROM base AS native
+USER root
+RUN apt-get update &&     apt-get install -y --no-install-recommends libgl1 libglib2.0-0 ffmpeg &&     rm -rf /var/lib/apt/lists/* &&     python -m pip install --no-cache-dir ".[native]"
+USER nightjar
+CMD ["python", "-m", "annotatiathon.native_worker", "--loop", "--poll-seconds", "12"]
