@@ -157,7 +157,7 @@ def test_review_and_csv_and_closeout_require_accepted_jobs(ctx):
     dsid = ingest(client, csrf)
     teams(client, csrf)
     result = act(client, csrf, "/labeling/plans", {
-        "dataset_id": dsid, "jobs_per_team": 1, "redundancy": 1,
+        "dataset_id": dsid, "jobs_per_team": 2, "redundancy": 1,
     })
     assert result.status_code == 201, result.text
     plan_id = result.json()["plan_id"]
