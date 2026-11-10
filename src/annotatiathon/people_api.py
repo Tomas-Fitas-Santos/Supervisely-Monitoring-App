@@ -13,7 +13,6 @@ from sqlalchemy.orm import Session
 from .auth import AuthContext, normalized_email, requires
 from .db import get_db
 from .events_api import current_event
-from .supervisely_client import NativeAPIError, change_member_role
 from .models import (
     AuditEvent,
     CompetitionTeam,
@@ -25,6 +24,7 @@ from .models import (
     StaffSession,
     SuperviselyConfig,
 )
+from .supervisely_client import NativeAPIError, change_member_role
 
 router = APIRouter(prefix="/api/v1", tags=["people"])
 VIEWER = ("organiser", "monitor", "reception", "activity", "distribution", "observer")
