@@ -20,6 +20,7 @@ type Coverage={dataset:Dataset;
     species_folders:number;unclassified_frames:number;unclassified_images:number;
     tagged_frames:number;unlabeled_frames:number};
   groups:GroupRow[];folders:FolderRow[];movements:MovementRow[];
+  movement_matrix:{ecomorphology:string;frames:number;counts:Record<string,number>}[];
   reference:{groups:string[];movements:{type:string;label:string}[];
     taxonomy_source:string;frame_order:string;movement_policy:string}};
 type VideoPage={page:number;size:number;total:number;items:VideoRow[]};
@@ -264,6 +265,26 @@ export function CoverageScreen({auth}:{auth:Auth}) {
                 pct(g.frames,TARGET_PER_GROUP)+"%"}</td>
             </tr>)}</tbody>
           </table>
+        </div>
+      </section>
+      <section className="panel" style={{marginTop:20}}>
+        <span className="eyebrow">JOINT DISTRIBUTION</span>
+        <h3>Ecomorphology × observed movement</h3>
+        <p className="muted small">Each video frame is counted once in its assigned primary movement or Unlabeled. Use this matrix to spot groups that lack the motion types needed for the research.</p>
+        <div className="table-scroll coverage-matrix-scroll">
+          <table className="data-table coverage-matrix"><thead><tr>
+            <th>Ecomorphology</th><th>Total frames</th>
+            {coverage.reference.movements.map(m=><th key={m.type}>{m.label}</th>)}
+            <th>Unlabeled</th>
+          </tr></thead><tbody>
+            {coverage.movement_matrix.map(row=><tr key={row.ecomorphology}>
+              <td><strong>{row.ecomorphology}</strong></td>
+              <td>{nf.format(row.frames)}</td>
+              {coverage.reference.movements.map(m=><td key={m.type}>
+                {nf.format(row.counts[m.type]||0)}</td>)}
+              <td>{nf.format(row.counts.unlabeled||0)}</td>
+            </tr>)}
+          </tbody></table>
         </div>
       </section>
       <section className="panel" style={{marginTop:20}}>
