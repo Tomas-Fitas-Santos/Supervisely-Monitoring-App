@@ -237,3 +237,72 @@ def read_team_snapshot(config: SuperviselyConfig, *, personal_token: str | None 
         workspace_id=workspace_id, account_id=_identifier(user),
         account_login=login, members=members,
     )
+
+
+def change_member_role(
+    config: SuperviselyConfig,
+    *,
+    user_id: int,
+    target_role: str,
+    expected_role: str | None = None,
+) -> NativeMember:
+    """Change a verified team member's role using the official members.editInfo.
+
+    The role ID comes from roles.list, not from a guessed static mapping.
+    Never downgrade the API credential's own admin account or any native
+    admin. On failed or unverified writes the caller must retain local state.
+    """
+    if target_role not in {"manager", "annotator"}:
+        raise NativeAPIError("invalid_role", "Only manager and annotator assignments are supported.")
+    if type(user_id) is not int or user_id <= 0:
+        raise NativeAPIError("invalid_user", "A verified Supervisely member ID is required.")
+    base, token = require_connection(config)
+    with httpx.Client(
+        timeout=httpx.Timeout(12.0, connect=5.0),
+        follow_redirects=False, trust_env=False,
+    ) as client:
+        account = _request_json(client, base, token, "users.me", {})
+        acting_id = _identifier(account)
+        members = _read_members(client, base, token, config.team_id)
+        actor = next((m for m in members if m.id == acting_id), None)
+        target = next((m for m in members if m.id == user_id), None)
+        if actor is None or actor.role != "admin":
+            raise NativeAPIError(
+                "admin_required",
+                "The shared Supervisely credential must belong to a team admin to change roles.",
+            )
+        if target is None:
+            raise NativeAPIError("member_missing", "The person is not a member of the configured Supervisely team.")
+        if target.id == acting_id or target.role == "admin":
+            raise NativeAPIError("admin_protected", "Supervisely admin accounts cannot be demoted by Nightjar.")
+        if expected_role is not None and target.role != expected_role:
+            raise NativeAPIError(
+                "stale_role", "Supervisely role changed since the last refresh. Refresh membership before editing.",
+            )
+        if target.role == target_role:
+            return target
+        roles = _request_json(client, base, token, "roles.list", {"filter": []})
+        entries = roles.get("entities")
+        if not isinstance(entries, list):
+            raise NativeAPIError("bad_response", "Could not read Supervisely role definitions.")
+        matches = [
+            entry["id"] for entry in entries
+            if isinstance(entry, dict) and entry.get("role") == target_role
+            and type(entry.get("id")) is int and entry["id"] > 0
+        ]
+        if len(matches) != 1:
+            raise NativeAPIError(
+                "role_unavailable",
+                "The requested role is not uniquely defined on this Supervisely instance.",
+            )
+        _request_json(client, base, token, "members.editInfo", {
+            "id": target.id, "teamId": config.team_id, "roleId": matches[0],
+        })
+        verified_members = _read_members(client, base, token, config.team_id)
+        verified = next((m for m in verified_members if m.id == target.id), None)
+        if verified is None or verified.role != target_role:
+            raise NativeAPIError(
+                "role_unverified",
+                "Supervisely did not confirm the new role. Refresh the team before retrying.",
+            )
+        return verified
