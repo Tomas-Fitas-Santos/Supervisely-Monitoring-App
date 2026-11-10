@@ -19,6 +19,9 @@ export type DatasetTransferState = {
 };
 
 const CHUNK = 8 * 1024 * 1024;
+const VIDEO_EXTENSIONS = new Set(["mp4","mov","mkv","avi","webm","m4v","mpeg","mpg"]);
+const FRAME_EXTENSIONS = new Set(["jpg","jpeg","png","webp","bmp","tif","tiff"]);
+
 const listeners = new Set<(state: DatasetTransferState | null) => void>();
 let task: {
   state: DatasetTransferState;
@@ -73,6 +76,16 @@ export function validateDatasetSources(files: File[], kind: UploadKind): void {
     const path = relative(file, kind);
     if (!path || file.size === 0 || seen.has(path)) {
       throw new Error("Invalid, empty or duplicated source file: " + path);
+    }
+    if (kind === "folder") {
+      const parts = path.split("/");
+      const extension = parts[parts.length - 1].split(".").pop()?.toLowerCase() || "";
+      const rawVideo = VIDEO_EXTENSIONS.has(extension) && parts.length >= 2;
+      const frameFolder = FRAME_EXTENSIONS.has(extension) && parts.length >= 3;
+      if (!rawVideo && !frameFolder) {
+        throw new Error("Only videos or frames inside video folders are supported. " +
+          "Use dataset/species/video.mp4 or dataset/species/video-title/frame.jpg.");
+      }
     }
     seen.add(path);
   }
