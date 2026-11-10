@@ -110,7 +110,7 @@ def test_invite_all_uninvited_up_to_50_by_role_without_page_filter(setup):
     following=http.get("/api/v1/people/invitations/next?kind=monitor")
     assert following.json()["available"]==68
     assert following.json()["selected"]==50
-    assert set(x["id"] for x in following.json()["items"]).isdisjoint(ids)
+    assert {x["id"] for x in following.json()["items"]}.isdisjoint(ids)
 
 
 def test_update_joined_role_changes_supervisely_then_local(setup):
@@ -164,7 +164,7 @@ def test_native_role_failure_retains_local_role(setup):
 
 def test_participant_demotion_revokes_monitor_account_and_sessions(setup):
     http, maker, monkeypatch=setup
-    header=login(http)
+    login(http)
     with maker.begin() as db:
         db.add(Person(event_id=DEFAULT_EVENT_ID,name="Other Monitor",
             email="monitor@example.org",kind="monitor",membership_status="joined",
