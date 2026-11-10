@@ -49,6 +49,7 @@ def native_ready(db: Session) -> SuperviselyConfig:
             status_code=422,
             detail="Saved Supervisely integration credential is unavailable.",
         ) from exc
+    return config
 
 
 def team_members(db: Session, job: LabelingJob) -> list[Person]:
