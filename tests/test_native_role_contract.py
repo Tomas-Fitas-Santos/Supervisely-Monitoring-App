@@ -1,4 +1,5 @@
 """Native role editing uses documented member role IDs and verifies writes."""
+import httpx
 import pytest
 
 from annotatiathon.models import SuperviselyConfig
@@ -130,3 +131,21 @@ def test_targeted_member_lookup_uses_documented_id_filter(monkeypatch):
     assert found.id == 555
     assert found.role == "manager"
     assert found.email == "alice@example.org"
+
+
+@pytest.mark.parametrize("status", [200, 204])
+def test_role_edit_accepts_empty_success_but_verifies_via_member_readback(status):
+    from annotatiathon import supervisely_client as native
+
+    class Client:
+        def post(self, url, *, json, headers, follow_redirects):
+            assert url.endswith("/public/api/v3/members.editInfo")
+            assert json == {"id": 555, "teamId": 125980, "roleId": 8}
+            assert headers["x-api-key"] == "FAKE_TEST_CREDENTIAL"
+            assert follow_redirects is False
+            return httpx.Response(status, request=httpx.Request("POST", url))
+
+    result = native._request_json(Client(), "https://app.supervisely.com",
+        "FAKE_TEST_CREDENTIAL", "members.editInfo",
+        {"id": 555, "teamId": 125980, "roleId": 8})
+    assert result == {}
