@@ -176,7 +176,7 @@ def test_activity_winner_and_ticket_ids_cannot_cross_events(ctx):
 
 def test_awards_require_activity_and_ticket_reset_together(ctx):
     http, dbmaker, csrf = ctx
-    people, team_id, category, activity = create_setup(http, csrf)
+    _people, team_id, category, activity = create_setup(http, csrf)
     call(http, csrf, "/activities/" + activity + "/results", {
         "subject_type": "team", "subject_id": team_id, "rank": 1,
     }, "PUT")
