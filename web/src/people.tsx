@@ -155,7 +155,10 @@ export function PeopleScreen({auth}:{auth:Auth}) {
   }
   async function savePerson(e:React.FormEvent) {
     e.preventDefault();setBusy(true);setError("");setModalError("");
-    const isNativeChange=Boolean(editing?.supervisely_login && editing.kind!==personForm.kind);
+    const desiredNativeRole=personForm.kind==="monitor"?"manager":"annotator";
+    const isNativeChange=Boolean(editing?.supervisely_login &&
+      (editing.kind!==personForm.kind || (editing.supervisely_role!=="admin" &&
+      editing.supervisely_role!==desiredNativeRole)));
     setModalStatus(isNativeChange?"Updating and verifying the Supervisely team role…":
       "Saving the person to Nightjar…");
     try {
@@ -199,7 +202,7 @@ export function PeopleScreen({auth}:{auth:Auth}) {
       const changed=await api<Person>("/people/"+person.id+"/monitor-registration",
         "PUT",{approved},auth.csrf_token);
       setEditing({...person,monitor_registration_approved:changed.monitor_registration_approved});
-      setMessage(approved?"Monitor may now create a Nightjar account with email verification.":
+      setMessage(approved?"Monitor may now create a Nightjar-only account with their approved roster email.":
         "New Nightjar registration disabled for this monitor.");
       await refresh();
     }catch(exc){setModalError((exc as Error).message);}
@@ -338,17 +341,21 @@ export function PeopleScreen({auth}:{auth:Auth}) {
             The organiser keeps Admin. Joined members are updated remotely when you save.</p>
           {editing?.supervisely_login&&<div className="settings-note">
             <ShieldCheck size={18}/>
-            <div><p className="muted small">Currently joined as {editing.supervisely_login} ({editing.supervisely_role}).
-              If the Supervisely role differs from the desired event role, use Sync role below.</p>
-            {editing.supervisely_role!=="admin"&&
+            <div><p className="muted small">
+              Joined in Supervisely as {editing.supervisely_login} ({editing.supervisely_role}).
+              Expected role for the selection: {personForm.kind==="monitor"?"Manager":"Annotator"}.
+              Press <strong>Save person</strong> to update both systems.
+            </p>
+            {editing.kind===personForm.kind && editing.supervisely_role!=="admin" &&
+              editing.supervisely_role!==(personForm.kind==="monitor"?"manager":"annotator") &&
               <button type="button" className="btn secondary" disabled={busy}
-                onClick={()=>void synchronizeRole(editing)}>Sync Supervisely role now</button>}
+                onClick={()=>void synchronizeRole(editing)}>Sync existing saved role</button>}
             </div>
           </div>}
           {personForm.kind==="participant"&&<label>Competition team name<input value={personForm.team_name}
             onChange={e=>setPersonForm({...personForm,team_name:e.target.value})}
             placeholder="e.g. Team 014"/></label>}
-          {editing?.kind==="monitor"&&<div className="settings-note">
+          {editing?.kind==="monitor"&&personForm.kind==="monitor"&&<div className="settings-note">
             <ShieldCheck size={18}/>
             <div><p className="muted small">
               Nightjar account creation: <strong>{editing.monitor_registration_approved?
