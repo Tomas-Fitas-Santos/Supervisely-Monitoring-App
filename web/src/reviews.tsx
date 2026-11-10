@@ -3,6 +3,8 @@ import {
   CheckCircle2, ClipboardCheck, Image, RefreshCw, RotateCcw, ShieldCheck
 } from "lucide-react";
 import { api, type Auth } from "./api";
+import { TeamReviewOverview } from "./review_dashboard";
+import { AnnotationFrame } from "./annotation_overlay";
 
 type Job={id:string;team_name:string;sequence:number;status:string;review_status:string;
   dataset_id:string;frame_count:number;video_count:number;assigned_monitor_id:string|null;
@@ -25,6 +27,7 @@ type Reviews={count:number;keypoint_score:number;reviewed_frames:number;
 
 export function QualityScreen({auth}:{auth:Auth}) {
   const canReview=auth.staff.roles.some(role=>role==="organiser"||role==="monitor");
+  const [tab,setTab]=useState<"dashboard"|"rankings"|"review">("dashboard");
   const [jobs,setJobs]=useState<Job[]>([]);
   const [jobId,setJobId]=useState("");
   const [filter,setFilter]=useState<"review"|"all"|"active"|"completed">("review");
@@ -45,14 +48,15 @@ export function QualityScreen({auth}:{auth:Auth}) {
   const [notice,setNotice]=useState("");
   const [busy,setBusy]=useState(false);
   const refresh=useCallback(async()=>{
+    if(!canReview){setJobs([]);setJobId("");return;}
     try{
-      const response=await api<{items:Job[]}>("/labeling/jobs?limit=2000");
+      const response=await api<{items:Job[]}>("/review/assigned-jobs");
       setJobs(response.items);
       setJobId(current=>response.items.some(j=>j.id===current)?current:
-        (response.items.find(j=>["submitted","on_review","needs_correction"].includes(j.status))?.id||response.items[0]?.id||""));
+        (response.items.find(j=>j.status==="on_review")?.id||""));
       setError("");
     }catch(e){setError((e as Error).message);}
-  },[]);
+  },[canReview]);
   const loadReviews=useCallback(async()=>{
     if(!jobId){setReviews(null);setMedia(null);return;}
     try{
@@ -83,6 +87,13 @@ export function QualityScreen({auth}:{auth:Auth}) {
     (filter==="review"&&j.status==="on_review")||
     (filter==="active"&&["queued","publishing","in_progress"].includes(j.status))||
     (filter==="completed"&&j.status==="completed"));
+  useEffect(()=>{
+    const available=jobs.filter(j=>filter==="all"||
+      (filter==="review"&&j.status==="on_review")||
+      (filter==="active"&&["queued","publishing","in_progress"].includes(j.status))||
+      (filter==="completed"&&j.status==="completed"));
+    setJobId(current=>available.some(j=>j.id===current)?current:(available[0]?.id||""));
+  },[jobs,filter]);
   const asset=media?.items.find(a=>a.id===assetId);
   const stored=reviews?.items.find(r=>r.media_id===assetId);
   useEffect(()=>{
@@ -139,18 +150,27 @@ export function QualityScreen({auth}:{auth:Auth}) {
   }
   return <div className="page-body">
     <div className="page-heading"><div><span className="eyebrow">MONITORING · QUALITY CONTROL</span>
-      <h2>Review & Scoring</h2>
-      <p className="muted">Inspect each person's submitted video, synchronized annotations and frame-level quality. One native submission per new job.</p>
+      <h2>Monitoring & Review</h2>
+      <p className="muted">Compare team performance, see provisional rankings, and review the jobs assigned to you.</p>
     </div><button className="btn secondary" onClick={()=>{void refresh();void loadReviews();}}>
       <RefreshCw size={15}/> Refresh jobs & annotations</button></div>
     {error&&<div className="alert danger" role="alert">{error}</div>}
+    <nav className="workspace-subtabs" aria-label="Monitoring & review sections">
+      <button className={tab==="dashboard"?"active":""} onClick={()=>setTab("dashboard")}>
+        Team dashboard</button>
+      <button className={tab==="rankings"?"active":""} onClick={()=>setTab("rankings")}>
+        Rankings board</button>
+      {canReview&&<button className={tab==="review"?"active":""} onClick={()=>setTab("review")}>
+        Review assigned jobs {reviewJobs.length?("(" + reviewJobs.length + ")"):""}</button>}
+    </nav>
+    {tab!=="review"?<TeamReviewOverview auth={auth} mode={tab}/> : <>
     {notice&&<div className="alert success" role="status">{notice}</div>}
     <div className="content-grid reviews-layout">
       <section className="panel">
         <span className="eyebrow">SUBMISSIONS · {reviewJobs.length} AWAITING REVIEW</span>
         <h3>Choose an annotator's video</h3>
         <label className="review-filter">Show jobs<select value={filter}
-          onChange={e=>setFilter(e.target.value as typeof filter)}>
+          onChange={e=>{setFilter(e.target.value as typeof filter);setPage(1);}}>
           <option value="review">Ready for review ({reviewJobs.length})</option>
           <option value="active">Queue and in progress</option>
           <option value="completed">Accepted</option>
@@ -231,13 +251,15 @@ export function QualityScreen({auth}:{auth:Auth}) {
         <div className="review-media-detail">
           {asset&&<><div className="review-frame-title"><strong>{asset.relative_path}</strong>
             <small>{asset.video_group||"Stand-alone image"}</small></div>
-          <img className="review-preview" alt={"Bird frame "+asset.relative_path}
-            src={"/api/v1/review/datasets/"+selected.dataset_id+"/assets/"+asset.id+"/image"}/>
+          <AnnotationFrame key={asset.id} alt={"Bird frame "+asset.relative_path}
+            src={"/api/v1/review/datasets/"+selected.dataset_id+"/assets/"+asset.id+"/image"}
+            annotation={annotation?.annotation||null}/>
           <div className="annotation-inspector">
             <strong>Supervisely annotation</strong>
             {annotation?
               <>
-                <p className="muted small">Downloaded from Supervisely · Native image #{annotation.native_image_id} · {Array.isArray(annotation.annotation.labels)?annotation.annotation.labels.length:0} label(s)</p>
+                <p className="muted small">Downloaded from Supervisely · Native image #{annotation.native_image_id} · {Array.isArray(annotation.annotation.objects)?annotation.annotation.objects.length:
+                  Array.isArray(annotation.annotation.labels)?annotation.annotation.labels.length:0} object(s)</p>
                 <details><summary>Inspect annotation JSON for this frame</summary>
                   <pre>{JSON.stringify(annotation.annotation,null,2)}</pre>
                 </details>
@@ -273,7 +295,7 @@ export function QualityScreen({auth}:{auth:Auth}) {
       </div>
     </section>}
     <div className="settings-note" style={{marginTop:18}}><ShieldCheck size={18}/>
-      <p>Nightjar's review scores and decisions are local audit records. The connected Supervisely instance remains the source of truth for native annotations and job states.</p>
-    </div>
+      <p>Nightjar's review scores and decisions are local audit records. The connected Supervisely instance remains the source of truth for native annotations and job states. Only assigned teams appear in the review queue.</p>
+    </div></>}
   </div>;
 }

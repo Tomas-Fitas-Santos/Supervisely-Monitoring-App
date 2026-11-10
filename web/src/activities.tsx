@@ -23,6 +23,7 @@ const parseInput=(value:string)=>value?Math.floor(new Date(value).getTime()/1000
 export function ActivitiesScreen({auth}:{auth:Auth}) {
   const canEdit=auth.staff.roles.some(r=>r==="organiser"||r==="activity");
   const organiser=auth.staff.roles.includes("organiser");
+  const [section,setSection]=useState<"schedule"|"results">("schedule");
   const [items,setItems]=useState<Activity[]>([]);
   const [selected,setSelected]=useState("");
   const [detail,setDetail]=useState<Detail|null>(null);
@@ -143,10 +144,14 @@ export function ActivitiesScreen({auth}:{auth:Auth}) {
       <p className="muted">Plan sessions, record individual or team results and award trackable ticket entitlements.</p>
       </div><div className="heading-actions"><button className="btn secondary" onClick={()=>void refresh()}>
         <RefreshCw size={15}/> Refresh</button>
-        {canEdit&&<button className="btn primary" onClick={()=>setAddOpen(x=>!x)}>
+        {canEdit&&<button className="btn primary" onClick={()=>{setSection("schedule");setAddOpen(x=>!x);}}>
           <Plus size={15}/> New activity</button>}</div></div>
     {error&&<div className="alert danger" role="alert">{error}</div>}
     {notice&&<div className="alert success" role="status">{notice}</div>}
+    <nav className="workspace-subtabs" aria-label="Activities and prizes sections">
+      <button className={section==="schedule"?"active":""} onClick={()=>setSection("schedule")}>Activity schedule</button>
+      <button className={section==="results"?"active":""} onClick={()=>setSection("results")}>Results & prizes</button>
+    </nav>
     <div className="stat-grid compact">
       <div className="stat-card"><CalendarDays size={19}/><span className="muted small">Scheduled</span>
         <strong>{count("scheduled")}</strong></div>
@@ -155,7 +160,7 @@ export function ActivitiesScreen({auth}:{auth:Auth}) {
       <div className="stat-card"><Trophy size={19}/><span className="muted small">Completed</span>
         <strong>{count("completed")}</strong></div>
     </div>
-    {addOpen&&canEdit&&<section className="panel activities-create">
+    {addOpen&&canEdit&&section==="schedule"&&<section className="panel activities-create">
       <span className="eyebrow">SCHEDULE AN ACTIVITY</span><h3>New event activity</h3>
       <form className="form-stack" onSubmit={e=>void addActivity(e)}>
         <label>Name<input required maxLength={200} value={name} onChange={e=>setName(e.target.value)}
@@ -170,8 +175,8 @@ export function ActivitiesScreen({auth}:{auth:Auth}) {
         </div><button className="btn primary" disabled={busy}>Create activity</button>
       </form>
     </section>}
-    <div className="content-grid activities-layout">
-      <section className="panel activity-list-panel">
+    <div className="content-grid activities-layout activities-subtab-layout">
+      {section==="schedule"&&<section className="panel activity-list-panel">
         <span className="eyebrow">EVENT SCHEDULE</span><h3>Event activities</h3>
         <div className="activity-cards">{items.map(item=>
           <button key={item.id} className={"activity-card "+(selected===item.id?"selected":"")}
@@ -183,8 +188,16 @@ export function ActivitiesScreen({auth}:{auth:Auth}) {
             {item.awards_finalised_at&&<span className="activity-awarded"><CheckCircle2 size={13}/> Rewards finalised</span>}
           </button>)}</div>
         {!items.length&&<p className="muted small">No activities scheduled. Create the first one to begin.</p>}
-      </section>
-      <section className="panel activity-detail-panel">
+      </section>}
+      {section==="results"&&<section className="panel activity-detail-panel">
+        <label className="activity-results-selector">Activity to review
+          <select value={selected} onChange={e=>{setSelected(e.target.value);setSubjectId("");}}>
+            <option value="">Choose an activity…</option>
+            {items.map(item=><option key={item.id} value={item.id}>
+              {item.name} · {item.status}
+            </option>)}
+          </select>
+        </label>
         {!detail?<div className="empty-table">Select an activity to view its results and prize rules.</div>:<>
           <div className="activity-detail-heading"><div><span className="eyebrow">ACTIVITY DETAILS</span>
             <h3>{detail.activity.name}</h3>
@@ -268,7 +281,7 @@ export function ActivitiesScreen({auth}:{auth:Auth}) {
               <td>{localDate(award.awarded_at)}</td>
             </tr>)}</tbody></table></div></details>}
         </>}
-      </section>
+      </section>}
     </div>
   </div>;
 }

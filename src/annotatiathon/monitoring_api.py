@@ -18,6 +18,7 @@ from .events_api import current_event
 from .models import (
     AuditEvent,
     CompetitionTeam,
+    LabelingJob,
     MonitorAssignment,
     MonitorAssignmentPlan,
     Person,
@@ -149,6 +150,14 @@ def assign_team(
             monitor_person_id=payload.monitor_person_id,
             assigned_by=ctx.staff.id,
         ))
+    # Keep the current reviewer shown on active jobs aligned with the team
+    # assignment. Completed job history remains unchanged.
+    for job in db.scalars(select(LabelingJob).where(
+        LabelingJob.event_id == event.id,
+        LabelingJob.team_id == team.id,
+        LabelingJob.status != "completed",
+    )):
+        job.assigned_monitor_id = payload.monitor_person_id
     db.add(AuditEvent(
         staff_id=ctx.staff.id, event_id=event.id,
         action="monitoring.assignment.manual",

@@ -3,24 +3,22 @@ import { createRoot } from "react-dom/client";
 import {
   Activity, Award, ArrowRight, Bird, CalendarDays, CheckCircle2, ChevronDown,
   CircleHelp, ClipboardCheck, Cloud, Database, LayoutDashboard, LogOut,
-  RefreshCw, Settings2, ShieldCheck, Ticket, UsersRound, BarChart3
+  RefreshCw, Settings2, ShieldCheck, Ticket, UsersRound
 } from "lucide-react";
 import { api, refreshSuperviselyRoster, type Auth } from "./api";
 import { PeopleScreen } from "./people";
 import { SettingsScreen } from "./settings";
 import { EventSelector } from "./events";
-import { AttendanceScreen } from "./attendance";
 import { StaffScreen } from "./staff";
 import { TicketsScreen } from "./tickets";
 import { ActivitiesScreen } from "./activities";
-import { DatasetScreen } from "./datasets";
+import { DatasetWorkspace } from "./dataset_workspace";
 import { CompetitionScreen } from "./competition";
 import { QualityScreen } from "./reviews";
-import { CoverageScreen } from "./coverage";
 import { CloseoutScreen } from "./closeout";
 import "./styles.css";
 
-type Tab = "overview" | "people" | "attendance" | "tickets" | "activities" | "datasets" | "competition" | "quality" | "coverage" | "closeout" | "staff" | "settings";
+type Tab = "overview" | "people" | "tickets" | "activities" | "datasets" | "competition" | "quality" | "closeout" | "staff" | "settings";
 
 function Login({ onLogin }: { onLogin: (auth: Auth) => void }) {
   const [mode,setMode] = useState<"login"|"register">("login");
@@ -181,6 +179,25 @@ function App() {
     if (!auth) return;
     void refreshSuperviselyRoster(auth.csrf_token).catch(() => undefined);
   }, [auth?.staff.id, auth?.csrf_token, tab]);
+  // Roles are database-backed, and organisers can change them mid-event.
+  // Keep the open browser's navigation in sync with current staff privileges.
+  useEffect(() => {
+    if (!auth) return;
+    let active=true;
+    const timer=window.setInterval(()=>{
+      if(document.hidden)return;
+      void api<Auth>("/auth/me").then(current=>{
+        if(!active)return;
+        setAuth(previous=>{
+          if(!previous||previous.staff.id!==current.staff.id)return previous;
+          return previous.staff.name!==current.staff.name||
+            JSON.stringify(previous.staff.roles)!==JSON.stringify(current.staff.roles)?
+            current:previous;
+        });
+      }).catch(()=>undefined);
+    },15000);
+    return()=>{active=false;window.clearInterval(timer);};
+  },[auth?.staff.id]);
 
   async function logout() {
     try {
@@ -191,28 +208,33 @@ function App() {
   if (loading) return <div className="loading-screen"><Bird size={33}/> Loading Nightjar…</div>;
   if (!auth) return <Login onLogin={a=>{setAuth(a);setTab("overview");}}/>;
   const organiser = auth.staff.roles.includes("organiser");
+  const has=(...roles:string[])=>auth.staff.roles.some(role=>roles.includes(role));
   const navigation: {id:Tab;label:string;icon:typeof LayoutDashboard}[] = [
     {id:"overview",label:"Overview",icon:LayoutDashboard},
     {id:"people",label:"People & Teams",icon:UsersRound},
-    {id:"attendance",label:"Check-in",icon:ClipboardCheck},
-    {id:"tickets",label:"Tickets & Rewards",icon:Ticket},
-    {id:"activities",label:"Activities & Prizes",icon:Activity},
-    {id:"datasets",label:"Dataset",icon:Database},
-    {id:"competition",label:"Competition & Jobs",icon:UsersRound},
-    {id:"quality",label:"Monitoring & Review",icon:ClipboardCheck},
-    ...(auth.staff.roles.some(role=>["organiser","monitor","observer"].includes(role)) ?
-      [{id:"coverage" as Tab,label:"Dataset Coverage",icon:BarChart3}] : []),
-    {id:"closeout",label:"Results & Exports",icon:CalendarDays},
+    ...(has("organiser","reception","distribution","activity")?
+      [{id:"tickets" as Tab,label:"Tickets & Rewards",icon:Ticket}]:[]),
+    ...(has("organiser","activity","monitor","reception")?
+      [{id:"activities" as Tab,label:"Activities & Prizes",icon:Activity}]:[]),
+    ...(has("organiser","monitor","observer")?
+      [{id:"datasets" as Tab,label:"Dataset",icon:Database}]:[]),
+    ...(has("organiser","monitor","observer","activity")?
+      [{id:"competition" as Tab,label:"Competition & Jobs",icon:UsersRound}]:[]),
+    ...(has("organiser","monitor","observer")?
+      [{id:"quality" as Tab,label:"Monitoring & Review",icon:ClipboardCheck}]:[]),
+    ...(has("organiser","observer")?
+      [{id:"closeout" as Tab,label:"Results & Exports",icon:CalendarDays}]:[]),
     ...(organiser ? [{id:"staff" as Tab,label:"Staff Access",icon:ShieldCheck}] : []),
     {id:"settings",label:"Settings",icon:Settings2},
   ];
+  const accessibleTab=navigation.some(item=>item.id===tab)?tab:"overview";
   return <div className="app-shell">
     <aside className="sidebar">
       <div className="sidebar-logo"><div className="brand-mark"><Bird size={23}/></div>
         <div><strong>NIGHTJAR</strong><span>ANNOTATIATHON</span></div></div>
       <div className="sidebar-label">WORKSPACE</div>
       <nav aria-label="Main navigation">
-        {navigation.map(item=><button key={item.id} className={"nav-link "+(tab===item.id?"active":"")}
+        {navigation.map(item=><button key={item.id} className={"nav-link "+(accessibleTab===item.id?"active":"")}
           onClick={()=>setTab(item.id)}><item.icon size={19}/>{item.label}
           {tab===item.id&&<ArrowRight size={15} className="nav-end"/>}</button>)}
       </nav>
@@ -229,22 +251,20 @@ function App() {
     </aside>
     <div className="main-area">
       <header className="topbar"><div className="breadcrumb">Nightjar <span>/</span> <strong>{
-        navigation.find(n=>n.id===tab)?.label}</strong></div>
+        navigation.find(n=>n.id===accessibleTab)?.label}</strong></div>
         <div className="topbar-right"><EventSelector auth={auth}/><span className="status-dot"/> Event operations
           <span className="topbar-avatar">{auth.staff.name.slice(0,1).toUpperCase()}</span></div>
       </header>
-      {tab==="overview"&&<Overview auth={auth}/>}
-      {tab==="people"&&<PeopleScreen auth={auth}/>}
-      {tab==="attendance"&&<AttendanceScreen auth={auth}/>}
-      {tab==="tickets"&&<TicketsScreen auth={auth}/>}
-      {tab==="activities"&&<ActivitiesScreen auth={auth}/>}
-      {tab==="datasets"&&<DatasetScreen auth={auth}/>}
-      {tab==="competition"&&<CompetitionScreen auth={auth}/>}
-      {tab==="quality"&&<QualityScreen auth={auth}/>}
-      {tab==="coverage"&&<CoverageScreen auth={auth}/>}
-      {tab==="closeout"&&<CloseoutScreen auth={auth}/>}
-      {tab==="staff"&&organiser&&<div className="page-body"><div className="page-heading"><div><span className="eyebrow">ORGANISER · PERMISSIONS</span><h2>Staff Access</h2><p className="muted">Manage staff roles independently of the attendee roster.</p></div></div><StaffScreen auth={auth}/></div>}
-      {tab==="settings"&&<SettingsScreen auth={auth}/>}
+      {accessibleTab==="overview"&&<Overview auth={auth}/>}
+      {accessibleTab==="people"&&<PeopleScreen auth={auth}/>}
+      {accessibleTab==="tickets"&&<TicketsScreen auth={auth}/>}
+      {accessibleTab==="activities"&&<ActivitiesScreen auth={auth}/>}
+      {accessibleTab==="datasets"&&<DatasetWorkspace auth={auth}/>}
+      {accessibleTab==="competition"&&<CompetitionScreen auth={auth}/>}
+      {accessibleTab==="quality"&&<QualityScreen auth={auth}/>}
+      {accessibleTab==="closeout"&&<CloseoutScreen auth={auth}/>}
+      {accessibleTab==="staff"&&organiser&&<div className="page-body"><div className="page-heading"><div><span className="eyebrow">ORGANISER · PERMISSIONS</span><h2>Staff Access</h2><p className="muted">Manage staff roles independently of the attendee roster.</p></div></div><StaffScreen auth={auth}/></div>}
+      {accessibleTab==="settings"&&<SettingsScreen auth={auth}/>}
       <footer className="page-footer"><Bird size={14}/> Nightjar Annotatiathon · Técnico</footer>
     </div>
   </div>;

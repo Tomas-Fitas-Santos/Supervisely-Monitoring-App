@@ -19,6 +19,7 @@ from .native_sync_api import router as native_router
 from .people_api import router as people_router
 from .personal_settings_api import router as personal_settings_router
 from .registration_api import router as registration_router
+from .review_dashboard_api import router as review_dashboard_router
 from .reviews_api import router as reviews_router
 from .settings_api import router as settings_router
 from .staff_api import router as staff_router
@@ -51,6 +52,7 @@ app.include_router(datasets_router)
 app.include_router(labeling_router)
 app.include_router(manual_jobs_router)
 app.include_router(reviews_router)
+app.include_router(review_dashboard_router)
 app.include_router(closeout_router)
 
 
