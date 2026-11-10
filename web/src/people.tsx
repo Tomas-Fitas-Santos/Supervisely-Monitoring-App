@@ -127,6 +127,7 @@ export function PeopleScreen({auth}:{auth:Auth}) {
   async function syncNative(){
     try {
       const result=await refreshSuperviselyRoster(auth.csrf_token,true);
+      setInviteVersion(v=>v+1);
       await refresh();
       if(result?.status==="needs_review"){
         setMessage("Supervisely identities need review. Open membership sync to resolve conflicts.");
@@ -206,7 +207,8 @@ export function PeopleScreen({auth}:{auth:Auth}) {
     setBusy(true);setError("");
     try {
       await api("/people/invitations-reported","POST",{person_ids:selectedPeople.map(p=>p.id)},auth.csrf_token);
-      setSelected([]);setMessage("Invitation attempts recorded; native acceptance is not yet verified.");
+      setSelected([]);setInviteVersion(v=>v+1);
+      setMessage("Invitation attempts recorded; native acceptance is not yet verified.");
       await refresh();
     }catch(exc){setError((exc as Error).message);}
     finally{setBusy(false);}
