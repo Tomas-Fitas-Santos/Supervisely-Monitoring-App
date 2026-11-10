@@ -47,7 +47,7 @@ export function NativeMembershipPanel({auth,onApplied}:{auth:Auth;onApplied:()=>
         "POST",undefined,auth.csrf_token
       );
       setMessage(result.applied+" roster entries updated from verified native membership. "+
-        "No remote invitations or role changes were sent.");
+        "No remote invitations or role changes were sent by this reconciliation step.");
       setApplied(true);
       onApplied();
     }catch(e){setError((e as Error).message);}
@@ -80,7 +80,7 @@ export function NativeMembershipPanel({auth,onApplied}:{auth:Auth;onApplied:()=>
           {preview.conflicts.length} ambiguous identity mapping(s) detected. Resolve them before applying.</div>}
         {preview.matched.some(m=>m.role_warning)&&<div className="advisory">
           <AlertTriangle size={17}/>
-          {preview.matched.filter(m=>m.role_warning).length} user(s) have roles different from Nightjar's expected monitor/annotator roles. Roles will NOT be changed remotely.</div>}
+          {preview.matched.filter(m=>m.role_warning).length} user(s) have roles different from Nightjar's expected monitor/annotator roles. Use People & Teams → Edit → Sync Supervisely role now to correct a joined member. This read-only reconciliation panel never changes roles.</div>}
         <div className="native-preview-lists">
           <div><h4>Verified matches ({preview.matched.length})</h4>
             <div className="native-scroll">
