@@ -9,6 +9,8 @@ export type Person = {
   native_auto_imported: boolean; supervisely_login: string | null;
   supervisely_role: string | null; native_verified_at: number | null;
   check_in_at: number | null; table_number: number | null;
+  date_of_birth?: string; phone?: string; under_18?: string;
+  image_consent?: string; data_consent?: string; food_allergies?: string;
 };
 export type Team = { id: string; name: string; type: string;
   member_source?: "monitor_pair" | "participants";
