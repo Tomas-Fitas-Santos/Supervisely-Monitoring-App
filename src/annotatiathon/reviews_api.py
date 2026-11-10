@@ -29,7 +29,7 @@ from .models import (
 )
 
 router = APIRouter(prefix="/api/v1/review", tags=["quality review"])
-VIEWERS = ("organiser", "monitor", "observer")
+VIEWERS = ("organiser", "monitor")
 REVIEWERS = ("organiser", "monitor")
 
 
@@ -85,7 +85,7 @@ def assigned_jobs(
         plan_id=None, team_id=None, status=None, limit=2000,
         ctx=ctx, db=db,
     )["items"]
-    if "organiser" in ctx.staff.roles or "observer" in ctx.staff.roles:
+    if "organiser" in ctx.staff.roles:
         return {"items": all_jobs}
     monitor = db.scalar(select(Person).where(
         Person.event_id == event.id, Person.email == ctx.staff.email,
@@ -110,8 +110,7 @@ def read_native_annotation(
     """Read the latest completed local annotation snapshot for an assigned frame."""
     event = current_event(db, ctx)
     job = get_job(db, event.id, job_id)
-    if "monitor" in ctx.staff.roles and "organiser" not in ctx.staff.roles:
-        verify_monitor(db, ctx, job)
+    verify_monitor(db, ctx, job)
     if media_id not in job.media_ids:
         raise HTTPException(status_code=404, detail="Frame not assigned to this job.")
     ds = db.get(MediaDataset, job.dataset_id)
@@ -346,7 +345,7 @@ def view_media(
     ))
     if asset is None:
         raise HTTPException(status_code=404, detail="Image not found.")
-    if "monitor" in ctx.staff.roles and "organiser" not in ctx.staff.roles:
+    if "organiser" not in ctx.staff.roles:
         candidates = db.scalars(select(LabelingJob).where(
             LabelingJob.event_id == event.id,
             LabelingJob.dataset_id == dataset.id,
