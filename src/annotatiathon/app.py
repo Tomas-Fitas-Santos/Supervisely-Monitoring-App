@@ -14,6 +14,7 @@ from .native_export_api import router as native_export_router
 from .native_operations_api import router as native_operations_router
 from .native_sync_api import router as native_router
 from .people_api import router as people_router
+from .personal_settings_api import router as personal_settings_router
 from .reviews_api import router as reviews_router
 from .settings_api import router as settings_router
 from .staff_api import router as staff_router
@@ -29,6 +30,7 @@ app.include_router(auth_router)
 app.include_router(people_router)
 app.include_router(teams_router)
 app.include_router(settings_router)
+app.include_router(personal_settings_router)
 app.include_router(attendance_router)
 app.include_router(staff_router)
 app.include_router(tickets_router)
