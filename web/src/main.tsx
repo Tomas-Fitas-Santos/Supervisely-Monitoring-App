@@ -8,9 +8,12 @@ import {
 import { api, type Auth } from "./api";
 import { PeopleScreen } from "./people";
 import { SettingsScreen } from "./settings";
+import { AttendanceScreen } from "./attendance";
+import { StaffScreen } from "./staff";
+import { TicketsScreen } from "./tickets";
 import "./styles.css";
 
-type Tab = "overview" | "people" | "settings";
+type Tab = "overview" | "people" | "attendance" | "tickets" | "staff" | "settings";
 
 function Login({ onLogin }: { onLogin: (auth: Auth) => void }) {
   const [email, setEmail] = useState("");
@@ -101,7 +104,7 @@ function Overview({ auth }: { auth: Auth }) {
       <section className="panel">
         <span className="eyebrow">IMPLEMENTATION STATUS</span><h3>Building the platform</h3>
         <p className="muted">The new app is being implemented in stages. These workflows are not yet available in the rebuild:</p>
-        <div className="coming-row"><Ticket size={18}/> Tickets, check-in & activities</div>
+        <div className="coming-row"><Ticket size={18}/> Activities & prize automation (next milestone)</div>
         <div className="coming-row"><Cloud size={18}/> Dataset upload & distribution</div>
         <div className="coming-row"><ClipboardCheck size={18}/> Annotation monitoring & evaluation</div>
         <div className="coming-row"><CalendarDays size={18}/> Event finalization & export</div>
@@ -130,6 +133,9 @@ function App() {
   const navigation: {id:Tab;label:string;icon:typeof LayoutDashboard}[] = [
     {id:"overview",label:"Overview",icon:LayoutDashboard},
     {id:"people",label:"People & Teams",icon:UsersRound},
+    {id:"attendance",label:"Check-in",icon:ClipboardCheck},
+    {id:"tickets",label:"Tickets & Rewards",icon:Ticket},
+    ...(organiser ? [{id:"staff" as Tab,label:"Staff Access",icon:ShieldCheck}] : []),
     ...(organiser ? [{id:"settings" as Tab,label:"Settings",icon:Settings2}] : []),
   ];
   return <div className="app-shell">
@@ -161,6 +167,9 @@ function App() {
       </header>
       {tab==="overview"&&<Overview auth={auth}/>}
       {tab==="people"&&<PeopleScreen auth={auth}/>}
+      {tab==="attendance"&&<AttendanceScreen auth={auth}/>}
+      {tab==="tickets"&&<TicketsScreen auth={auth}/>}
+      {tab==="staff"&&organiser&&<div className="page-body"><div className="page-heading"><div><span className="eyebrow">ORGANISER · PERMISSIONS</span><h2>Staff Access</h2><p className="muted">Manage staff roles independently of the attendee roster.</p></div></div><StaffScreen auth={auth}/></div>}
       {tab==="settings"&&organiser&&<SettingsScreen auth={auth}/>}
       <footer className="page-footer"><Bird size={14}/> Nightjar Annotatiathon · Técnico</footer>
     </div>

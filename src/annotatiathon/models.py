@@ -101,3 +101,54 @@ class ImportBatch(Base):
     created_count: Mapped[int] = mapped_column(Integer)
     changed_count: Mapped[int] = mapped_column(Integer)
     created_at: Mapped[int] = mapped_column(Integer, default=epoch)
+
+
+class TicketCategory(Base):
+    __tablename__ = "ticket_categories"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=identifier)
+    slug: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(100))
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    warning_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    warning_threshold: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    warning_window_minutes: Mapped[int] = mapped_column(Integer, default=60)
+
+
+class TicketDistribution(Base):
+    """Snapshot of recipients before an organiser/distributor confirms a batch."""
+
+    __tablename__ = "ticket_distributions"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=identifier)
+    category_id: Mapped[str] = mapped_column(ForeignKey("ticket_categories.id"))
+    operation: Mapped[str] = mapped_column(String(20))
+    quantity: Mapped[int] = mapped_column(Integer)
+    recipient_ids: Mapped[list[str]] = mapped_column(JSON)
+    scope: Mapped[str] = mapped_column(String(30))
+    status: Mapped[str] = mapped_column(String(20), default="preview")
+    requested_by: Mapped[str] = mapped_column(ForeignKey("staff_accounts.id"))
+    confirmed_by: Mapped[str | None] = mapped_column(ForeignKey("staff_accounts.id"), nullable=True)
+    created_at: Mapped[int] = mapped_column(Integer, default=epoch)
+    confirmed_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reversed_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reversal_staff_id: Mapped[str | None] = mapped_column(
+        ForeignKey("staff_accounts.id"), nullable=True
+    )
+
+
+class TicketLedgerEntry(Base):
+    """Signed append-only ledger. One row per balance change, including reversals."""
+
+    __tablename__ = "ticket_ledger"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=identifier)
+    category_id: Mapped[str] = mapped_column(ForeignKey("ticket_categories.id"), index=True)
+    person_id: Mapped[str] = mapped_column(ForeignKey("people.id"), index=True)
+    distribution_id: Mapped[str] = mapped_column(
+        ForeignKey("ticket_distributions.id"), index=True
+    )
+    kind: Mapped[str] = mapped_column(String(15), index=True)
+    quantity: Mapped[int] = mapped_column(Integer)
+    staff_id: Mapped[str] = mapped_column(ForeignKey("staff_accounts.id"))
+    reversal_of: Mapped[str | None] = mapped_column(
+        ForeignKey("ticket_ledger.id"), nullable=True, unique=True
+    )
+    created_at: Mapped[int] = mapped_column(Integer, default=epoch, index=True)

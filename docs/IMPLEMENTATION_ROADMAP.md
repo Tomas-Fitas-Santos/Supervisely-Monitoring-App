@@ -7,9 +7,9 @@ Phases govern delivery, not the order of independently editable setup tabs.
 | Phase | Scope | Status and acceptance |
 |---|---|---|
 | 0 | Architecture, scope, engineering rules and clean `main` foundation | **Completed** |
-| 1 | PostgreSQL, migrations, API, first-party staff login, organiser settings, React UI, live tab updates and worker | **In progress.** Password login, migrations, baseline React, staff/organiser permissions, settings persistence and 5-second active-tab polling implemented. Still missing account management UI, durable worker, SSE and end-to-end multi-browser trial |
-| 2 | CSV ingestion, People & Teams, QR-assisted attendance and table assignment | **Partially implemented.** Import mapping/preview, people CRUD, team views, sorting and invite email copying implemented; QR check-in and table assignment still missing |
-| 3 | Configurable ticket categories, bulk grants, soft limits, physical issuance, redemption and activity rewards | Not started |
+| 1 | PostgreSQL, migrations, API, first-party staff login, organiser settings, React UI, live tab updates and worker | **In progress.** Staff role editor added, plus authenticated UI and 5-second polling; still missing full staff account creation UI, durable worker, SSE and real multi-browser acceptance |
+| 2 | CSV ingestion, People & Teams, QR-assisted attendance and table assignment | **Partially implemented.** CSV/team/people screens and manual identity-confirmed check-in (with audit and reversal) implemented; QR scanning and table assignment remain |
+| 3 | Configurable ticket categories, bulk grants, soft limits, physical issuance, redemption and activity rewards | **In progress.** Categories, recipient previews, signed ledger, allocation/issue/redemption, soft warnings, idempotent confirmations and safe reversal implemented; activities, prizes, advanced reward flows remain |
 | 4 | Native Team 125980 connection, encrypted credential handling, member/role sync and explicit native admin operations | Not started; team/workspace settings persisted but not verified |
 | 5 | Resumable ZIP/folder upload, video metadata, fair whole-video distribution and logical prepared jobs | Not started |
 | 6 | Pair collaboration proof, native labeling-job lifecycle, launch, submission detection, completeness, correction, automatic/manual release | Not started |

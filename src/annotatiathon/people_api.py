@@ -97,6 +97,7 @@ def list_people(
     search: str = Query(default="", max_length=200),
     kind: Literal["participant", "monitor", "all"] = "all",
     membership: str = Query(default="all", max_length=30),
+    attendance: Literal["all", "present", "missing"] = "all",
     page: int = Query(default=1, ge=1),
     size: int = Query(default=50, ge=1, le=200),
     _ctx: AuthContext = Depends(requires(*VIEWER)),
@@ -107,6 +108,10 @@ def list_people(
         query = query.where(Person.kind == kind)
     if membership != "all":
         query = query.where(Person.membership_status == membership)
+    if attendance == "present":
+        query = query.where(Person.check_in_at.is_not(None))
+    elif attendance == "missing":
+        query = query.where(Person.check_in_at.is_(None))
     if search.strip():
         key = f"%{search.strip().lower()}%"
         query = query.where(
