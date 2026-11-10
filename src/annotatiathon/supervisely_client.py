@@ -11,6 +11,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from .config import get_settings
+from .credentials import decrypt_token
 from .models import SuperviselyConfig
 
 
@@ -54,13 +55,18 @@ class NativeTeamSnapshot:
 
 def require_connection(config: SuperviselyConfig | None) -> tuple[str, str]:
     settings = get_settings()
-    token = settings.supervisely_api_token
     if not config or not config.team_id:
         raise NativeAPIError("missing_team", "Save a Supervisely team ID in Settings first.")
-    if token is None or not token.get_secret_value().strip():
+    if not config.token_ciphertext:
         raise NativeAPIError(
-            "missing_token", "Configure SUPERVISELY_API_TOKEN in the backend .env and restart."
+            "missing_token", "An organiser must save a Supervisely token under Settings.",
         )
+    try:
+        token = decrypt_token(config.token_ciphertext)
+    except ValueError as exc:
+        raise NativeAPIError(
+            "credential_unavailable", "Saved Supervisely credential cannot be decrypted.",
+        ) from exc
     url = urlsplit(config.server_url)
     allowed = {
         host.strip().lower() for host in settings.supervisely_allowed_hosts.split(",")
@@ -75,7 +81,7 @@ def require_connection(config: SuperviselyConfig | None) -> tuple[str, str]:
             "Supervisely origin is not allowlisted. Configure SUPERVISELY_ALLOWED_HOSTS "
             "on the server for a trusted enterprise instance.",
         )
-    return config.server_url.rstrip("/"), token.get_secret_value().strip()
+    return config.server_url.rstrip("/"), token.strip()
 
 
 def _request_json(client: httpx.Client, base: str, token: str,
