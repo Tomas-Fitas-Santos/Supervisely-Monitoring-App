@@ -12,12 +12,18 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .auth import AuthContext, requires
-from .db import get_db
 from .datasets_api import get_dataset
+from .db import get_db
 from .events_api import current_event
 from .models import (
-    AuditEvent, CompetitionTeam, LabelingJob, LabelingPlan,
-    MediaAsset, MonitorAssignment, Person, epoch,
+    AuditEvent,
+    CompetitionTeam,
+    LabelingJob,
+    LabelingPlan,
+    MediaAsset,
+    MonitorAssignment,
+    Person,
+    epoch,
 )
 
 router = APIRouter(prefix="/api/v1/labeling", tags=["labeling plans"])

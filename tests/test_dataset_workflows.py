@@ -11,7 +11,12 @@ from sqlalchemy.pool import StaticPool
 from annotatiathon.app import app
 from annotatiathon.db import get_db
 from annotatiathon.models import (
-    DEFAULT_EVENT_ID, Base, Event, LabelingJob, MediaAsset, StaffAccount,
+    DEFAULT_EVENT_ID,
+    Base,
+    Event,
+    LabelingJob,
+    MediaAsset,
+    StaffAccount,
 )
 from annotatiathon.security import password_hash
 

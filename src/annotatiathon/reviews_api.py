@@ -15,8 +15,13 @@ from .datasets_api import get_dataset
 from .db import get_db
 from .events_api import current_event
 from .models import (
-    AuditEvent, JobReview, LabelingJob, MediaAsset, MonitorAssignment,
-    Person, epoch,
+    AuditEvent,
+    JobReview,
+    LabelingJob,
+    MediaAsset,
+    MonitorAssignment,
+    Person,
+    epoch,
 )
 
 router = APIRouter(prefix="/api/v1/review", tags=["quality review"])

@@ -14,8 +14,17 @@ from .auth import AuthContext, requires
 from .db import get_db
 from .events_api import current_event
 from .models import (
-    AuditEvent, CompetitionTeam, Event, EventCloseout, JobReview,
-    LabelingJob, MediaAsset, MediaDataset, Person, TicketLedgerEntry, epoch,
+    AuditEvent,
+    CompetitionTeam,
+    Event,
+    EventCloseout,
+    JobReview,
+    LabelingJob,
+    MediaAsset,
+    MediaDataset,
+    Person,
+    TicketLedgerEntry,
+    epoch,
 )
 
 router = APIRouter(prefix="/api/v1/closeout", tags=["event reports"])

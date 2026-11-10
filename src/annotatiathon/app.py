@@ -5,8 +5,8 @@ from .activities_api import router as activities_router
 from .attendance_api import router as attendance_router
 from .auth import router as auth_router
 from .closeout_api import router as closeout_router
-from .datasets_api import router as datasets_router
 from .database import database_is_ready
+from .datasets_api import router as datasets_router
 from .events_api import router as events_router
 from .labeling_api import router as labeling_router
 from .monitoring_api import router as monitoring_router

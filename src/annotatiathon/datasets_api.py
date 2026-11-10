@@ -19,7 +19,11 @@ from .config import get_settings
 from .db import get_db
 from .events_api import current_event
 from .models import (
-    AuditEvent, DatasetStagedFile, MediaAsset, MediaDataset, epoch,
+    AuditEvent,
+    DatasetStagedFile,
+    MediaAsset,
+    MediaDataset,
+    epoch,
 )
 
 router = APIRouter(prefix="/api/v1/datasets", tags=["datasets"])
