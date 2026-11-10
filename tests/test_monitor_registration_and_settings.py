@@ -45,7 +45,15 @@ def setup(monkeypatch):
             server_url="https://app.supervisely.com",
         ))
     key = Fernet.generate_key().decode()
-    settings = SimpleNamespace(nightjar_encryption_key=SecretStr(key))
+    settings = SimpleNamespace(
+        nightjar_encryption_key=SecretStr(key),
+        smtp_host="smtp.example.org",
+        smtp_sender="nightjar@example.org",
+        smtp_port=587,
+        smtp_username="nightjar",
+        smtp_password=SecretStr("fake_test_password_not_live"),
+        smtp_use_ssl=False,
+    )
     monkeypatch.setattr("annotatiathon.credentials.get_settings", lambda: settings)
     monkeypatch.setattr("annotatiathon.registration_api.get_settings", lambda: settings)
     monkeypatch.setattr(
@@ -285,3 +293,103 @@ def test_organiser_can_revoke_signup_for_approved_monitor(setup):
     http.post("/api/v1/auth/register/request",
               json={"email": "roster@example.org"})
     assert sent == []
+
+
+def test_registration_email_readiness_and_organiser_test_are_protected(
+    setup, monkeypatch,
+):
+    http, _maker, _sent = setup
+    status = http.get("/api/v1/auth/register/status")
+    assert status.status_code == 200, status.text
+    assert status.json()["email_verification_available"] is True
+    assert status.json()["verification_code_minutes"] == 10
+    assert http.get("/api/v1/settings/registration-email").status_code == 401
+
+    csrf = login(http)
+    response = http.get("/api/v1/settings/registration-email")
+    assert response.status_code == 200, response.text
+    assert response.json()["configured"] is True
+    assert response.json()["sender"] == "nightjar@example.org"
+    assert "fake_test_password_not_live" not in response.text
+
+    deliveries = []
+    monkeypatch.setattr(
+        "annotatiathon.registration_api.send_mail",
+        lambda email, subject, body: deliveries.append((email, subject, body)),
+    )
+    test = http.post("/api/v1/settings/registration-email/test",
+        headers={"X-CSRF-Token": csrf})
+    assert test.status_code == 200, test.text
+    assert test.json()["sent"] is True
+    assert deliveries[0][0] == "organiser@example.org"
+    assert "verification code" not in deliveries[0][2].lower()
+    assert http.post("/api/v1/settings/registration-email/test").status_code == 403
+
+
+def test_monitor_code_resend_rate_limit_and_revoked_approval(
+    setup,
+):
+    http, maker, delivered = setup
+    csrf = login(http)
+    response = http.post("/api/v1/people", headers={"X-CSRF-Token": csrf},
+        json={"name": "Registered Monitor", "email": "check@example.org",
+              "kind": "monitor"})
+    assert response.status_code == 201, response.text
+    http.post("/api/v1/auth/logout", headers={"X-CSRF-Token": csrf})
+
+    first = http.post("/api/v1/auth/register/request",
+        json={"email": "check@example.org"})
+    assert first.status_code == 200
+    assert first.json()["resend_after_seconds"] == 60
+    assert len(delivered) == 1
+    second = http.post("/api/v1/auth/register/request",
+        json={"email": "check@example.org"})
+    assert second.status_code == 200
+    assert len(delivered) == 1
+    code = delivered[0][1]
+
+    with maker.begin() as db:
+        person = db.scalar(select(Person).where(Person.email == "check@example.org"))
+        person.kind = "participant"
+    forbidden = http.post("/api/v1/auth/register/complete", json={
+        "email": "check@example.org", "code": code,
+        "password": "ValidMonitorP@ssword&2026",
+    })
+    assert forbidden.status_code == 403
+    assert http.post("/api/v1/auth/login", json={
+        "email": "check@example.org", "password": "ValidMonitorP@ssword&2026",
+    }).status_code == 401
+
+
+def test_registration_code_expires_and_cannot_be_reused(setup):
+    from annotatiathon.models import RegistrationChallenge, epoch
+
+    http, maker, delivered = setup
+    csrf = login(http)
+    http.post("/api/v1/people", headers={"X-CSRF-Token": csrf},
+        json={"name": "Monitor", "email": "valid@example.org", "kind": "monitor"})
+    http.post("/api/v1/auth/logout", headers={"X-CSRF-Token": csrf})
+    http.post("/api/v1/auth/register/request", json={"email": "valid@example.org"})
+    assert delivered
+    code = delivered[0][1]
+    with maker.begin() as db:
+        challenge = db.get(RegistrationChallenge, "valid@example.org")
+        challenge.expires_at = epoch() - 1
+    expired = http.post("/api/v1/auth/register/complete", json={
+        "email": "valid@example.org", "code": code,
+        "password": "Safe?Strong&Password*2026",
+    })
+    assert expired.status_code == 400
+    with maker.begin() as db:
+        challenge = db.get(RegistrationChallenge, "valid@example.org")
+        challenge.expires_at = epoch() + 600
+    accepted = http.post("/api/v1/auth/register/complete", json={
+        "email": "valid@example.org", "code": code,
+        "password": "Safe?Strong&Password*2026",
+    })
+    assert accepted.status_code == 200, accepted.text
+    assert http.post("/api/v1/auth/register/complete", json={
+        "email": "valid@example.org", "code": code,
+        "password": "Safe?Strong&Password*2026",
+    }).status_code == 400
+    assert login(http,"valid@example.org","Safe?Strong&Password*2026")
