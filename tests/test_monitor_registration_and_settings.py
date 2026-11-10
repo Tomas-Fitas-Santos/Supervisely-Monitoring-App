@@ -208,3 +208,80 @@ def test_staff_personal_supervisely_token_is_not_stored(setup, monkeypatch):
         assert member.supervisely_user_id == 44444
         assert member.supervisely_verified_team_id == 125980
         assert not hasattr(member, "supervisely_api_token")
+
+
+def test_auto_sync_imports_participant_and_monitor_then_organiser_can_approve(
+    setup, monkeypatch,
+):
+    http, maker, sent = setup
+    csrf = login(http)
+    source = NativeTeamSnapshot(
+        **{**native_snapshot().__dict__, "members": (
+            NativeMember(id=555, login="annotator-bird",
+                         email="bird@example.org", role="annotator"),
+            NativeMember(id=556, login="monitor-bird",
+                         email="monitorbird@example.org", role="manager"),
+            NativeMember(id=557, login="email-unknown", email=None, role="manager"),
+        )}
+    )
+    monkeypatch.setattr(
+        "annotatiathon.native_sync_api.read_team_snapshot",
+        lambda config: source,
+    )
+    first = http.post("/api/v1/people/supervisely/refresh",
+                      headers={"X-CSRF-Token": csrf})
+    assert first.status_code == 200, first.text
+    assert first.json()["created"] == 2
+    assert first.json()["unmatched_native"] == 1
+    again = http.post("/api/v1/people/supervisely/refresh",
+                      headers={"X-CSRF-Token": csrf})
+    assert again.status_code == 200, again.text
+    assert again.json()["created"] == 0
+    people = {p["email"]: p for p in http.get("/api/v1/people").json()["items"]}
+    assert people["bird@example.org"]["kind"] == "participant"
+    assert people["monitorbird@example.org"]["kind"] == "monitor"
+    native = people["monitorbird@example.org"]
+    assert native["native_auto_imported"] is True
+    assert native["monitor_registration_approved"] is False
+
+    http.post("/api/v1/auth/register/request",
+              json={"email": "monitorbird@example.org"})
+    assert sent == []
+
+    approved = http.put("/api/v1/people/"+native["id"]+"/monitor-registration",
+        headers={"X-CSRF-Token": csrf}, json={"approved": True})
+    assert approved.status_code == 200
+    assert approved.json()["monitor_registration_approved"] is True
+    requested = http.post("/api/v1/auth/register/request",
+                          json={"email": "monitorbird@example.org"})
+    assert requested.status_code == 200
+    assert len(sent) == 1
+
+    forbidden = http.put(
+        "/api/v1/people/"+people["bird@example.org"]["id"]+"/monitor-registration",
+        headers={"X-CSRF-Token": csrf}, json={"approved": True},
+    )
+    assert forbidden.status_code == 409
+
+    with maker() as db:
+        all_entries = list(db.scalars(select(Person)))
+        assert len(all_entries) == 2
+
+
+def test_organiser_can_revoke_signup_for_approved_monitor(setup):
+    http, maker, sent = setup
+    csrf = login(http)
+    added = http.post("/api/v1/people",headers={"X-CSRF-Token": csrf},
+        json={"name": "Roster Monitor", "email": "roster@example.org",
+              "kind": "monitor"})
+    assert added.status_code == 201
+    assert added.json()["monitor_registration_approved"] is True
+    disabled = http.put(
+        "/api/v1/people/"+added.json()["id"]+"/monitor-registration",
+        headers={"X-CSRF-Token": csrf},json={"approved": False},
+    )
+    assert disabled.status_code == 200
+    assert disabled.json()["monitor_registration_approved"] is False
+    http.post("/api/v1/auth/register/request",
+              json={"email": "roster@example.org"})
+    assert sent == []
