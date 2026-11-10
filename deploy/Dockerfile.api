@@ -9,7 +9,7 @@ RUN python -m pip install --no-cache-dir .
 COPY alembic.ini /app/alembic.ini
 COPY migrations/ /app/migrations/
 COPY deploy/docker-entrypoint.sh /usr/local/bin/nightjar-entrypoint
-RUN chmod 0755 /usr/local/bin/nightjar-entrypoint &&     groupadd --gid 10001 nightjar && useradd --uid 10001 --gid 10001 --create-home --home-dir /home/nightjar nightjar &&     mkdir -p /data && chown -R 10001:10001 /data /app
+RUN sed -i 's/\r$//' /usr/local/bin/nightjar-entrypoint && chmod 0755 /usr/local/bin/nightjar-entrypoint &&     groupadd --gid 10001 nightjar && useradd --uid 10001 --gid 10001 --create-home --home-dir /home/nightjar nightjar &&     mkdir -p /data && chown -R 10001:10001 /data /app
 USER nightjar
 ENTRYPOINT ["/usr/local/bin/nightjar-entrypoint"]
 CMD ["uvicorn", "annotatiathon.app:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]
