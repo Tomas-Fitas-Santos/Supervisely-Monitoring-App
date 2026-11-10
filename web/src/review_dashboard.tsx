@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { BarChart3, RefreshCw, ShieldCheck, Trophy, UsersRound } from "lucide-react";
+import { BarChart3, RefreshCw, ShieldCheck, Trophy } from "lucide-react";
 import { api, type Auth } from "./api";
 
 export type TeamMetric={
   team_id:string;team_name:string;monitor_person_id:string|null;
   jobs_total:number;jobs_completed:number;jobs_submitted:number;
   jobs_awaiting_review:number;frames_assigned:number;frames_submitted:number;
-  frames_synced:number;frames_reviewed:number;correct_keypoints:number;
+  frames_synced:number;frames_annotated:number|null;frames_reviewed:number;correct_keypoints:number;
   missing_keypoints:number;incorrect_keypoints:number;evaluated_keypoints:number;
   keypoint_accuracy_pct:number|null;average_seconds_per_frame:number|null;
   timed_frames:number;rank:number|null;
@@ -90,7 +90,10 @@ export function TeamReviewOverview({auth,mode}:{auth:Auth;mode:"dashboard"|"rank
           <div className="metric-tile"><span>Correct keypoints</span><strong>{accuracy(selected.keypoint_accuracy_pct)}</strong><small>{integer(selected.evaluated_keypoints)} reviewed points</small></div>
           <div className="metric-tile"><span>Accepted jobs</span><strong>{selected.jobs_completed} / {selected.jobs_total}</strong><small>{selected.jobs_awaiting_review} awaiting review</small></div>
           <div className="metric-tile"><span>Frames submitted</span><strong>{integer(selected.frames_submitted)}</strong><small>{integer(selected.frames_assigned)} assigned</small></div>
-          <div className="metric-tile"><span>Annotations downloaded</span><strong>{integer(selected.frames_synced)}</strong><small>Source frames with a saved snapshot</small></div>
+          <div className="metric-tile"><span>Frames with actual annotations</span><strong>{
+            selected.frames_annotated===null?"Not available":integer(selected.frames_annotated)
+          }</strong><small>Frames containing downloaded Supervisely labels</small></div>
+          <div className="metric-tile"><span>Annotations downloaded</span><strong>{integer(selected.frames_synced)}</strong><small>Frames in complete local snapshots</small></div>
           <div className="metric-tile"><span>Frames quality-reviewed</span><strong>{integer(selected.frames_reviewed)}</strong><small>{selected.correct_keypoints} correct · {selected.missing_keypoints} missing · {selected.incorrect_keypoints} incorrect points</small></div>
         </div>}
       </section>
