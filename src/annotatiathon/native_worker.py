@@ -6,7 +6,7 @@ Run as a *separate local process*:
 
 The official SDK calls used here are:
   Api(server_address, token), workspace.get_info_by_id,
-  project.get_list/create, dataset.get_list/create,
+  project.get_list/create/get_meta/update_meta, dataset.get_list/create,
   image.get_list/upload_paths, labeling_job.get_list/create/get_info_by_id.
 No project/job deletion, role mutation or forced job completion is performed.
 
@@ -26,6 +26,7 @@ from pathlib import Path, PurePosixPath
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .annotation_schema import AnnotationSchemaError, ensure_project_annotation_classes
 from .db import session_factory
 from .models import (
     AuditEvent,
@@ -229,6 +230,12 @@ def publish_job(db: Session, job: LabelingJob, api, config: SuperviselyConfig) -
     if dataset is None or dataset.status != "ready":
         raise NativeWorkerError("local_dataset_not_ready")
     project_id = remote_project(api, config, dataset)
+    # All image datasets/jobs in this Supervisely project share project metadata.
+    # Make sure annotation tools exist *before* uploading frames or publishing jobs.
+    try:
+        ensure_project_annotation_classes(api, project_id)
+    except AnnotationSchemaError as exc:
+        raise NativeWorkerError(exc.code) from exc
     if dataset.native_project_id is None:
         dataset.native_project_id = project_id
         db.commit()

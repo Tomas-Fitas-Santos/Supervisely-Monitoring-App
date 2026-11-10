@@ -30,6 +30,7 @@ type ManualOptions={teams:TeamOption[];videos:VideoOption[];
   existing:{team_id:string;video_group:string;assignee_person_id:string|null;
     job_id:string;status:string}[]};
 type Draft={team_id:string;assignee_person_id:string;video_group:string};
+type AnnotationClass={name:string;shape:"rectangle"|"point";color:string;description:string};
 
 export function CompetitionScreen({auth}:{auth:Auth}) {
   const admin=auth.staff.roles.includes("organiser");
@@ -45,6 +46,7 @@ export function CompetitionScreen({auth}:{auth:Auth}) {
   const [videoLimit,setVideoLimit]=useState("");
   const [created,setCreated]=useState<Created|null>(null);
   const [native,setNative]=useState<NativeStatus|null>(null);
+  const [annotationClasses,setAnnotationClasses]=useState<AnnotationClass[]>([]);
   const [options,setOptions]=useState<ManualOptions|null>(null);
   const [teamId,setTeamId]=useState("");
   const [personId,setPersonId]=useState("");
@@ -81,6 +83,11 @@ export function CompetitionScreen({auth}:{auth:Auth}) {
     }catch(e){setError((e as Error).message);}
   },[dataset]);
   useEffect(()=>{void refresh();},[refresh]);
+  useEffect(()=>{
+    void api<{items:AnnotationClass[]}>("/labeling/annotation-classes")
+      .then(response=>setAnnotationClasses(response.items))
+      .catch(error=>setError((error as Error).message));
+  },[]);
   useEffect(()=>{setDrafts([]);void refreshOptions();},[refreshOptions]);
   useEffect(()=>{
     if(!chosen){setMedia(null);return;}
@@ -192,6 +199,18 @@ export function CompetitionScreen({auth}:{auth:Auth}) {
           <p>Build one or more jobs for existing teams. Each row becomes a separate Supervisely labeling job for the selected person, with one complete video. No new event is created.</p></div>
         <Video size={25} className="faint-icon"/>
       </div>
+      <details className="annotation-palette">
+        <summary>Supervisely annotation tools · 1 bird bounding box + 8 keypoint classes</summary>
+        <p className="muted small">These classes are configured automatically on the Supervisely project before new jobs are published. Vivid points mean visible landmarks; muted points mean occluded landmarks.</p>
+        <div className="annotation-class-grid">
+          {annotationClasses.map(cls=><div className="annotation-class" key={cls.name}>
+            <span className={"annotation-swatch "+(cls.shape==="rectangle"?"rectangle":"point")}
+              style={{backgroundColor:cls.shape==="point"?cls.color:"transparent",
+                borderColor:cls.color}}/>
+            <div><strong>{cls.name}</strong><small>{cls.description}</small></div>
+          </div>)}
+        </div>
+      </details>
       <div className="form-grid triple">
         <label>Source collection<select value={dataset} onChange={e=>setDataset(e.target.value)}>
           <option value="">Select collection…</option>
