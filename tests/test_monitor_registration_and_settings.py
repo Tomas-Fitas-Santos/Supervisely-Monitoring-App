@@ -1,6 +1,6 @@
-"""Production API contracts for roster-only registration and token settings.
+"""Roster-only Nightjar monitor signup and separate Supervisely linking.
 
-External email and Supervisely requests are isolated using injected test adapters.
+No SMTP, verification code, or email delivery is used by registration.
 """
 from types import SimpleNamespace
 
@@ -47,30 +47,18 @@ def setup(monkeypatch):
     key = Fernet.generate_key().decode()
     settings = SimpleNamespace(
         nightjar_encryption_key=SecretStr(key),
-        smtp_host="smtp.example.org",
-        smtp_sender="nightjar@example.org",
-        smtp_port=587,
-        smtp_username="nightjar",
-        smtp_password=SecretStr("fake_test_password_not_live"),
-        smtp_use_ssl=False,
     )
     monkeypatch.setattr("annotatiathon.credentials.get_settings", lambda: settings)
-    monkeypatch.setattr("annotatiathon.registration_api.get_settings", lambda: settings)
     monkeypatch.setattr(
         "annotatiathon.auth.get_settings",
         lambda: SimpleNamespace(app_env="local"),
-    )
-    delivery = []
-    monkeypatch.setattr(
-        "annotatiathon.registration_api.send_verification",
-        lambda email, code: delivery.append((email, code)),
     )
     def override_db():
         with maker() as db:
             yield db
     app.dependency_overrides[get_db] = override_db
     with TestClient(app) as http:
-        yield http, maker, delivery
+        yield http, maker, None
     app.dependency_overrides.clear()
     engine.dispose()
 
@@ -94,60 +82,95 @@ def native_snapshot():
     )
 
 
-def test_monitor_signup_requires_approved_roster_and_email_code(setup):
-    http, maker, sent = setup
+def test_monitor_signup_uses_only_approved_sql_roster_and_app_password(setup):
+    http, maker, _ = setup
     csrf = login(http)
     for email, kind in (
         ("monitor@example.org", "monitor"),
         ("ordinary@example.org", "participant"),
     ):
-        r = http.post("/api/v1/people", json={
+        result = http.post("/api/v1/people", json={
             "name": email.split("@")[0], "email": email, "kind": kind,
         }, headers={"X-CSRF-Token": csrf})
-        assert r.status_code == 201, r.text
+        assert result.status_code == 201, result.text
     http.post("/api/v1/auth/logout", headers={"X-CSRF-Token": csrf})
 
     for email in ("outsider@example.org", "ordinary@example.org"):
-        r = http.post("/api/v1/auth/register/request", json={"email": email})
-        assert r.status_code == 200
-    assert sent == []
+        result = http.post("/api/v1/auth/register", json={
+            "email": email, "password": "SafeMonitorPassword_123!&",
+        })
+        assert result.status_code == 403, result.text
 
-    request = http.post(
-        "/api/v1/auth/register/request", json={"email": "monitor@example.org"},
-    )
-    assert request.status_code == 200, request.text
-    assert len(sent) == 1
-    code = sent[0][1]
-    wrong = http.post("/api/v1/auth/register/complete", json={
-        "email": "monitor@example.org", "code": "00000000",
-        "password": "SafeMonitorPassword_123",
+    created = http.post("/api/v1/auth/register", json={
+        "email": "  MONITOR@example.org  ",
+        "password": "SafeMonitorPassword_123!&",
     })
-    assert wrong.status_code == 400
-    accepted = http.post("/api/v1/auth/register/complete", json={
-        "email": "monitor@example.org", "code": code,
-        "password": "SafeMonitorPassword_123",
-    })
-    assert accepted.status_code == 200, accepted.text
-    assert accepted.json()["registered"] is True
-    assert login(http, "monitor@example.org", "SafeMonitorPassword_123")
+    assert created.status_code == 201, created.text
+    assert created.json()["registered"] is True
+    assert login(http, "monitor@example.org", "SafeMonitorPassword_123!&")
     with maker() as db:
         staff = db.scalar(select(StaffAccount).where(
-            StaffAccount.email == "monitor@example.org"
+            StaffAccount.email == "monitor@example.org",
         ))
         assert staff.roles == ["monitor"]
+        assert staff.name == "monitor"
+        assert staff.supervisely_user_id is None
+        assert db.scalar(select(StaffAccount).where(
+            StaffAccount.email == "outsider@example.org",
+        )) is None
+
+
+def test_account_claim_is_single_use_and_signup_requires_strong_password(setup):
+    http, maker, _ = setup
+    with maker.begin() as db:
+        db.add(Person(
+            event_id=DEFAULT_EVENT_ID, email="claimed@example.org",
+            name="Approved Monitor", kind="monitor",
+        ))
+    short = http.post("/api/v1/auth/register", json={
+        "email": "claimed@example.org", "password": "weak",
+    })
+    assert short.status_code == 422
+    first = http.post("/api/v1/auth/register", json={
+        "email": "claimed@example.org", "password": "S#trong&P@ssword?2026",
+    })
+    assert first.status_code == 201
+    again = http.post("/api/v1/auth/register", json={
+        "email": "claimed@example.org", "password": "AnotherVeryStrongPassword123",
+    })
+    assert again.status_code == 409
+    assert login(http, "claimed@example.org", "S#trong&P@ssword?2026")
+
+
+def test_signup_does_not_require_supervisely_membership_before_link(setup):
+    http, maker, _ = setup
+    with maker.begin() as db:
+        db.add(Person(
+            event_id=DEFAULT_EVENT_ID, email="unlinked@example.org",
+            name="Unlinked Monitor", kind="monitor",
+            membership_status="not_invited", supervisely_role=None,
+        ))
+    created = http.post("/api/v1/auth/register", json={
+        "email": "unlinked@example.org", "password": "OnlyForNightjar123#",
+    })
+    assert created.status_code == 201, created.text
+    assert login(http, "unlinked@example.org", "OnlyForNightjar123#")
+    assert http.get("/api/v1/settings/supervisely/shared").status_code == 200
+    assert http.get("/api/v1/settings/supervisely/personal").json()["linked"] is False
 
 
 def test_native_auto_import_does_not_authorise_signup(setup):
-    http, maker, sent = setup
+    http, maker, _ = setup
     with maker.begin() as db:
         db.add(Person(
             event_id=DEFAULT_EVENT_ID, email="native@example.org",
             name="Native Account", kind="monitor",
             source_fields={"source": "supervisely_member_sync"},
         ))
-    assert http.post("/api/v1/auth/register/request",
-                     json={"email": "native@example.org"}).status_code == 200
-    assert sent == []
+    denied = http.post("/api/v1/auth/register", json={
+        "email": "native@example.org", "password": "SafeMonitorPassword_123",
+    })
+    assert denied.status_code == 403
 
 
 def test_shared_token_is_encrypted_and_monitor_ids_are_readonly(setup, monkeypatch):
@@ -221,7 +244,7 @@ def test_staff_personal_supervisely_token_is_not_stored(setup, monkeypatch):
 def test_auto_sync_imports_participant_and_monitor_then_organiser_can_approve(
     setup, monkeypatch,
 ):
-    http, maker, sent = setup
+    http, maker, _ = setup
     csrf = login(http)
     source = NativeTeamSnapshot(
         **{**native_snapshot().__dict__, "members": (
@@ -240,44 +263,40 @@ def test_auto_sync_imports_participant_and_monitor_then_organiser_can_approve(
                       headers={"X-CSRF-Token": csrf})
     assert first.status_code == 200, first.text
     assert first.json()["created"] == 2
-    assert first.json()["unmatched_native"] == 1
     again = http.post("/api/v1/people/supervisely/refresh",
                       headers={"X-CSRF-Token": csrf})
-    assert again.status_code == 200, again.text
+    assert again.status_code == 200
     assert again.json()["created"] == 0
     people = {p["email"]: p for p in http.get("/api/v1/people").json()["items"]}
     assert people["bird@example.org"]["kind"] == "participant"
-    assert people["monitorbird@example.org"]["kind"] == "monitor"
     native = people["monitorbird@example.org"]
+    assert native["kind"] == "monitor"
     assert native["native_auto_imported"] is True
     assert native["monitor_registration_approved"] is False
-
-    http.post("/api/v1/auth/register/request",
-              json={"email": "monitorbird@example.org"})
-    assert sent == []
-
+    denied = http.post("/api/v1/auth/register", json={
+        "email": "monitorbird@example.org",
+        "password": "SafeMonitorPassword_123",
+    })
+    assert denied.status_code == 403
     approved = http.put("/api/v1/people/"+native["id"]+"/monitor-registration",
         headers={"X-CSRF-Token": csrf}, json={"approved": True})
     assert approved.status_code == 200
     assert approved.json()["monitor_registration_approved"] is True
-    requested = http.post("/api/v1/auth/register/request",
-                          json={"email": "monitorbird@example.org"})
-    assert requested.status_code == 200
-    assert len(sent) == 1
-
-    forbidden = http.put(
-        "/api/v1/people/"+people["bird@example.org"]["id"]+"/monitor-registration",
-        headers={"X-CSRF-Token": csrf}, json={"approved": True},
-    )
-    assert forbidden.status_code == 409
-
+    created = http.post("/api/v1/auth/register", json={
+        "email": "monitorbird@example.org",
+        "password": "SafeMonitorPassword_123",
+    })
+    assert created.status_code == 201, created.text
+    participant_denied = http.post("/api/v1/auth/register", json={
+        "email": "bird@example.org", "password": "SafeMonitorPassword_123",
+    })
+    assert participant_denied.status_code == 403
     with maker() as db:
-        all_entries = list(db.scalars(select(Person)))
-        assert len(all_entries) == 2
+        assert len(list(db.scalars(select(Person)))) == 2
 
 
 def test_organiser_can_revoke_signup_for_approved_monitor(setup):
-    http, _maker, sent = setup
+    http, _maker, _ = setup
     csrf = login(http)
     added = http.post("/api/v1/people",headers={"X-CSRF-Token": csrf},
         json={"name": "Roster Monitor", "email": "roster@example.org",
@@ -289,140 +308,43 @@ def test_organiser_can_revoke_signup_for_approved_monitor(setup):
         headers={"X-CSRF-Token": csrf},json={"approved": False},
     )
     assert disabled.status_code == 200
-    assert disabled.json()["monitor_registration_approved"] is False
-    http.post("/api/v1/auth/register/request",
-              json={"email": "roster@example.org"})
-    assert sent == []
-
-
-def test_registration_email_readiness_and_organiser_test_are_protected(
-    setup, monkeypatch,
-):
-    http, _maker, _sent = setup
-    status = http.get("/api/v1/auth/register/status")
-    assert status.status_code == 200, status.text
-    assert status.json()["email_verification_available"] is True
-    assert status.json()["verification_code_minutes"] == 10
-    assert http.get("/api/v1/settings/registration-email").status_code == 401
-
-    csrf = login(http)
-    response = http.get("/api/v1/settings/registration-email")
-    assert response.status_code == 200, response.text
-    assert response.json()["configured"] is True
-    assert response.json()["sender"] == "nightjar@example.org"
-    assert "fake_test_password_not_live" not in response.text
-
-    deliveries = []
-    monkeypatch.setattr(
-        "annotatiathon.registration_api.send_mail",
-        lambda email, subject, body: deliveries.append((email, subject, body)),
-    )
-    test = http.post("/api/v1/settings/registration-email/test",
-        headers={"X-CSRF-Token": csrf})
-    assert test.status_code == 200, test.text
-    assert test.json()["sent"] is True
-    assert deliveries[0][0] == "organiser@example.org"
-    assert "email delivery is working" in deliveries[0][2].lower()
-    assert "Your one-time Nightjar monitor registration code" not in deliveries[0][2]
-    assert http.post("/api/v1/settings/registration-email/test").status_code == 403
-
-
-def test_monitor_code_resend_rate_limit_and_revoked_approval(
-    setup,
-):
-    http, maker, delivered = setup
-    csrf = login(http)
-    response = http.post("/api/v1/people", headers={"X-CSRF-Token": csrf},
-        json={"name": "Registered Monitor", "email": "check@example.org",
-              "kind": "monitor"})
-    assert response.status_code == 201, response.text
-    http.post("/api/v1/auth/logout", headers={"X-CSRF-Token": csrf})
-
-    first = http.post("/api/v1/auth/register/request",
-        json={"email": "check@example.org"})
-    assert first.status_code == 200
-    assert first.json()["resend_after_seconds"] == 60
-    assert len(delivered) == 1
-    second = http.post("/api/v1/auth/register/request",
-        json={"email": "check@example.org"})
-    assert second.status_code == 200
-    assert len(delivered) == 1
-    code = delivered[0][1]
-
-    with maker.begin() as db:
-        person = db.scalar(select(Person).where(Person.email == "check@example.org"))
-        person.kind = "participant"
-    forbidden = http.post("/api/v1/auth/register/complete", json={
-        "email": "check@example.org", "code": code,
-        "password": "ValidMonitorP@ssword&2026",
+    denied = http.post("/api/v1/auth/register", json={
+        "email": "roster@example.org", "password": "SafeMonitorPassword_123",
     })
-    assert forbidden.status_code == 403
-    assert http.post("/api/v1/auth/login", json={
-        "email": "check@example.org", "password": "ValidMonitorP@ssword&2026",
-    }).status_code == 401
+    assert denied.status_code == 403
 
 
-def test_registration_code_expires_and_cannot_be_reused(setup):
-    from annotatiathon.models import RegistrationChallenge, epoch
-
-    http, maker, delivered = setup
-    csrf = login(http)
-    http.post("/api/v1/people", headers={"X-CSRF-Token": csrf},
-        json={"name": "Monitor", "email": "valid@example.org", "kind": "monitor"})
-    http.post("/api/v1/auth/logout", headers={"X-CSRF-Token": csrf})
-    http.post("/api/v1/auth/register/request", json={"email": "valid@example.org"})
-    assert delivered
-    code = delivered[0][1]
-    with maker.begin() as db:
-        challenge = db.get(RegistrationChallenge, "valid@example.org")
-        challenge.expires_at = epoch() - 1
-    expired = http.post("/api/v1/auth/register/complete", json={
-        "email": "valid@example.org", "code": code,
-        "password": "Safe?Strong&Password*2026",
-    })
-    assert expired.status_code == 400
-    with maker.begin() as db:
-        challenge = db.get(RegistrationChallenge, "valid@example.org")
-        challenge.expires_at = epoch() + 600
-    accepted = http.post("/api/v1/auth/register/complete", json={
-        "email": "valid@example.org", "code": code,
-        "password": "Safe?Strong&Password*2026",
-    })
-    assert accepted.status_code == 200, accepted.text
-    assert http.post("/api/v1/auth/register/complete", json={
-        "email": "valid@example.org", "code": code,
-        "password": "Safe?Strong&Password*2026",
-    }).status_code == 400
-    assert login(http,"valid@example.org","Safe?Strong&Password*2026")
-
-
-def test_smtp_failure_does_not_reveal_monitor_roster_membership(setup, monkeypatch):
-    from fastapi import HTTPException
-
-    http, maker, _sent = setup
+def test_signup_and_login_remain_separate_from_supervisely(setup):
+    http, maker, _ = setup
     with maker.begin() as db:
         db.add(Person(
-            event_id=DEFAULT_EVENT_ID, email="eligible@example.org",
-            name="Eligible Monitor", kind="monitor",
+            event_id=DEFAULT_EVENT_ID, email="event-monitor@example.org",
+            name="Event Monitor", kind="monitor",
+            membership_status="joined", supervisely_role="annotator",
         ))
+    # Native role alignment does not prevent creation of a Nightjar account.
+    result = http.post("/api/v1/auth/register", json={
+        "email": "event-monitor@example.org",
+        "password": "SecureNightjarPassword2026!",
+    })
+    assert result.status_code == 201, result.text
+    assert login(http, "event-monitor@example.org", "SecureNightjarPassword2026!")
+    # Registering never grants organiser rights or links any native token.
+    with maker() as db:
+        staff = db.scalar(select(StaffAccount).where(
+            StaffAccount.email == "event-monitor@example.org",
+        ))
+        assert staff.roles == ["monitor"]
+        assert staff.supervisely_user_id is None
 
-    def fail_send(_email, _code):
-        raise HTTPException(status_code=503, detail="Internal SMTP failure.")
 
-    monkeypatch.setattr("annotatiathon.registration_api.send_verification", fail_send)
-    eligible = http.post("/api/v1/auth/register/request",
-        json={"email": "eligible@example.org"})
-    unknown = http.post("/api/v1/auth/register/request",
-        json={"email": "stranger@example.org"})
-    assert eligible.status_code == 200
-    assert eligible.json() == unknown.json()
-    assert "eligible@example.org" not in eligible.text
-
-    monkeypatch.setattr("annotatiathon.registration_api.smtp_ready", lambda: False)
-    disabled = http.post("/api/v1/auth/register/request",
-        json={"email": "eligible@example.org"})
-    assert disabled.status_code == 503
-    disabled_unknown = http.post("/api/v1/auth/register/request",
-        json={"email": "stranger@example.org"})
-    assert disabled_unknown.status_code == 503
-    assert disabled.json() == disabled_unknown.json()
+def test_no_email_verification_endpoints_or_mail_settings_are_required(setup):
+    http, _maker, _ = setup
+    assert http.get("/api/v1/auth/register/status").status_code == 404
+    assert http.post("/api/v1/auth/register/request", json={
+        "email": "test@example.org",
+    }).status_code == 404
+    assert http.post("/api/v1/auth/register/complete", json={
+        "email": "test@example.org",
+    }).status_code == 404
+    assert http.get("/api/v1/settings/registration-email").status_code == 404
