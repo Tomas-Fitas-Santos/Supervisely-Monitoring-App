@@ -797,13 +797,10 @@ def process_event_reset(db: Session, api, config: SuperviselyConfig) -> dict | N
             # identified as Nightjar projects before considering deletion.
             for pid in linked - {p.id for p in matched}:
                 remote = api.project.get_info_by_id(pid)
-                if remote is not None and remote.name != scope + next(
-                    (d.id for d in db.scalars(select(MediaDataset).where(
-                        MediaDataset.event_id == event_id,
-                        MediaDataset.native_project_id == pid,
-                    ))), ""
-                ):
-                    raise NativeWorkerError("reset_project_identity_conflict")
+                if remote is not None:
+                    # A moved or renamed linked project is not safe to silently
+                    # leave behind while claiming a full remote cleanup.
+                    raise NativeWorkerError("reset_linked_project_outside_scope")
         # Check local file deletion targets before any remote change.
         paths = safe_dataset_paths(db, event_id)
         for project in matched:
