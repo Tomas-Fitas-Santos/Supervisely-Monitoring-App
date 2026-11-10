@@ -75,6 +75,11 @@ class MockSDK:
         self.image = Obj(get_list=self.images_list, upload_paths=self.upload_paths)
         self.annotation = Obj(download_json=lambda image_id: {
             "native_image_id": image_id, "labels": [{"class": "bird"}],
+            "size": {"width": 100, "height": 100},
+            "objects": [{
+                "classTitle": "bird", "geometryType": "rectangle",
+                "points": {"exterior": [[12, 12], [82, 88]], "interior": []},
+            }],
         })
         self.labeling_job = Obj(
             get_list=self.jobs_list,
