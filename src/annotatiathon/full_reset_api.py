@@ -17,8 +17,15 @@ from .config import get_settings
 from .db import get_db
 from .events_api import current_event
 from .models import (
-    AuditEvent, Base, CompetitionTeam, Event, LabelingJob, MediaDataset,
-    NativeOperation, Person, SuperviselyConfig,
+    AuditEvent,
+    Base,
+    CompetitionTeam,
+    Event,
+    LabelingJob,
+    MediaDataset,
+    NativeOperation,
+    Person,
+    SuperviselyConfig,
 )
 
 router = APIRouter(prefix="/api/v1/settings/reset", tags=["reset"])
