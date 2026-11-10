@@ -182,7 +182,7 @@ def create_plan(
     ).where(
         Person.event_id == event.id, Person.active.is_(True),
         Person.kind == "participant", Person.team_id.is_not(None),
-    ).group_by(Person.team_id)))
+    ).group_by(Person.team_id)).all())
     if any(counts.get(team.id) != 2 for team in teams):
         raise HTTPException(
             status_code=422,
