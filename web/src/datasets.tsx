@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 import { api, type Auth } from "./api";
 import { beginDatasetTransfer, clearDatasetTransfer, getDatasetTransfer,
+  validateDatasetSources,
   stopDatasetTransfer, watchDatasetTransfer, type DatasetTransferState } from "./dataset_transfer";
 
 type Dataset={id:string;name:string;upload_kind:"zip"|"folder";
@@ -61,6 +62,7 @@ export function DatasetScreen({auth}:{auth:Auth}) {
     setBusy(true);setError("");setNotice("");
     let created:Dataset|null=null;
     try {
+      validateDatasetSources(files,mode);
       created=await api<Dataset>("/datasets/uploads","POST",{
         name:name.trim()||files[0].name.replace(/\.zip$/i,""),
         upload_kind:mode
