@@ -788,18 +788,22 @@ def process_event_reset(db: Session, api, config: SuperviselyConfig) -> dict | N
         projects = list(api.project.get_list(config.workspace_id))
         matched = sorted((p for p in projects if p.name.startswith(scope)),
                          key=lambda p: p.id)
-        linked = {ds.native_project_id for ds in db.scalars(
-            select(MediaDataset).where(MediaDataset.event_id == event_id)
-        ) if ds.native_project_id is not None}
-        if linked - {p.id for p in matched}:
-            # Already archived projects are absent from normal listings.
-            # Require that any remaining visible projects with linked IDs are
-            # identified as Nightjar projects before considering deletion.
-            for pid in linked - {p.id for p in matched}:
+        linked = {
+            ds.native_project_id: scope + ds.id
+            for ds in db.scalars(select(MediaDataset).where(
+                MediaDataset.event_id == event_id,
+            )) if ds.native_project_id is not None
+        }
+        if linked.keys() - {p.id for p in matched}:
+            # Already archived projects can be absent from normal listings.
+            # Some SDK deployments still resolve archived projects by ID.
+            for pid in linked.keys() - {p.id for p in matched}:
                 remote = api.project.get_info_by_id(pid)
-                if remote is not None:
-                    # A moved or renamed linked project is not safe to silently
-                    # leave behind while claiming a full remote cleanup.
+                if remote is not None and (
+                    remote.name != linked[pid] or
+                    remote.workspace_id != config.workspace_id
+                ):
+                    # Never silently leave a moved/renamed project behind.
                     raise NativeWorkerError("reset_linked_project_outside_scope")
         # Check local file deletion targets before any remote change.
         paths = safe_dataset_paths(db, event_id)
