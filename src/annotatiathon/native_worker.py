@@ -335,10 +335,14 @@ def sync_one(db: Session, api, job: LabelingJob) -> str:
         job.review_status = "returned"
     elif all(
         info.status in {"on_review", "completed", "review_completed"}
+        and (job.assignee_person_id is not None or (
+            info.images_count > 0
+            and info.finished_images_count >= info.images_count
+        ))
         for info in statuses
     ):
-        # A native submission is authoritative. The Supervisely SDK's
-        # finished_images_count can lag or exclude skipped/unlabeled frames.
+        # New single-annotator jobs trust Supervisely's submitted status.
+        # Preserve the historical completion rule for old two-annotator jobs.
         job.status = "on_review"
         job.submitted_at = job.submitted_at or epoch()
     db.commit()
