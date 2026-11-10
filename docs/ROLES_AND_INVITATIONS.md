@@ -54,20 +54,23 @@ person remains an organiser/monitor locally.
 ## Who may sign in to Nightjar?
 
 - Organisers have a separately provisioned Nightjar organiser account.
-- Monitors on the approved active-event roster may create a Nightjar account
-  after verifying the **email they control** using an eight-digit code.
+- Monitors on the approved active-event SQL roster may create their own
+  Nightjar account with that listed email and an app-only password, without
+  requiring prior Supervisely membership or email delivery.
 - Participants cannot self-register as monitors.
 - When a person's event role changes to Participant or the record is
   deactivated, their corresponding Nightjar monitor account is disabled and
-  sessions revoked. For joined monitors with a verified native role, the
-  Nightjar authorization layer also requires Manager status.
+  sessions revoked. Nightjar sign-in depends on the approved SQL monitor
+  roster; linking Supervisely and checking its role are separate operations.
 - These checks do not automatically create Supervisely memberships or
   grant permissions on other teams. Supervisely itself applies its own
   role permissions to annotation jobs.
 
-SMTP credentials in private `.env.live` are required to send monitor
-registration codes. Nightjar does not store any monitor's personal
-Supervisely token after linking their identity.
+No SMTP or verification email is used for Nightjar self-registration.
+This makes account claiming possible for anyone who knows an unclaimed,
+approved monitor email. For official-event security, use an organiser-issued
+one-time code or a reliable identity check. Nightjar never stores a monitor's
+personal Supervisely token after verifying their identity.
 
 ## Inviting monitors and participants in batches of up to 50
 
