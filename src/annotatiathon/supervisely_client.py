@@ -181,8 +181,24 @@ def _read_members(client: httpx.Client, base: str, token: str,
     return tuple(members)
 
 
-def read_team_snapshot(config: SuperviselyConfig) -> NativeTeamSnapshot:
-    base, token = require_connection(config)
+def read_team_snapshot(config: SuperviselyConfig, *, personal_token: str | None = None) -> NativeTeamSnapshot:
+    if personal_token is None:
+        base, token = require_connection(config)
+    else:
+        # Reuse all host checks without requiring that a personal credential
+        # be stored or substituted for the organiser's integration token.
+        url = urlsplit(config.server_url)
+        allowed = {
+            host.strip().lower() for host in get_settings().supervisely_allowed_hosts.split(",")
+            if host.strip()
+        }
+        if (not config.team_id or url.scheme != "https" or not url.hostname
+                or url.hostname.lower() not in allowed or url.port not in (None, 443)
+                or url.path or url.query or url.fragment or url.username or url.password):
+            raise NativeAPIError("untrusted_host", "Supervisely team host is not configured securely.")
+        if not personal_token.strip():
+            raise NativeAPIError("missing_token", "Enter your Supervisely API token.")
+        base, token = config.server_url.rstrip("/"), personal_token.strip()
     # No redirects; do not forward tokens to alternate hosts.
     with httpx.Client(
         timeout=httpx.Timeout(10.0, connect=5.0),
