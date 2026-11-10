@@ -148,7 +148,13 @@ def list_reviews(
         JobReview.event_id == event.id, JobReview.job_id == job.id
     ).order_by(JobReview.reviewed_at.desc())).all()
     verdicts = Counter(x.verdict for x in items)
+    dataset = db.get(MediaDataset, job.dataset_id)
+    snapshot_ready = bool(dataset and (
+        Path(dataset.root_path) / "annotations" / job.id /
+        ("round-" + str(job.correction_round)) / "manifest.json"
+    ).is_file())
     return {
+        "annotation_snapshot_ready": snapshot_ready,
         "job_id": job.id, "status": job.status,
         "review_status": job.review_status, "count": len(items),
         "reviewed_frames": len(items), "total_frames": job.frame_count,
