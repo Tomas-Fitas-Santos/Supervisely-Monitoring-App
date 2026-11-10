@@ -322,7 +322,8 @@ def test_registration_email_readiness_and_organiser_test_are_protected(
     assert test.status_code == 200, test.text
     assert test.json()["sent"] is True
     assert deliveries[0][0] == "organiser@example.org"
-    assert "verification code" not in deliveries[0][2].lower()
+    assert "email delivery is working" in deliveries[0][2].lower()
+    assert "Your one-time Nightjar monitor registration code" not in deliveries[0][2]
     assert http.post("/api/v1/settings/registration-email/test").status_code == 403
 
 
