@@ -58,33 +58,35 @@ The existing ingestion structure remains unchanged:
 
 ## Free, real-user live testing (Cloudflare Tunnel)
 
-Share the full Nightjar app with real monitors without paying for hosting
-using an isolated Docker stack and a temporary Cloudflare Quick Tunnel.
-To avoid a known short-session bug in Cloudflare email-protected Quick
-Tunnels, Nginx requires an additional private **site-access password**
-before anyone can reach Nightjar.
+Run the normal FastAPI, PostgreSQL and React app on a Windows machine
+with an isolated Docker stack and a free temporary Cloudflare HTTPS URL.
+The tunnel now opens the **Nightjar login page directly**, with no extra
+Nginx password prompt or Cloudflare email challenge.
 
-**[Step-by-step Windows live-testing guide](docs/LIVE_TESTING.md)**
+**[Complete Windows live-testing guide](docs/LIVE_TESTING.md)**
 
 ```powershell
 git pull --ff-only origin main
 .\scripts\init-live-test.ps1
-.\scripts\enable-live-access.ps1
 docker compose --env-file .env.live -f compose.live.yaml up -d --build web
+curl.exe -f http://127.0.0.1:8080/health/ready
 ```
 
-Confirm that opening `http://127.0.0.1:8080` prompts for the username
-`nightjar-gate` and the separate password created above, **before**
-starting an ordinary Quick Tunnel:
+Open a second PowerShell terminal:
 
 ```powershell
 cloudflared tunnel --url http://127.0.0.1:8080
 ```
 
-The tunnel is HTTPS and temporary; the site password is the required
-outer access control, with separate Nightjar logins and roles inside.
-Never use a public Quick Tunnel without first enabling this gate.
-This is not hosting for the official event.
+**Existing staff** sign in with their Nightjar accounts. **Approved monitors**
+can create their own accounts using the **Create monitor account** button,
+email verification and the current active event's monitor roster. No
+participant gets a monitor account. The app enforces roles and session
+authentication on the API.
+
+This exposes the login page publicly on a temporary HTTPS URL, so limit
+live tests to trusted users, small authorised datasets and short sessions.
+It is **not** a secure or reliable hosting plan for the official event.
 
 ## Start locally on Windows
 
