@@ -210,3 +210,63 @@ input,select{border:1px solid #dfe5ed;border-radius:9px;background:white;padding
 .full-reset-confirm input{display:block;width:100%;margin-top:8px}
 @media(max-width:1000px){.full-reset-counts{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:650px){.full-reset-counts{grid-template-columns:1fr 1fr}.full-reset-scopes{grid-template-columns:1fr}.full-reset-confirm{flex-direction:column;align-items:stretch}}
+
+
+/* Consistent, accessible subsection navigation across the operations app */
+.workspace-subtabs{display:flex;flex-wrap:wrap;gap:7px;border-bottom:1px solid #dce6e6;margin:16px 0 23px;padding:0 2px 2px}
+.workspace-subtabs button{display:inline-flex;align-items:center;gap:8px;border:0;border-bottom:3px solid transparent;border-radius:9px 9px 0 0;background:transparent;color:#5d7280;padding:13px 17px 11px;font-size:12px;font-weight:750;cursor:pointer}
+.workspace-subtabs button:hover{background:#edf5f2;color:#2b6b58}
+.workspace-subtabs button.active{border-bottom-color:#2f8669;color:#205b49;background:#f1f8f4}
+.workspace-subtabs button:focus-visible{outline:2px solid #248267;outline-offset:2px}
+.review-analytics{display:flex;flex-direction:column;gap:15px}
+.review-analytics-header{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;margin:8px 0}
+.review-analytics-header h3{font-size:20px;margin:5px 0}
+.review-analytics-header p{max-width:770px;line-height:1.7}
+.review-team-toolbar{display:grid;grid-template-columns:1fr 1fr;gap:20px;align-items:start;margin-bottom:22px}
+.review-team-toolbar label{font-size:12px;display:flex;flex-direction:column;gap:8px}
+.review-team-toolbar select{width:100%}
+.review-monitor-assign{display:flex;flex-direction:column;gap:5px}
+.team-metric-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.metric-tile{background:#f7faf9;border:1px solid #e0eae5;padding:17px 18px;border-radius:12px;min-height:115px}
+.metric-tile span,.metric-tile strong,.metric-tile small{display:block}
+.metric-tile span{font-size:11px;color:#738b89;font-weight:700}
+.metric-tile strong{font-size:23px;color:#234b43;margin:11px 0}
+.metric-tile small{font-size:11px;color:#778d88;line-height:1.6}
+.ranking-intro{display:flex;gap:13px;align-items:center;margin:4px 0 18px}
+.ranking-intro>svg{color:#a77512}
+.ranking-intro h4{font-size:17px;margin:0 0 5px}
+.ranking-intro p{font-size:12px;color:#73808b;line-height:1.5;margin:0}
+.leaderboard-table{min-width:860px}
+.leaderboard-table td{font-variant-numeric:tabular-nums}
+.leaderboard-table td:nth-child(2){color:#284840}
+.roster-private-form{border:1px solid #e0e8e6;padding:14px;border-radius:11px;background:#f7faf9}
+.roster-private-form label{min-width:0}
+.table-panel .data-table{min-width:1480px}
+.dataset-workspace-top{padding-bottom:0}
+.dataset-workspace>.page-body:not(.dataset-workspace-top){padding-top:0}
+.dataset-workspace>.page-body:not(.dataset-workspace-top)>.page-heading{display:none}
+.dataset-workspace .dataset-workspace-top .workspace-subtabs{margin-bottom:0}
+.staff-search{display:flex;flex-direction:column;gap:8px;max-width:360px;margin:15px 0 20px;font-size:12px;font-weight:750}
+.staff-duty-editor{display:flex;flex:1;flex-direction:column;gap:12px}
+.staff-duty-preset{display:flex;flex-direction:column;gap:6px;font-size:11px;font-weight:700;max-width:400px}
+.staff-duty-preset select{width:100%}
+.staff-duty-editor .role-options{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.staff-duty-editor .role-choice{align-items:flex-start;min-height:48px;background:#fff;white-space:normal}
+.staff-duty-editor .role-choice span{min-width:0}
+.staff-duty-editor .role-choice strong,.staff-duty-editor .role-choice small{display:block;text-transform:none}
+.staff-duty-editor .role-choice strong{font-size:11px;color:#345166}
+.staff-duty-editor .role-choice small{font-size:10px;font-weight:400;color:#7b899a;margin-top:3px;line-height:1.3}
+.staff-record{align-items:flex-start}
+@media(max-width:1000px){
+ .staff-duty-editor .role-options{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .team-metric-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media(max-width:700px){
+ .workspace-subtabs{gap:0;flex-wrap:nowrap;overflow:auto}
+ .workspace-subtabs button{white-space:nowrap;padding:11px 12px}
+ .review-team-toolbar{grid-template-columns:1fr}
+ .team-metric-grid{grid-template-columns:1fr}
+ .staff-record{flex-wrap:wrap}
+ .staff-duty-editor{min-width:100%}
+ .staff-duty-editor .role-options{grid-template-columns:1fr}
+}
