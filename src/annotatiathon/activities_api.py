@@ -42,9 +42,9 @@ class ActivityCreate(BaseModel):
 
     @model_validator(mode="after")
     def validate_dates(self):
-        if self.start_at is not None and self.end_at is not None:
-            if self.end_at <= self.start_at:
-                raise ValueError("Activity end must be after its start.")
+        if (self.start_at is not None and self.end_at is not None
+                and self.end_at <= self.start_at):
+            raise ValueError("Activity end must be after its start.")
         return self
 
 
@@ -171,9 +171,9 @@ def edit_activity(
         if field == "name" and not value:
             raise HTTPException(status_code=422, detail="Activity name is required.")
         setattr(activity, field, value)
-    if activity.start_at is not None and activity.end_at is not None:
-        if activity.end_at <= activity.start_at:
-            raise HTTPException(status_code=422, detail="End must follow start.")
+    if (activity.start_at is not None and activity.end_at is not None
+            and activity.end_at <= activity.start_at):
+        raise HTTPException(status_code=422, detail="End must follow start.")
     db.add(AuditEvent(
         staff_id=ctx.staff.id, event_id=event.id, action="activity.update",
         target_type="activity", target_id=activity.id,
