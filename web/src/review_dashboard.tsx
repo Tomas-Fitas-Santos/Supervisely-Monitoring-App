@@ -86,7 +86,7 @@ export function TeamReviewOverview({auth,mode}:{auth:Auth;mode:"dashboard"|"rank
           </div>
         </div>
         {selected&&<div className="team-metric-grid">
-          <div className="metric-tile"><span>Average elapsed time / frame</span><strong>{time(selected.average_seconds_per_frame)}</strong><small>{selected.timed_frames} frames with timestamps</small></div>
+          <div className="metric-tile"><span>Elapsed publish-to-submit time / frame</span><strong>{time(selected.average_seconds_per_frame)}</strong><small>{selected.timed_frames} frames with timestamps</small></div>
           <div className="metric-tile"><span>Correct keypoints</span><strong>{accuracy(selected.keypoint_accuracy_pct)}</strong><small>{integer(selected.evaluated_keypoints)} reviewed points</small></div>
           <div className="metric-tile"><span>Accepted jobs</span><strong>{selected.jobs_completed} / {selected.jobs_total}</strong><small>{selected.jobs_awaiting_review} awaiting review</small></div>
           <div className="metric-tile"><span>Frames submitted</span><strong>{integer(selected.frames_submitted)}</strong><small>{integer(selected.frames_assigned)} assigned</small></div>
@@ -97,7 +97,7 @@ export function TeamReviewOverview({auth,mode}:{auth:Auth;mode:"dashboard"|"rank
           <div className="metric-tile"><span>Frames quality-reviewed</span><strong>{integer(selected.frames_reviewed)}</strong><small>{selected.correct_keypoints} correct · {selected.missing_keypoints} missing · {selected.incorrect_keypoints} incorrect points</small></div>
         </div>}
       </section>
-      <div className="settings-note"><BarChart3 size={18}/><p><strong>Timing:</strong> {metrics.time_definition}. The system does not have precise editing time for each individual image. <strong>Accuracy:</strong> {metrics.accuracy_definition}. {metrics.frames_definition}.</p></div>
+      <div className="settings-note"><BarChart3 size={18}/><p><strong>Timing:</strong> {metrics.time_definition}. This includes time before the annotator starts working; it is not precise editing time per image. <strong>Accuracy:</strong> {metrics.accuracy_definition}. {metrics.frames_definition}.</p></div>
     </>}
     {metrics&&mode==="rankings"&&<>
       <section className="panel">
