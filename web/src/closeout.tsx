@@ -1,0 +1,116 @@
+import { useCallback, useEffect, useState } from "react";
+import { Archive, BarChart3, CheckCircle2, Download, RefreshCw, ShieldAlert } from "lucide-react";
+import { api, type Auth } from "./api";
+
+type Report={
+  event_id:string;event_name:string;event_status:string;
+  people:{registered:number;participants:number;monitors:number;checked_in:number};
+  teams:number;
+  datasets:{count:number;images:number;videos:number;video_frames:number;
+    morphology_counts:Record<string,number>};
+  labeling:{jobs:number;status_counts:Record<string,number>;frames_assigned:number;
+    jobs_accepted:number;jobs_needing_action:number};
+  reviews:{frames_reviewed:number;good:number;bad:number;incomplete:number;
+    keypoint_score:number;temporal_consistency_issues:number};
+  ticket_totals:Record<string,number>;generated_at:number;
+};
+export function CloseoutScreen({auth}:{auth:Auth}) {
+  const [report,setReport]=useState<Report|null>(null);
+  const [error,setError]=useState("");
+  const [notice,setNotice]=useState("");
+  const [confirmation,setConfirmation]=useState("");
+  const [busy,setBusy]=useState(false);
+  const refresh=useCallback(async()=>{
+    try{setReport(await api<Report>("/closeout/report"));setError("");}
+    catch(e){setError((e as Error).message);}
+  },[]);
+  useEffect(()=>{void refresh();},[refresh]);
+  async function finalize(){
+    if(!report||confirmation!=="CLOSE "+report.event_name)return;
+    if(!window.confirm(
+      "Final confirmation: archive this event and freeze operational data? "+
+      "Existing annotations and native Supervisely jobs will not be deleted."
+    ))return;
+    setBusy(true);setError("");
+    try{
+      await api("/closeout/finalize","POST",{confirmation},auth.csrf_token);
+      setNotice("Event closed, archived and snapshotted. Previous records remain accessible.");
+      await refresh();
+    }catch(e){setError((e as Error).message);}
+    finally{setBusy(false);}
+  }
+  const phrase=report?"CLOSE "+report.event_name:"";
+  return <div className="page-body">
+    <div className="page-heading"><div><span className="eyebrow">EVENT FINALISATION</span>
+      <h2>Results & Exports</h2>
+      <p className="muted">Review event progress, export structured records, and archive the event only after jobs are accepted.</p>
+      </div><button className="btn secondary" onClick={()=>void refresh()}>
+        <RefreshCw size={15}/> Refresh</button></div>
+    {error&&<div role="alert" className="alert danger">{error}</div>}
+    {notice&&<div role="status" className="alert success">{notice}</div>}
+    {report&&<>
+      <div className="stat-grid compact">
+        <div className="stat-card"><BarChart3 size={19}/><span className="muted small">Participants checked in</span>
+          <strong>{report.people.checked_in}/{report.people.registered}</strong></div>
+        <div className="stat-card"><CheckCircle2 size={19}/><span className="muted small">Accepted jobs</span>
+          <strong>{report.labeling.jobs_accepted}/{report.labeling.jobs}</strong></div>
+        <div className="stat-card"><Archive size={19}/><span className="muted small">Reviewed frames</span>
+          <strong>{report.reviews.frames_reviewed}</strong></div>
+      </div>
+      <div className="content-grid closeout-layout">
+        <section className="panel">
+          <span className="eyebrow">EVENT SUMMARY</span><h3>{report.event_name}</h3>
+          <div className="report-rows">
+            <div><span>Competition teams</span><strong>{report.teams}</strong></div>
+            <div><span>Local datasets</span><strong>{report.datasets.count}</strong></div>
+            <div><span>Unique images</span><strong>{report.datasets.images}</strong></div>
+            <div><span>Video groups</span><strong>{report.datasets.videos}</strong></div>
+            <div><span>Video frames</span><strong>{report.datasets.video_frames}</strong></div>
+            <div><span>Assigned frames incl. overlap</span><strong>{report.labeling.frames_assigned}</strong></div>
+            <div><span>Reviews marked good</span><strong>{report.reviews.good}</strong></div>
+            <div><span>Reviews marked bad / incomplete</span>
+              <strong>{report.reviews.bad+report.reviews.incomplete}</strong></div>
+            <div><span>Keypoint score</span><strong>{report.reviews.keypoint_score}</strong></div>
+            <div><span>Temporal consistency concerns</span>
+              <strong>{report.reviews.temporal_consistency_issues}</strong></div>
+          </div>
+          <h4>Job status distribution</h4>
+          <div className="morph-counts">{Object.entries(report.labeling.status_counts).map(
+            ([status,n])=><span key={status}>{status.replaceAll("_"," ")}: {n}</span>
+          )}</div>
+          <h4 style={{marginTop:15}}>Morphology counts</h4>
+          <div className="morph-counts">{Object.entries(report.datasets.morphology_counts).map(
+            ([name,n])=><span key={name}>{name}: {n}</span>
+          )}</div>
+        </section>
+        <section className="panel">
+          <span className="eyebrow">OFFICIAL EVENT EXPORTS</span><h3>Download CSV records</h3>
+          <p className="muted small">Exports contain participant identities and annotation review history; store them securely.</p>
+          <div className="export-links">{([
+            ["people","People, teams and admission"],["jobs","All pair job progress"],
+            ["reviews","Individual frame quality"],["media","Media inventory and hashes"],
+          ] as const).map(([key,label])=><a key={key} className="btn secondary"
+            href={"/api/v1/closeout/exports/"+key} download>
+            <Download size={15}/>{label}</a>)}</div>
+          <div className="settings-note" style={{marginTop:18}}><ShieldAlert size={18}/>
+            <p>Nightjar exports are not substitutes for native Supervisely annotation exports. Native media, annotations and labeling jobs are never deleted here.</p></div>
+        </section>
+      </div>
+      {auth.staff.roles.includes("organiser")&&<section className="panel closeout-confirm" style={{marginTop:20}}>
+        <span className="eyebrow">ARCHIVE CURRENT EVENT</span><h3>Finalize & close event</h3>
+        <p className="muted">Archiving preserves all existing people, job, ticket, dataset and activity records. Create a new event for another competition.</p>
+        {report.labeling.jobs_needing_action>0?<div className="advisory"><ShieldAlert size={18}/>
+          {report.labeling.jobs_needing_action} job(s) are not accepted. Finish the remaining reviews before finalisation.</div>:
+          <div className="settings-note"><CheckCircle2 size={17}/>
+            <p>All recorded jobs are accepted or cancelled. You may proceed with finalisation.</p></div>}
+        <label>Type <strong>{phrase}</strong> to confirm
+          <input value={confirmation} onChange={e=>setConfirmation(e.target.value)}
+            placeholder={phrase} autoComplete="off" spellCheck={false}/></label>
+        <button className="btn danger-outline" disabled={busy||
+          report.event_status==="archived"||report.labeling.jobs_needing_action>0||
+          confirmation!==phrase} onClick={()=>void finalize()}>
+          <Archive size={16}/> Archive & finalize event</button>
+      </section>}
+    </>}
+  </div>;
+}

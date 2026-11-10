@@ -12,6 +12,9 @@ class Settings(BaseSettings):
     database_url: str
     supervisely_api_token: SecretStr | None = None
     supervisely_allowed_hosts: str = "app.supervisely.com"
+    local_data_dir: str = ".nightjar-data"
+    max_dataset_bytes: int = 140_000_000_000
+    max_dataset_assets: int = 250_000
 
     @field_validator("database_url")
     @classmethod

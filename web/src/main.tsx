@@ -13,9 +13,13 @@ import { AttendanceScreen } from "./attendance";
 import { StaffScreen } from "./staff";
 import { TicketsScreen } from "./tickets";
 import { ActivitiesScreen } from "./activities";
+import { DatasetScreen } from "./datasets";
+import { CompetitionScreen } from "./competition";
+import { QualityScreen } from "./reviews";
+import { CloseoutScreen } from "./closeout";
 import "./styles.css";
 
-type Tab = "overview" | "people" | "attendance" | "tickets" | "activities" | "staff" | "settings";
+type Tab = "overview" | "people" | "attendance" | "tickets" | "activities" | "datasets" | "competition" | "quality" | "closeout" | "staff" | "settings";
 
 function Login({ onLogin }: { onLogin: (auth: Auth) => void }) {
   const [email, setEmail] = useState("");
@@ -105,11 +109,11 @@ function Overview({ auth }: { auth: Auth }) {
       </section>
       <section className="panel">
         <span className="eyebrow">IMPLEMENTATION STATUS</span><h3>Building the platform</h3>
-        <p className="muted">The remaining competition and native integration workflows are being built in stages:</p>
+        <p className="muted">The complete local workflow is available as separate operational modules:</p>
         <div className="coming-row"><Award size={18}/> Activities & prize allocation now available</div>
-        <div className="coming-row"><Cloud size={18}/> Dataset upload & distribution</div>
-        <div className="coming-row"><ClipboardCheck size={18}/> Annotation monitoring & evaluation</div>
-        <div className="coming-row"><CalendarDays size={18}/> Event finalization & export</div>
+        <div className="coming-row"><Cloud size={18}/> Dataset upload and balanced job planning</div>
+        <div className="coming-row"><ClipboardCheck size={18}/> Annotation monitoring and review</div>
+        <div className="coming-row"><CalendarDays size={18}/> Event finalisation and data export</div>
       </section>
     </div>
   </div>;
@@ -138,6 +142,10 @@ function App() {
     {id:"attendance",label:"Check-in",icon:ClipboardCheck},
     {id:"tickets",label:"Tickets & Rewards",icon:Ticket},
     {id:"activities",label:"Activities & Prizes",icon:Activity},
+    {id:"datasets",label:"Dataset",icon:Database},
+    {id:"competition",label:"Competition & Jobs",icon:UsersRound},
+    {id:"quality",label:"Monitoring & Review",icon:ClipboardCheck},
+    {id:"closeout",label:"Results & Exports",icon:CalendarDays},
     ...(organiser ? [{id:"staff" as Tab,label:"Staff Access",icon:ShieldCheck}] : []),
     ...(organiser ? [{id:"settings" as Tab,label:"Settings",icon:Settings2}] : []),
   ];
@@ -173,6 +181,10 @@ function App() {
       {tab==="attendance"&&<AttendanceScreen auth={auth}/>}
       {tab==="tickets"&&<TicketsScreen auth={auth}/>}
       {tab==="activities"&&<ActivitiesScreen auth={auth}/>}
+      {tab==="datasets"&&<DatasetScreen auth={auth}/>}
+      {tab==="competition"&&<CompetitionScreen auth={auth}/>}
+      {tab==="quality"&&<QualityScreen auth={auth}/>}
+      {tab==="closeout"&&<CloseoutScreen auth={auth}/>}
       {tab==="staff"&&organiser&&<div className="page-body"><div className="page-heading"><div><span className="eyebrow">ORGANISER · PERMISSIONS</span><h2>Staff Access</h2><p className="muted">Manage staff roles independently of the attendee roster.</p></div></div><StaffScreen auth={auth}/></div>}
       {tab==="settings"&&organiser&&<SettingsScreen auth={auth}/>}
       <footer className="page-footer"><Bird size={14}/> Nightjar Annotatiathon · Técnico</footer>

@@ -4,18 +4,22 @@ from fastapi import FastAPI, Response
 from .activities_api import router as activities_router
 from .attendance_api import router as attendance_router
 from .auth import router as auth_router
+from .closeout_api import router as closeout_router
+from .datasets_api import router as datasets_router
 from .database import database_is_ready
 from .events_api import router as events_router
+from .labeling_api import router as labeling_router
 from .monitoring_api import router as monitoring_router
 from .native_sync_api import router as native_router
 from .people_api import router as people_router
+from .reviews_api import router as reviews_router
 from .settings_api import router as settings_router
 from .staff_api import router as staff_router
 from .tickets_api import router as tickets_router
 
 app = FastAPI(
     title="Nightjar Annotatiathon Operations",
-    version="0.7.0",
+    version="0.8.0",
     description="Local-first staff API; competition operations will follow verified contracts.",
 )
 app.include_router(auth_router)
@@ -28,6 +32,10 @@ app.include_router(events_router)
 app.include_router(activities_router)
 app.include_router(native_router)
 app.include_router(monitoring_router)
+app.include_router(datasets_router)
+app.include_router(labeling_router)
+app.include_router(reviews_router)
+app.include_router(closeout_router)
 
 
 @app.get("/health/live", tags=["health"])

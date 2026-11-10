@@ -44,3 +44,6 @@ backups/
 # Runtime
 logs/
 *.log
+
+# Local, potentially large, private dataset staging and media
+.nightjar-data/
