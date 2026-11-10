@@ -19,10 +19,20 @@ nothing; the computer running Docker Desktop must stay powered on.
 - `APP_ENV=production` is intentionally forced inside the Docker stack so that
   login cookies have the `Secure` flag. **Sign in through the tunnel's HTTPS
   URL**, not plain HTTP localhost. Use localhost only for health checks.
-- Quick Tunnel access MUST be restricted to specific authorized emails using
-  `--allowed-mail`. Anyone permitted through the Cloudflare email challenge
-  still needs their separate Nightjar login. Do not expose a bare public tunnel
-  containing real event data.
+- All web and API routes are protected by **a separate, private Nginx password**
+  (HTTP Basic Auth over HTTPS). Generate the access file locally using
+  `scripts/enable-live-access.ps1` **before starting the web container**.
+  This gate password is not the Nightjar account password.
+- We use an ordinary, temporary Cloudflare Quick Tunnel **without**
+  `--allowed-mail`. Cloudflare's email-protected Quick Tunnels currently
+  suffer a short-session bug that can block POST requests with plain HTTP 401
+  before they reach our backend:
+  https://github.com/cloudflare/cloudflared/issues/1752
+  The Nginx access gate must be active before exposing a tunnel without
+  Cloudflare email protection. There is no public unauthenticated website.
+- **Only share the gate password with approved testers.** Each approved person
+  must additionally log in with their own authorised Nightjar staff account.
+  The gate is only suitable for a small temporary test audience, not the event.
 - No ports or port-forwarding need to be opened in your router. The URL is
   temporary and stops working when `cloudflared` exits.
 
@@ -46,12 +56,20 @@ docker compose version
 
 ```powershell
 .\scripts\init-live-test.ps1
+.\scripts\enable-live-access.ps1
 notepad .env.live
 ```
 
 The script creates a **new**, private `.env.live` with a cryptographically
 random database password and stable Fernet encryption key. It never overwrites
 an existing file or prints the secrets. This file is ignored by Git.
+
+The second script interactively prompts for a **separate gate password** using
+Apache's `htpasswd` utility inside a temporary Docker container. The browser
+username is `nightjar-gate`. The password is **not your Nightjar login
+password**. The hashed file is saved under `.nightjar-live-auth/.htpasswd`
+and ignored by Git. Running the script again preserves the existing file.
+Do not upload, paste or commit the gate password or file.
 
 For large video datasets, change `NIGHTJAR_MEDIA_DIR` in `.env.live` to a
 local folder **outside OneDrive**, for example `D:/NightjarLiveMedia`, and
@@ -75,10 +93,13 @@ will paste the shared native API token directly into Settings.
 ```powershell
 docker compose --env-file .env.live -f compose.live.yaml up -d --build web
 docker compose --env-file .env.live -f compose.live.yaml ps
-curl.exe -f http://127.0.0.1:8080/health/ready
+# The private gate intentionally returns HTTP 401 to clients without credentials.
+curl.exe -I http://127.0.0.1:8080/
+# To verify the API locally use:
+curl.exe -u nightjar-gate http://127.0.0.1:8080/health/ready
 ```
 
-Expected health response: `{"status":"ok"}`.
+Expected health response after entering the private gate password: `{"status":"ok"}`. An unauthenticated request should return `401` with a `WWW-Authenticate` header.
 
 The first start builds the API and web images, initializes an isolated
 PostgreSQL database and automatically applies Alembic migrations. The separate
@@ -107,31 +128,38 @@ docker compose --env-file .env.live -f compose.live.yaml run --rm --no-deps api 
 The command prompts securely for a new password. Do this only once per fresh
 live-test database.
 
-## 5. Install Cloudflare Tunnel and restrict by email
+## 5. Start an ordinary free Cloudflare Tunnel
 
-Cloudflare supports free, temporary Quick Tunnels with optional email
-authentication. Current documentation: https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/
+The **web application is already protected by the Nginx gate password**,
+so this setup deliberately avoids the faulty `--allowed-mail` feature in
+Cloudflare Quick Tunnels. Do **not** run the unprotected tunnel without
+first confirming that the site password gate is active.
+
+Open the local site at `http://127.0.0.1:8080`: the browser must ask
+for a username and password before it shows Nightjar. The username
+is `nightjar-gate` and the password is the secret you chose in step 2.
 
 In a **second** PowerShell terminal:
 
 ```powershell
 winget install -e --id Cloudflare.cloudflared
 cloudflared --version
-cloudflared tunnel --url http://127.0.0.1:8080 --allowed-mail "organiser@your-institution.pt,monitor1@your-institution.pt"
+cloudflared tunnel --url http://127.0.0.1:8080
 ```
 
-Replace those placeholder addresses with actual approved testers' emails.
-You can repeat `--allowed-mail` to allow more specific people. Restart the
-terminal after installation if `cloudflared` is not yet on the path.
+The tunnel creates a new `https://....trycloudflare.com` address. Open it
+and enter the **Nginx gate** username/password when prompted. Once you
+see Nightjar, sign in using the **separate** organiser/monitor email and
+Nightjar password.
 
-Copy the unique `https://....trycloudflare.com` URL shown by the terminal.
-Open that HTTPS address. Each tester must complete Cloudflare's email
-challenge, then log in to Nightjar.
+The tunnel URL is technically discoverable and no longer has Cloudflare
+email-based protection. **The Nginx password is the required outer security
+boundary.** Do not share it publicly. Do not use this for full event data
+or the official event; this configuration is for a few trusted testers only.
+Quick Tunnels have no uptime guarantee, have a 200 in-flight request limit
+and do not support SSE. Closing cloudflared closes the temporary HTTPS link.
 
-Keep the PowerShell tunnel process open. The hostname changes each time the
-tunnel is restarted. Cloudflare limits Quick Tunnels to 200 in-flight
-requests, provides no uptime guarantee, and does not support SSE. This
-approach is for live functional testing, **not for hosting the official event**.
+Cloudflare bug reference: https://github.com/cloudflare/cloudflared/issues/1752
 
 ## 6. Configure real Supervisely and monitor registration
 
@@ -205,7 +233,10 @@ not valid inside containers.
 | Symptom | Check |
 | --- | --- |
 | Tunnel URL unavailable | Docker Desktop, `web` container, tunnel terminal and its printed hostname |
-| Browser opens but login does not persist | Use the `https://...trycloudflare.com` URL; secure cookies won't work on plain HTTP |
+| Browser asks for Nginx site access | Expected: username `nightjar-gate` and the separately chosen gate password |
+| Nginx returns 401 for all requests | Verify the gate password or regenerate local credentials intentionally, then restart the web container |
+| Nightjar login POST returns a plain 401 | Stop `cloudflared`; relaunch WITHOUT `--allowed-mail`, after confirming the Nginx site-access gate is active |
+| Browser opens but Nightjar login does not persist | Use the `https://...trycloudflare.com` URL; Nightjar's secure session cookie will not work on plain HTTP |
 | 502 or 503 from frontend | `docker compose ... logs migrate api db web` and `/health/ready` |
 | Monitor never gets registration email | Check `SMTP_*` settings and sender permissions; email must already be approved in the active monitor roster |
 | Supervisely sync fails | Save shared Team ID, Workspace ID and the organiser's token under Settings; verify the account has access |
