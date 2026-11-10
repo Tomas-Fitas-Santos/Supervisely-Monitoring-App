@@ -1,0 +1,9 @@
+# Force Unix line endings for Linux-executed scripts and Docker sources,
+# even when this repository is checked out with core.autocrlf=true on Windows.
+*.sh text eol=lf
+Dockerfile* text eol=lf
+deploy/Dockerfile.* text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.py text eol=lf
+*.ps1 text eol=crlf
