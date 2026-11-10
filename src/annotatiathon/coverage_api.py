@@ -163,6 +163,19 @@ def build_summary(db: Session, dataset_id: str, event_id: str):
         group["species"] += int(bool(folder["species_name"]))
     for video in video_groups.values():
         group_counts[video["ecomorphology"]]["tagged_frames"] += video["tagged_frames"]
+    # Cross-tab preserves joint ecomorphology × observed motion provenance.
+    # Each video frame contributes to exactly one primary movement or unlabeled.
+    movement_matrix = {
+        name: {key: 0 for key, _label in MOVEMENT_TYPES}
+        | {"unlabeled": 0}
+        for name in group_counts
+    }
+    for video in video_groups.values():
+        row = movement_matrix[video["ecomorphology"]]
+        row["unlabeled"] += max(0, video["untagged_frames"])
+        for segment in video["segments"]:
+            row[segment["movement_type"]] += segment["end_frame"] - segment["start_frame"] + 1
+
     total_video_frames = sum(v["frames"] for v in video_groups.values())
     total_images = sum(f["images"] for f in folder_counts.values())
     return {
@@ -170,6 +183,10 @@ def build_summary(db: Session, dataset_id: str, event_id: str):
         "groups": list(group_counts.values()),
         "folders": sorted(folder_counts.values(), key=lambda f: (f["ecomorphology"], f["source_folder"])),
         "movements": movement_rows,
+        "movement_matrix": [{
+            "ecomorphology": name, "frames": group_counts[name]["frames"],
+            "counts": movement_matrix[name],
+        } for name in group_counts],
         "video_groups": video_groups,
         "totals": {
             "frames": total_video_frames,
