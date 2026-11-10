@@ -12,7 +12,7 @@
 - **Staff Access:** organiser-only multi-role editing; you can add Monitor to your existing organiser staff account without creating a second login. The application refuses to remove the last active organiser.
 - Automated backend/security tests, real PostgreSQL migrations and TypeScript build checks.
 
-**Not implemented yet:** native invitation dispatch/role changes and pending invitation retrieval; QR-scanner check-in; activities and prize-award automation; dataset uploads; labeling job planning/dispatch; review/scoring; event finalization. A reported sent invitation is **not** treated as verified native membership. The UI makes these gaps explicit.
+**Implemented locally:** manual identity-confirmed check-in and shared team table assignments (no QR), activities and prizes, real ZIP/folder dataset import, balanced pair job planning, native job dispatch and status polling, monitor scoring/correction, and closing/exporting events. **Not yet live-verified:** two-account collaborative annotation semantics, native login-based invitation handling, load tests and deployment. Reported invitations are never treated as verified membership.
 
 ## Start locally on Windows
 
@@ -70,7 +70,7 @@ alembic upgrade head
 alembic current
 ```
 
-The new revision is `0009_native_work (head)`. Restart the backend and the Vite development server to see the new Check-in, Tickets & Rewards and Staff Access tabs.
+The new revision is `0010_pair_queue (head)`. Restart the backend and the Vite development server to see the new Check-in, Tickets & Rewards and Staff Access tabs.
 
 **Windows note:** if your machine's Application Control blocks SQLAlchemy compiled wheels, retain your working pure-Python SQLAlchemy installation; upgrading the app does not require reinstalling SQLAlchemy. Use `npm.cmd` instead of `npm` when PowerShell blocks npm scripts.
 
@@ -90,7 +90,7 @@ In the **backend-only** untracked `.env`, set `SUPERVISELY_API_TOKEN` to the tok
 1. In **Settings → Supervisely**, enter team ID and (optionally) workspace ID, save and click **Verify connection**. This sends only read requests to official Supervisely API endpoints `users.me`, `teams.info`, `workspaces.info` (when configured) and paginated `members.list`.
 2. In **People & Teams → Verify & reconcile the team**, click **Refresh from Supervisely**. Review matched identities, role warnings, unlinked native accounts and unmatched roster entries. Email matching is exact; native username and ID are used when already verified. When an email is missing, explicitly associate that account with its roster entry.
 3. Confirm **local reconciliation**. The server rechecks the same team, the roster and the remote membership fingerprint and refuses to apply a stale preview. Matched active roster members are marked `joined` and their native login, ID and role are saved in the selected event. Unmatched roster members are left unchanged: absence from `members.list` is not proof of an unsent invitation.
-4. **No invitations, role changes, user removal or other remote mutations** occur in this milestone. There is no in-app demo workflow. The SDK semantics are grounded in the official UserApi member list and Supervisely REST endpoints. An actual live token acceptance check on the user's Pro team remains required.
+4. Connection verification and membership reconciliation are read-only; native publishing occurs only after explicit organiser launch and starting the optional SDK worker. Native invitation/role mutations are still not automatic. There is no in-app demo workflow. The SDK semantics are grounded in the official UserApi member list and Supervisely REST endpoints. An actual live token acceptance check on the user's Pro team remains required.
 
 ## Event-local monitor responsibilities
 
@@ -129,8 +129,33 @@ The local competition queue uses a **separate explicit SDK worker**, not HTTP re
 
 Native jobs are published in **two records per two-person team** using `api.labeling_job.create(name, dataset_id, user_ids=[...], images_ids=[...])`. Each pair job receives its own Supervisely dataset of copied image/frame assets, protecting overlapping jobs from other teams from sharing annotation IDs. Both native users receive one native labeling job over that pair-specific dataset. The SDK returns separate job entities and does **not** prove that both users can concurrently edit a single shared answer; perform a live two-account collaboration acceptance test before the official event. Worker errors enter an explicit attention state and never silently retry uncertain remote writes. After inspecting remote state, use the displayed **Retry** command; it reconciles deterministic project/dataset names, media IDs and native jobs rather than blindly duplicating them.
 
-The worker polls two native job statuses and only releases a subsequent job once **both** are on review/completed with all images submitted. Local quality scoring and native reviewer actions are separate; returned jobs block subsequent releases. Pause/resume controls affect only future Nightjar releases, not active native Supervisely jobs. The worker never deletes native data, adds members, changes roles or completes jobs on behalf of annotators. See [SDK worker contract](docs/SUPERVISELY_WORKER.md).
+The worker polls two native job statuses. **Both annotators must submit all assigned images AND the monitor must accept the pair job** before the next pair job is released. Local quality scoring and native reviewer actions are separate; returned jobs block subsequent releases. Pause/resume controls affect only future Nightjar releases, not active native Supervisely jobs. The worker never deletes native data, adds members, changes roles or completes jobs on behalf of annotators. See [SDK worker contract](docs/SUPERVISELY_WORKER.md).
 
 ## Native annotation archive
 
 After the final accepted jobs are reconciled, close the event in **Results & Exports**. Click **Prepare native annotation export**, and let the optional Supervisely SDK worker download the current JSON annotations. When the task completes, the UI offers a ZIP file containing `full_manifest.jsonl`, `curated_manifest.jsonl`, per-image native annotation JSON, and a README explaining the snapshot. Both manifests retain each source asset SHA-256, morphology, source video group, local team/job identifiers, native image ID and both native job IDs. The curated manifest includes only accepted Nightjar pair jobs and excludes explicitly bad/incomplete sampled frames. Local source media remains in `.nightjar-data` (it is **not** included in the ZIP). The export is **not** a historical annotation-version archive.
+
+## Strict team job lifecycle and monitor-based competition testing
+
+Open **People & Teams → Monitor test pairs** to create a competition team
+from exactly two registered monitors. They retain their existing Supervisely
+Admin/Manager/Developer roles and remain on the Monitoring Team. You may
+disband the local pair **before** planning any labeling job. Once jobs
+exist, that pair's historical links must be preserved; use a fresh event
+for a new full-workflow test rather than removing annotated jobs.
+
+After uploading a dataset, generate and approve a plan in **Competition &
+Jobs**. The organiser explicitly launches the event. Only the **first
+pair-level job per team** is published. Both native annotator jobs for
+that pair must reach submitted/reviewed status and complete their media.
+**Monitoring & Review** then allows frame scoring and an explicit monitor
+decision: **Accept** releases the next planned job; **Return for correction**
+keeps the same logical job active, queues a native SDK correction/restart and
+requires both members to resubmit before continuing. Prior native IDs stay
+in the revision-history table and uncertain retries require confirmation.
+
+The SDK creates two native labeling-job rows for two assigned users over
+one pair-specific dataset. It does not guarantee that they can concurrently
+edit one shared answer; verify that behavior with two live accounts before
+the official event. The separate worker command is
+`python -m annotatiathon.native_worker --loop --poll-seconds 12`.

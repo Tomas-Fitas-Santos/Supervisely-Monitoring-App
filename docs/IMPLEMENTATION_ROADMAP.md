@@ -1,29 +1,71 @@
-# Local-first implementation roadmap
+# Nightjar implementation status and acceptance gates
 
-**Version:** 1.1 | **Development branch:** `main` ONLY | **Deployment:** deferred until local completion.
+**Updated:** 2026-11-10 · **Branch:** `main` only · **Local-first:** no DEMO mode.
 
-Phases govern delivery, not the order of independently editable setup tabs.
-
-| Phase | Scope | Status and acceptance |
+| Phase | Local implementation | Still required before deployment |
 |---|---|---|
-| 0 | Architecture, scope, engineering rules and clean `main` foundation | **Completed** |
-| 1 | PostgreSQL, migrations, API, first-party staff login, organiser settings, React UI, live tab updates and worker | **In progress.** Staff role editor added, plus authenticated UI and 5-second polling; still missing full staff account creation UI, durable worker, SSE and real multi-browser acceptance |
-| 2 | CSV ingestion, People & Teams, QR-assisted attendance and table assignment | **Partially implemented.** CSV/team/people screens and manual identity-confirmed check-in (with audit and reversal) implemented; QR scanning and table seating assignments remain; event-local monitor responsibilities now support manual and balanced distribution |
-| 3 | Configurable ticket categories, bulk grants, soft limits, physical issuance, redemption and activity rewards | **In progress.** Categories, recipient previews, signed ledger, allocation/issue/redemption, soft warnings, idempotent confirmations and safe reversal implemented; activity scheduling, ranked results and prize allocations implemented; advanced reward flows remain |
-| 4 | Native Team 125980 connection, encrypted credential handling, member/role sync and explicit native admin operations | Read-only native team/account/workspace verification and event-scoped membership preview/reconciliation implemented and API-mocked; live Pro team acceptance, encrypted browser credential management, and native invitations/role mutations still outstanding |
-| 5 | Resumable ZIP/folder upload, video metadata, fair whole-video distribution and logical prepared jobs | Not started |
-| 6 | Pair collaboration proof, native labeling-job lifecycle, launch, submission detection, completeness, correction, automatic/manual release | Not started |
-| 7 | Deterministic sampled frame/keypoint/box scoring and human-review dashboard | Not started |
-| 8 | Closure, partial annotation export, duplicate provenance, recovery, load testing | Not started |
+| 0 — Architecture | Clean codebase, contracts, production-oriented `main`, no sensitive roster in Git | Operational deployment plan |
+| 1 — Server | FastAPI, Argon2 staff authentication, CSRF, PostgreSQL migrations, multi-role staff UI, React UI, authenticated polling | Multiple-browser load and recovery tests |
+| 2 — People & event logistics | CSV import, manual name/email check-in and shared team table, independent monitor responsibilities, manual and balanced assignment, multi-event archive/reset, two-monitor trial teams | Live full-scale team roster rehearsal |
+| 3 — Rewards | Tickets/categories, bulk distribution, issue/redemption/limits, activities, prize awards, reversal audits | Venue-side workflows and staff usability rehearsal |
+| 4 — Supervisely membership | Native team and workspace verification, read-only membership mapping and role validation, manual invitation-email handoff | Native invitation from existing login is not currently exposed as an in-app workflow; real role and account access test |
+| 5 — Dataset | Resumable ZIP/folder imports; species/morphology inventory; source-hash provenance; whole-video jobs; frame-balanced, redundant distribution | Full dataset capacity, storage and image-corruption exercise |
+| 6 — Competition and submission | Explicit first-job release, durable SDK queue, one pair workload at a time, separate native job ID per annotator, per-user status sync; monitor must accept before next release; recoverable SDK correction/restart with history | Live two-account shared-editing semantics and native reviewer behavior |
+| 7 — Scoring and monitoring | Job/media inspection, sampled frame and keypoint scoring, temporal consistency flag, audit and monitor assignments | Final scoring rule calibration with organisers; timing and quality rehearsal |
+| 8 — Closeout | Event archive, CSV reports, native annotation JSON ZIP full/curated manifests with source provenance | Real partial export and disaster-recovery restore exercise |
 
-## Gates for continuing
-- First prove the local server, login, migrations, React build and staff permission tests work together; never call a partial milestone production-ready.
-- Add a true multi-user test and a durable event-driven notification mechanism before introducing real-time operations such as ticket issuance.
-- Never claim that copying email addresses, marking sent, or entering a Supervisely Team ID confirms native membership.
-- Validate all external Supervisely mutation APIs on authorised real accounts before enabling event-side effects.
-- Current GitHub repository is public; no real rosters, credentials or event data may enter commits.
-- Existing branches are read-only references. Do not create another branch, merge old history into `main`, or force-push.
-- Hosting/deployment work is postponed until the local application passes the required acceptance tests.
+## Binding acceptance criteria
 
-## Reference material
-See `PRODUCT_SPEC.md`, `ARCHITECTURE.md` and `ENGINEERING_RULES.md`.
+1. **One active pair-level job:** never publish a later job until the previous
+   job is accepted locally by the responsible monitor (both native accounts
+   must have submitted). A partial submission, paused plan, returned review
+   or uncertain remote write must not advance the team.
+2. **Two-monitor test pairing:** organiser can form exactly two existing
+   monitors into a competition pair, without changing either staff/native
+   role; can disband only while there is no local job history for the team.
+3. **Corrections:** a rejected pair stays on the same logical job. SDK
+   restarts keep old native job IDs for audit and require resubmission.
+   The retry action reconciles existing native records after interrupted writes.
+4. **No silent remote effects:** uploading and planning are local; remote
+   publishing requires explicit launch and a separately running native worker.
+   No credentials are stored in the browser or repository.
+5. **Multi-event provenance:** no force deletion of source people, tickets,
+   native jobs or prior accepted annotations. Archived events remain
+   available and current settings are shared where appropriate.
+6. **Real Supervisely collaboration is not established by API unit tests.**
+   SDK `labeling_job.create(user_ids=[a,b])` yields two native job records.
+   Confirm that the two volunteers can cooperate on the intended single
+   annotation answer with their actual permissions before event day.
+
+## Local verification
+
+From the repository root on Windows with Docker Desktop running and the
+existing `.env` retained:
+
+```powershell
+git switch main
+git pull --ff-only origin main
+docker compose -f compose.local.yaml --env-file .env up -d db
+.\.venv-nightjar\Scripts\Activate.ps1
+alembic upgrade head
+alembic current
+python -m pytest -q
+python -m ruff check src tests migrations
+```
+
+Run the API with `uvicorn annotatiathon.app:app --reload --host
+127.0.0.1 --port 8000`, run the frontend from `web` using
+`npm.cmd install` and `npm.cmd run dev`, and open
+`http://127.0.0.1:5173`.
+
+To use optional live SDK publishing install
+`python -m pip install -e ".[native]"` and then start
+`python -m annotatiathon.native_worker --loop --poll-seconds 12`
+in a separate terminal. Configure, verify and reconcile your native
+Supervisely team/workspace beforehand. A token is read from the private
+server-side `.env`. Do not start native publishing merely to test local UI
+or CRUD operations.
+
+The latest CI run for the pair queue includes PostgreSQL migrations, Ruff,
+backend tests and the React build. Consult GitHub Actions for the authoritative
+current pass/fail status before any live event rehearsal.

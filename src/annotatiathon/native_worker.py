@@ -277,6 +277,14 @@ def publish_job(db: Session, job: LabelingJob, api, config: SuperviselyConfig) -
 
 
 def sync_one(db: Session, api, job: LabelingJob) -> str:
+    # Serialize worker polling against simultaneous monitor decisions.
+    # Refresh any ORM-cached state after acquiring the PostgreSQL row lock.
+    locked = db.scalar(select(LabelingJob).where(
+        LabelingJob.id == job.id, LabelingJob.event_id == job.event_id,
+    ).with_for_update().execution_options(populate_existing=True))
+    if locked is None:
+        raise NativeWorkerError("job_missing_during_sync")
+    job = locked
     # A returned job is managed by the explicit native correction operation.
     # Do not treat two old 'on_review' records as a new submission.
     if job.status in {"queued", "publishing", "completed", "needs_correction"}:

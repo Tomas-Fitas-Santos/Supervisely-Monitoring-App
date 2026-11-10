@@ -285,6 +285,9 @@ def test_initial_release_and_next_after_both_submit(configured):
         sync_all(db, sdk, config)
         assert len(db.scalars(select(NativeOperation)).all()) == 1
         sdk.jobs[1].status = "on_review"
+        sdk.jobs[1].finished_images_count = 1
+        assert sync_all(db, sdk, config)["changed_jobs"] == 0
+        assert process_once(db, sdk, config) is None
         sdk.jobs[1].finished_images_count = 2
         result = sync_all(db, sdk, config)
         assert result["changed_jobs"] == 1
