@@ -394,3 +394,35 @@ def test_registration_code_expires_and_cannot_be_reused(setup):
         "password": "Safe?Strong&Password*2026",
     }).status_code == 400
     assert login(http,"valid@example.org","Safe?Strong&Password*2026")
+
+
+def test_smtp_failure_does_not_reveal_monitor_roster_membership(setup, monkeypatch):
+    from fastapi import HTTPException
+
+    http, maker, _sent = setup
+    with maker.begin() as db:
+        db.add(Person(
+            event_id=DEFAULT_EVENT_ID, email="eligible@example.org",
+            name="Eligible Monitor", kind="monitor",
+        ))
+
+    def fail_send(_email, _code):
+        raise HTTPException(status_code=503, detail="Internal SMTP failure.")
+
+    monkeypatch.setattr("annotatiathon.registration_api.send_verification", fail_send)
+    eligible = http.post("/api/v1/auth/register/request",
+        json={"email": "eligible@example.org"})
+    unknown = http.post("/api/v1/auth/register/request",
+        json={"email": "stranger@example.org"})
+    assert eligible.status_code == 200
+    assert eligible.json() == unknown.json()
+    assert "eligible@example.org" not in eligible.text
+
+    monkeypatch.setattr("annotatiathon.registration_api.smtp_ready", lambda: False)
+    disabled = http.post("/api/v1/auth/register/request",
+        json={"email": "eligible@example.org"})
+    assert disabled.status_code == 503
+    disabled_unknown = http.post("/api/v1/auth/register/request",
+        json={"email": "stranger@example.org"})
+    assert disabled_unknown.status_code == 503
+    assert disabled.json() == disabled_unknown.json()
