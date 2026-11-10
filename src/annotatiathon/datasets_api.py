@@ -5,6 +5,7 @@ The import never uploads to or modifies Supervisely until separately approved.
 """
 import hashlib
 import shutil
+import subprocess
 import zipfile
 from collections import Counter
 from pathlib import Path, PurePosixPath
@@ -31,6 +32,8 @@ from .models import (
 router = APIRouter(prefix="/api/v1/datasets", tags=["datasets"])
 VIEWERS = ("organiser", "monitor", "observer", "reception", "activity", "distribution")
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
+VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v", ".mpeg", ".mpg"}
+VIDEO_FRAMES_PER_SECOND = 1  # Documented default for raw video imports.
 MAX_CHUNK_BYTES = 16 * 1024 * 1024
 STALE_UPLOAD_SECONDS = 300  # A browser cannot hold the source File after reload.
 
@@ -262,8 +265,10 @@ async def receive_chunk(
     rel = safe_relative(relative_path)
     if ds.upload_kind == "zip" and str(rel) != "source.zip":
         raise HTTPException(status_code=422, detail="ZIP imports accept source.zip only.")
-    if ds.upload_kind == "folder" and len(rel.parts) < 3:
-        raise HTTPException(status_code=422, detail="Select a complete dataset root folder.")
+    if ds.upload_kind == "folder" and len(rel.parts) < 2:
+        raise HTTPException(
+            status_code=422, detail="Select the dataset root with species/video subfolders."
+        )
     settings = get_settings()
     if total > settings.max_dataset_bytes or ds.source_bytes > settings.max_dataset_bytes:
         raise HTTPException(status_code=413, detail="Dataset exceeds configured byte limit.")
@@ -324,44 +329,123 @@ async def receive_chunk(
 
 
 def canonical_name(raw: str, root_name: str | None) -> str:
+    """Normalize species-first uploads to the existing internal video/frame layout.
+
+    Accepted:
+      species/video.mp4
+      species/video_name/frame.jpg
+      dataset_name/species/video.mp4             (with inferred wrapper)
+      dataset_name/species/video_name/frame.jpg  (with inferred wrapper)
+
+    Legacy images/ and videos/ collections stay readable for existing tests
+    and older uploads. Newly imported videos always become frame assets.
+    """
     path = safe_relative(raw)
     if root_name is not None and path.parts and path.parts[0] == root_name:
         path = PurePosixPath(*path.parts[1:])
-    if len(path.parts) < 3:
-        raise HTTPException(status_code=422, detail="Missing morphology subfolder.")
-    if path.parts[0] == "images":
-        if len(path.parts) != 3:
+    parts = path.parts
+    extension = path.suffix.lower()
+    if not parts:
+        raise HTTPException(status_code=422, detail="Dataset folder is empty.")
+    if parts[0] == "images":
+        if len(parts) != 3 or extension not in IMAGE_EXTENSIONS:
             raise HTTPException(
                 status_code=422,
-                detail="Images must be under images/<species-or-morphology>/<file>.",
+                detail="Legacy images require images/<species>/<image file>.",
             )
-    elif path.parts[0] == "videos":
-        if len(path.parts) != 4:
-            raise HTTPException(
-                status_code=422,
-                detail="Frames must be under videos/<morphology>/<video-title>/<frame>.",
-            )
-    else:
-        raise HTTPException(status_code=422, detail="Expected images/ or videos/ at root.")
-    if PurePosixPath(path.name).suffix.lower() not in IMAGE_EXTENSIONS:
-        raise HTTPException(status_code=422, detail="Unsupported image/frame extension.")
-    return str(path)
+        return str(path)
+    if parts[0] == "videos":
+        if ((len(parts) == 4 and extension in IMAGE_EXTENSIONS)
+                or (len(parts) == 3 and extension in VIDEO_EXTENSIONS)):
+            return str(path)
+        raise HTTPException(
+            status_code=422,
+            detail="Legacy videos require videos/<species>/<video>/<frame> or a video file.",
+        )
+    if len(parts) == 2 and extension in VIDEO_EXTENSIONS:
+        return str(PurePosixPath("videos", *parts))
+    if len(parts) == 3 and extension in IMAGE_EXTENSIONS:
+        return str(PurePosixPath("videos", *parts))
+    raise HTTPException(
+        status_code=422,
+        detail="Expected <species>/<video-file> or "
+               "<species>/<video-name>/<frame-image>; no images/videos folders required.",
+    )
 
 
 def infer_wrapper(paths: list[str]) -> str | None:
+    """Detect an optional enclosing dataset directory without guessing species.
+
+    A species-only dataset must not be mistaken for a wrapper. File-extension
+    and expected depth distinguish species/video.mp4 and species/video/frame.jpg.
+    """
     if not paths:
-        raise HTTPException(status_code=422, detail="No image/frame files found.")
-    first = [safe_relative(p).parts for p in paths]
-    if all(parts[0] in ("images", "videos") for parts in first):
+        raise HTTPException(status_code=422, detail="No video files or frames found.")
+
+    def valid(wrapper: str | None) -> bool:
+        try:
+            for name in paths:
+                canonical_name(name, wrapper)
+            return True
+        except HTTPException:
+            return False
+
+    if valid(None):
         return None
-    names = {parts[0] for parts in first}
-    if len(names) != 1 or not all(
-        len(parts) >= 2 and parts[1] in ("images", "videos") for parts in first
-    ):
-        raise HTTPException(
-            status_code=422, detail="Dataset root must contain images/ and videos/."
+    first = [safe_relative(name).parts[0] for name in paths]
+    if len(set(first)) == 1 and valid(first[0]):
+        return first[0]
+    raise HTTPException(
+        status_code=422,
+        detail="Dataset must contain species folders with video files or "
+               "video-frame subfolders, optionally inside one dataset folder.",
+    )
+
+
+def sha256_file(path: Path) -> tuple[str, int]:
+    digest = hashlib.sha256()
+    size = 0
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+            size += len(block)
+    return digest.hexdigest(), size
+
+
+def extract_video_frames(source: Path, destination: Path) -> list[Path]:
+    """Sample raw videos at 1 FPS into immutable JPEG frame files.
+
+    Supervisely labeling jobs are image-frame jobs. Source videos are retained
+    separately under the dataset's private source_videos directory.
+    """
+    if destination.exists():
+        raise HTTPException(status_code=422, detail="Duplicate video folder name.")
+    destination.mkdir(parents=True)
+    command = [
+        "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
+        "-i", str(source), "-vf", f"fps={VIDEO_FRAMES_PER_SECOND}",
+        "-q:v", "3", "-start_number", "1",
+        str(destination / "frame_%08d.jpg"),
+    ]
+    try:
+        result = subprocess.run(
+            command, capture_output=True, check=False, timeout=3600,
         )
-    return next(iter(names))
+    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Video frame extraction is unavailable or exceeded its time limit.",
+        ) from exc
+    if result.returncode != 0:
+        raise HTTPException(
+            status_code=422, detail=f"Could not decode video {source.name}.",
+        )
+    frames = sorted(destination.glob("frame_*.jpg"))
+    if not frames:
+        raise HTTPException(
+            status_code=422, detail=f"Video {source.name} contains no extractable frames.",
+        )
+    return frames
 
 
 def safe_zip_entries(file: zipfile.ZipFile, max_count: int,
@@ -459,30 +543,61 @@ def finalize_dataset(
     videos: set[str] = set()
     morph_counts: Counter[str] = Counter()
     assets = []
+    source_videos = root_dir(ds) / "source_videos"
+    source_group_names: set[str] = set()
+    frame_group_names: set[str] = set()
+
+    def register_asset(rel: str, morph: str, group: str | None,
+                       kind: str, digest: str, size: int) -> None:
+        counts[kind] += 1
+        morph_counts[morph] += 1
+        if group:
+            videos.add(group)
+        assets.append(MediaAsset(
+            event_id=event.id, dataset_id=ds.id,
+            relative_path=rel, morphology=morph, kind=kind,
+            video_group=group, size_bytes=size, sha256=digest,
+        ))
+        if sum(counts.values()) > get_settings().max_dataset_assets:
+            raise HTTPException(status_code=413, detail="Too many extracted video frames.")
+        if len(assets) >= 500:
+            db.add_all(assets)
+            db.flush()
+            assets.clear()
+
     try:
         for rel, stream in staged_sources(ds, files):
             parts = PurePosixPath(rel).parts
-            kind = "image" if parts[0] == "images" else "video_frame"
             morph = parts[1]
-            group = f"{morph}/{parts[2]}" if kind == "video_frame" else None
-            digest, size = copy_and_hash(stream, media_dir / rel)
-            counts[kind] += 1
-            morph_counts[morph] += 1
-            if group:
-                videos.add(group)
-            assets.append(MediaAsset(
-                event_id=event.id, dataset_id=ds.id,
-                relative_path=rel, morphology=morph, kind=kind,
-                video_group=group, size_bytes=size, sha256=digest,
-            ))
-            if len(assets) >= 500:
-                db.add_all(assets)
-                db.flush()
-                assets.clear()
+            extension = PurePosixPath(rel).suffix.lower()
+            if extension in VIDEO_EXTENSIONS:
+                # A direct species/video.mp4 input becomes a video frame folder.
+                name = PurePosixPath(parts[2]).stem
+                group = f"{morph}/{name}"
+                if group in source_group_names or group in frame_group_names:
+                    raise HTTPException(status_code=422, detail="Duplicate video title.")
+                source_group_names.add(group)
+                original = source_videos / morph / parts[2]
+                copy_and_hash(stream, original)
+                output = media_dir / "videos" / morph / name
+                frames = extract_video_frames(original, output)
+                for frame in frames:
+                    digest, size = sha256_file(frame)
+                    path = frame.relative_to(media_dir).as_posix()
+                    register_asset(path, morph, group, "video_frame", digest, size)
+            else:
+                kind = "image" if parts[0] == "images" else "video_frame"
+                group = f"{morph}/{parts[2]}" if kind == "video_frame" else None
+                if group:
+                    if group in source_group_names:
+                        raise HTTPException(status_code=422, detail="Duplicate video title.")
+                    frame_group_names.add(group)
+                digest, size = copy_and_hash(stream, media_dir / rel)
+                register_asset(rel, morph, group, kind, digest, size)
         db.add_all(assets)
         db.flush()
         if not counts:
-            raise HTTPException(status_code=422, detail="No usable media files found.")
+            raise HTTPException(status_code=422, detail="No usable video frames found.")
         ds.image_count = counts["image"]
         ds.frame_count = counts["video_frame"]
         ds.video_count = len(videos)
@@ -500,6 +615,7 @@ def finalize_dataset(
     except Exception:
         db.rollback()
         shutil.rmtree(media_dir, ignore_errors=True)
+        shutil.rmtree(source_videos, ignore_errors=True)
         media_dir.mkdir(exist_ok=True)
         raise
     # Media stays on disk; upload staging no longer needed.
