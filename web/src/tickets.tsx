@@ -16,6 +16,7 @@ type Balance={person_id:string;category_id:string;allocated:number;issued:number
 export function TicketsScreen({auth}:{auth:Auth}) {
   const canDistribute=auth.staff.roles.some(r=>["organiser","distribution","reception"].includes(r));
   const organiser=auth.staff.roles.includes("organiser");
+  const [section,setSection]=useState<"distribution"|"policies"|"history">("distribution");
   const [categories,setCategories]=useState<Category[]>([]);
   const [batches,setBatches]=useState<Batch[]>([]);
   const [balances,setBalances]=useState<Balance[]>([]);
@@ -134,12 +135,18 @@ export function TicketsScreen({auth}:{auth:Auth}) {
       </div><button className="btn secondary" onClick={()=>void refresh()}><RefreshCw size={15}/> Refresh</button></div>
     {error&&<div className="alert danger" role="alert">{error}</div>}
     {notice&&<div className="alert success" role="status">{notice}</div>}
+    <nav className="workspace-subtabs" aria-label="Tickets and rewards sections">
+      <button className={section==="distribution"?"active":""} onClick={()=>setSection("distribution")}>Issue & redeem</button>
+      <button className={section==="policies"?"active":""} onClick={()=>setSection("policies")}>Ticket categories & warnings</button>
+      <button className={section==="history"?"active":""} onClick={()=>setSection("history")}>History & balances</button>
+    </nav>
     <div className="stat-grid compact">{categories.slice(0,3).map(cat=>
       <div className="stat-card" key={cat.id}><Ticket size={20}/><span className="muted small">{cat.name} · Issued</span>
         <strong>{balances.filter(b=>b.category_id===cat.id).reduce((n,b)=>n+b.issued,0)}</strong>
         <span className="muted small">Redeemed: {balances.filter(b=>b.category_id===cat.id).reduce((n,b)=>n+b.redeemed,0)}</span>
       </div>)}</div>
-    <div className="content-grid tickets-grid">
+    <div className="content-grid tickets-grid ticket-section-grid">
+      {section==="distribution"&&<>
       {canDistribute&&<section className="panel">
         <span className="eyebrow">BATCH DISTRIBUTION</span><h3>Prepare a ticket batch</h3>
         <p className="muted small">Preview an immutable recipient snapshot before confirming. The same batch cannot be applied twice.</p>
@@ -186,7 +193,8 @@ export function TicketsScreen({auth}:{auth:Auth}) {
               <ClipboardCheck size={18}/> {preview.status==="confirmed"?"Batch confirmed":"Batch "+preview.status}</div>}
         </div>}
       </section>}
-      <section className="panel">
+      </>}
+      {section==="policies"&&<section className="panel">
         <span className="eyebrow">CATEGORY POLICY</span><h3>Ticket categories</h3>
         <p className="muted small">Warnings are advisory only. Defaults: pizza over 2/hour; drinks over 3/hour.</p>
         {categories.map(cat=><div className="policy-row" key={cat.id}>
@@ -213,6 +221,7 @@ export function TicketsScreen({auth}:{auth:Auth}) {
           <p>Warnings never stop a distribution. Recipients and issuing staff remain recorded for auditing.</p></div>
       </section>
     </div>
+    {section==="history"&&<>
     <section className="panel" style={{marginTop:22}}>
       <span className="eyebrow">DISTRIBUTION HISTORY</span><h3>Confirmed batches</h3>
       <div className="table-scroll"><table className="data-table"><thead><tr>
@@ -237,6 +246,6 @@ export function TicketsScreen({auth}:{auth:Auth}) {
         <td>{b.allocated}</td><td>{b.issued}</td><td>{b.redeemed}</td>
         <td>{b.allocated_remaining}</td><td>{b.issued_remaining}</td>
       </tr>)}</tbody></table>{!balances.length&&<div className="empty-table">No ticket activity yet.</div>}</div>
-    </section>
+    </section></>}
   </div>;
 }
