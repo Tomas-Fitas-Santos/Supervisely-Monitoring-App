@@ -591,3 +591,6 @@ def test_confirmed_reset_archives_only_event_projects_and_keeps_members(configur
     assert final.json()["datasets"] == 0
     assert final.json()["jobs"] == 0
     assert final.json()["operation"]["status"] == "done"
+    categories = http.get("/api/v1/tickets/categories")
+    assert categories.status_code == 200
+    assert len(categories.json().get("items", [])) >= 3
