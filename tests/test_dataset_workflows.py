@@ -343,3 +343,116 @@ def test_ready_dataset_is_protected_from_cleanup(ctx):
     dsid = ingest(client, csrf)
     assert act(client, csrf, f"/datasets/{dsid}", method="DELETE").status_code == 409
     assert client.get(f"/api/v1/datasets/{dsid}/summary").status_code == 200
+
+
+def upload_archive(client, csrf, members: dict[str, bytes]) -> dict:
+    stream = io.BytesIO()
+    with zipfile.ZipFile(stream, "w", zipfile.ZIP_DEFLATED) as archive:
+        for path, data in members.items():
+            archive.writestr(path, data)
+    payload = stream.getvalue()
+    created = act(client, csrf, "/datasets/uploads", {
+        "name": "Bird Species Videos", "upload_kind": "zip",
+    })
+    assert created.status_code == 201, created.text
+    dsid = created.json()["id"]
+    transferred = client.put(
+        f"/api/v1/datasets/uploads/{dsid}/chunk",
+        params={"relative_path": "source.zip", "offset": 0, "total": len(payload)},
+        data=payload, headers={"X-CSRF-Token": csrf},
+    )
+    assert transferred.status_code == 200, transferred.text
+    return {"id": dsid, "created": created.json()}
+
+
+def test_species_first_frame_folders_without_images_videos_prefix(ctx):
+    client, maker, csrf = ctx
+    dataset = upload_archive(client, csrf, {
+        "BirdGaze/CorvusCorone/flight_01/000001.jpg": b"bird one",
+        "BirdGaze/CorvusCorone/flight_01/000002.jpg": b"bird two",
+        "BirdGaze/ColumbaPalumbus/feeding_02/000001.jpg": b"bird three",
+    })
+    dsid = dataset["id"]
+    result = act(client, csrf, f"/datasets/{dsid}/finalize")
+    assert result.status_code == 200, result.text
+    assert result.json()["image_count"] == 0
+    assert result.json()["frame_count"] == 3
+    assert result.json()["video_count"] == 2
+    with maker() as db:
+        assets = list(db.scalars(select(MediaAsset).where(
+            MediaAsset.dataset_id == dsid
+        )))
+    assert all(item.kind == "video_frame" for item in assets)
+    assert {item.video_group for item in assets} == {
+        "CorvusCorone/flight_01", "ColumbaPalumbus/feeding_02"
+    }
+    assert all(item.relative_path.startswith("videos/") for item in assets)
+
+
+def test_single_species_without_dataset_wrapper_is_not_stripped(ctx):
+    client, maker, csrf = ctx
+    dataset = upload_archive(client, csrf, {
+        "CorvusCorone/flight_01/000001.jpg": b"bird one",
+        "CorvusCorone/flight_01/000002.jpg": b"bird two",
+    })
+    result = act(client, csrf, f"/datasets/{dataset['id']}/finalize")
+    assert result.status_code == 200, result.text
+    assert result.json()["video_count"] == 1
+    with maker() as db:
+        assert {item.morphology for item in db.scalars(select(MediaAsset))} == {
+            "CorvusCorone"
+        }
+
+
+def test_species_first_raw_video_files_become_one_video_per_job(ctx, monkeypatch):
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    def sample_frames(command, **_kwargs):
+        # Simulate FFmpeg writing deterministic JPEG files while retaining
+        # source-video bytes separately. Real FFmpeg is installed in the API image.
+        target = Path(command[-1])
+        target.parent.mkdir(parents=True, exist_ok=True)
+        for frame in (1, 2):
+            (target.parent / f"frame_{frame:08d}.jpg").write_bytes(b"jpg" + bytes([frame]))
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr("annotatiathon.datasets_api.subprocess.run", sample_frames)
+    client, maker, csrf = ctx
+    dataset = upload_archive(client, csrf, {
+        "BirdGaze/CorvusCorone/flight_01.mp4": b"sample video one",
+        "BirdGaze/ColumbaPalumbus/feeding_02.mkv": b"sample video two",
+    })
+    result = act(client, csrf, f"/datasets/{dataset['id']}/finalize")
+    assert result.status_code == 200, result.text
+    assert result.json()["image_count"] == 0
+    assert result.json()["frame_count"] == 4
+    assert result.json()["video_count"] == 2
+    with maker() as db:
+        assets = list(db.scalars(select(MediaAsset)))
+        assert {item.video_group for item in assets} == {
+            "CorvusCorone/flight_01", "ColumbaPalumbus/feeding_02"
+        }
+        assert all(item.kind == "video_frame" for item in assets)
+    teams(client, csrf)
+    plan = act(client, csrf, "/labeling/plans", {
+        "dataset_id": dataset["id"], "jobs_per_team": 2, "redundancy": 1,
+    })
+    assert plan.status_code == 201, plan.text
+    assert plan.json()["job_count"] == 2
+    assert act(client, csrf,
+               "/labeling/plans/" + plan.json()["plan_id"] + "/approve").status_code == 200
+    with maker() as db:
+        jobs = list(db.scalars(select(LabelingJob)))
+        assert all(job.video_count == 1 for job in jobs)
+        assert all(job.frame_count == 2 for job in jobs)
+
+
+def test_species_first_video_rejects_mixed_independent_images(ctx):
+    client, _maker, csrf = ctx
+    dataset = upload_archive(client, csrf, {
+        "BirdGaze/CorvusCorone/flight_01/000001.jpg": b"good frame",
+        "BirdGaze/CorvusCorone/photo.jpg": b"not a video frame folder",
+    })
+    rejected = act(client, csrf, f"/datasets/{dataset['id']}/finalize")
+    assert rejected.status_code == 422, rejected.text
