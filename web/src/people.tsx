@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useState , ShieldCheck } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type React from "react";
 import {
   Check, ChevronLeft, ChevronRight, ClipboardCopy, FileSpreadsheet, Filter,
-  Plus, RefreshCw, Search, Upload, UserRound, UsersRound, X
+  Plus, RefreshCw, Search, ShieldCheck, Upload, UserRound, UsersRound, X
 } from "lucide-react";
 import { api, refreshSuperviselyRoster, type Auth, type PeopleResponse, type Person, type Team, type TeamResponse } from "./api";
 import { NativeMembershipPanel } from "./native";
