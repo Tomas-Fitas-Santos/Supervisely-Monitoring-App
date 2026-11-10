@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from .config import get_settings
 from .db import get_db
-from .models import AuditEvent, StaffAccount, StaffSession
+from .models import DEFAULT_EVENT_ID, AuditEvent, Event, StaffAccount, StaffSession
 from .security import DUMMY_HASH, password_matches, random_token, token_digest
 
 router = APIRouter(prefix="/api/v1/auth", tags=["authentication"])
@@ -124,8 +124,13 @@ def login(payload: Credentials, request: Request, response: Response, db: Sessio
     staff.locked_until = None
     token = random_token()
     csrf = random_token()
+    latest_event = db.scalar(select(Event).where(Event.status == "active").order_by(
+        Event.created_at.desc(), Event.name.desc()
+    ))
     db.add(StaffSession(
-        id=token_digest(token), staff_id=staff.id, csrf_token=csrf,
+        id=token_digest(token), staff_id=staff.id,
+        event_id=latest_event.id if latest_event is not None else DEFAULT_EVENT_ID,
+        csrf_token=csrf,
         expires_at=now + SESSION_SECONDS,
     ))
     db.add(AuditEvent(staff_id=staff.id, action="staff.login", target_type="staff",

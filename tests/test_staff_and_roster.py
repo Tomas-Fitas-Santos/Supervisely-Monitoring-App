@@ -7,7 +7,7 @@ from sqlalchemy.pool import StaticPool
 
 from annotatiathon.app import app
 from annotatiathon.db import get_db
-from annotatiathon.models import Base, Person, StaffAccount, StaffSession
+from annotatiathon.models import DEFAULT_EVENT_ID, Base, Event, Person, StaffAccount, StaffSession
 from annotatiathon.security import password_hash
 
 
@@ -20,6 +20,7 @@ def client(monkeypatch):
     Base.metadata.create_all(engine)
     maker = sessionmaker(bind=engine, expire_on_commit=False)
     with maker.begin() as db:
+        db.add(Event(id=DEFAULT_EVENT_ID, name="Initial Event"))
         db.add(StaffAccount(email="organiser@example.org", name="Event Organiser",
                             password_hash=password_hash("CorrectSecretPassword1!"),
                             roles=["organiser"]))

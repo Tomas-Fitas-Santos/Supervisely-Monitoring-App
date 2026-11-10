@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from .auth import AuthContext, normalized_email, requires
 from .db import get_db
+from .events_api import current_event
 from .models import AuditEvent, CompetitionTeam, ImportBatch, Person
 
 router = APIRouter(prefix="/api/v1", tags=["people"])
@@ -65,15 +66,19 @@ class RosterPayload(BaseModel):
     default_kind: Literal["participant", "monitor"] = "participant"
 
 
-def team_id(db: Session, team_name: str | None) -> str | None:
+def team_id(db: Session, team_name: str | None, event_id: str) -> str | None:
     name = (team_name or "").strip()
     if not name:
         return None
-    team = db.scalar(select(CompetitionTeam).where(CompetitionTeam.name == name))
+    team = db.scalar(select(CompetitionTeam).where(
+        CompetitionTeam.name == name, CompetitionTeam.event_id == event_id
+    ))
     if team is None:
-        team = CompetitionTeam(name=name)
+        team = CompetitionTeam(name=name, event_id=event_id)
         db.add(team)
         db.flush()
+    elif not team.active:
+        team.active = True
     return team.id
 
 
@@ -87,8 +92,9 @@ def person_record(p: Person, team: str | None = None) -> dict:
     }
 
 
-def audit(db: Session, actor: str, action: str, target: str | None, details: dict) -> None:
-    db.add(AuditEvent(staff_id=actor, action=action, target_type="person",
+def audit(db: Session, actor: str, event_id: str, action: str, target: str | None,
+          details: dict) -> None:
+    db.add(AuditEvent(staff_id=actor, event_id=event_id, action=action, target_type="person",
                       target_id=target, details=details))
 
 
@@ -103,7 +109,8 @@ def list_people(
     _ctx: AuthContext = Depends(requires(*VIEWER)),
     db: Session = Depends(get_db),
 ):
-    query = select(Person).where(Person.active.is_(True))
+    event = current_event(db, _ctx)
+    query = select(Person).where(Person.active.is_(True), Person.event_id == event.id)
     if kind != "all":
         query = query.where(Person.kind == kind)
     if membership != "all":
@@ -122,7 +129,9 @@ def list_people(
         query.order_by(Person.kind.desc(), Person.name, Person.email)
         .offset((page - 1) * size).limit(size)
     ).all()
-    names = {t.id: t.name for t in db.scalars(select(CompetitionTeam))}
+    names = {t.id: t.name for t in db.scalars(select(CompetitionTeam).where(
+        CompetitionTeam.event_id == event.id
+    ))}
     return {
         "items": [person_record(p, names.get(p.team_id)) for p in people],
         "total": total, "page": page, "size": size,
@@ -135,8 +144,13 @@ def list_teams(
     _ctx: AuthContext = Depends(requires(*VIEWER)),
     db: Session = Depends(get_db),
 ):
-    teams = list(db.scalars(select(CompetitionTeam)))
-    people = list(db.scalars(select(Person).where(Person.active.is_(True))))
+    event = current_event(db, _ctx)
+    teams = list(db.scalars(select(CompetitionTeam).where(
+        CompetitionTeam.event_id == event.id, CompetitionTeam.active.is_(True)
+    )))
+    people = list(db.scalars(select(Person).where(
+        Person.event_id == event.id, Person.active.is_(True)
+    )))
     grouped: dict[str | None, list[Person]] = defaultdict(list)
     for person in people:
         grouped[person.team_id if person.kind == "participant" else None].append(person)
@@ -176,15 +190,30 @@ def create_person(
     ctx: AuthContext = Depends(requires("organiser", mutation=True)),
     db: Session = Depends(get_db),
 ):
-    if db.scalar(select(Person).where(Person.email == payload.email)):
+    event = current_event(db, ctx, writable=True)
+    existing = db.scalar(select(Person).where(
+        Person.email == payload.email, Person.event_id == event.id
+    ))
+    if existing and existing.active:
         raise HTTPException(status_code=409, detail="This email already exists.")
+    if existing:
+        existing.name = payload.name.strip()
+        existing.kind = payload.kind
+        existing.active = True
+        existing.team_id = team_id(db, payload.team_name, event.id) if (
+            payload.kind == "participant"
+        ) else None
+        audit(db, ctx.staff.id, event.id, "person.reactivate", existing.id,
+              {"kind": existing.kind})
+        db.commit()
+        return person_record(existing, payload.team_name)
     person = Person(
-        name=payload.name.strip(), email=payload.email, kind=payload.kind,
-        team_id=team_id(db, payload.team_name) if payload.kind == "participant" else None,
+        event_id=event.id, name=payload.name.strip(), email=payload.email, kind=payload.kind,
+        team_id=team_id(db, payload.team_name, event.id) if payload.kind == "participant" else None,
     )
     db.add(person)
     db.flush()
-    audit(db, ctx.staff.id, "person.create", person.id, {"kind": person.kind})
+    audit(db, ctx.staff.id, event.id, "person.create", person.id, {"kind": person.kind})
     db.commit()
     return person_record(person, payload.team_name)
 
@@ -195,12 +224,15 @@ def update_person(
     ctx: AuthContext = Depends(requires("organiser", mutation=True)),
     db: Session = Depends(get_db),
 ):
+    event = current_event(db, ctx, writable=True)
     person = db.get(Person, person_id)
-    if person is None:
+    if person is None or person.event_id != event.id:
         raise HTTPException(status_code=404, detail="Person not found.")
     fields = payload.model_fields_set
     if "email" in fields and payload.email is not None and payload.email != person.email:
-        if db.scalar(select(Person).where(Person.email == payload.email)):
+        if db.scalar(select(Person).where(
+            Person.email == payload.email, Person.event_id == event.id
+        )):
             raise HTTPException(status_code=409, detail="This email already exists.")
         person.email = payload.email
     if "name" in fields and payload.name is not None:
@@ -211,11 +243,11 @@ def update_person(
             person.team_id = None
     if "team_name" in fields:
         person.team_id = (
-            team_id(db, payload.team_name) if person.kind == "participant" else None
+            team_id(db, payload.team_name, event.id) if person.kind == "participant" else None
         )
     if "active" in fields and payload.active is not None:
         person.active = payload.active
-    audit(db, ctx.staff.id, "person.update", person.id, {"fields": sorted(fields)})
+    audit(db, ctx.staff.id, event.id, "person.update", person.id, {"fields": sorted(fields)})
     db.commit()
     team = db.get(CompetitionTeam, person.team_id) if person.team_id else None
     return person_record(person, team.name if team else None)
@@ -265,12 +297,15 @@ def parse_rows(payload: RosterPayload) -> list[dict]:
         raise ValueError("The supplied CSV could not be parsed.") from exc
 
 
-def import_report(db: Session, rows: list[dict], apply: bool, actor: str) -> dict:
+def import_report(db: Session, rows: list[dict], apply: bool, actor: str,
+                  event_id: str) -> dict:
     emails = [r["email"] for r in rows]
     existing = {
-        p.email: p for p in db.scalars(select(Person).where(Person.email.in_(emails)))
+        p.email: p for p in db.scalars(select(Person).where(Person.email.in_(emails), Person.event_id == event_id))
     }
-    teams = {t.id: t.name for t in db.scalars(select(CompetitionTeam))}
+    teams = {t.id: t.name for t in db.scalars(select(CompetitionTeam).where(
+        CompetitionTeam.event_id == event_id
+    ))}
     created = changed = unchanged = 0
     for row in rows:
         found = existing.get(row["email"])
@@ -280,23 +315,26 @@ def import_report(db: Session, rows: list[dict], apply: bool, actor: str) -> dic
             created += 1
             if apply:
                 db.add(Person(
-                    name=row["name"], email=row["email"], kind=row["kind"],
-                    team_id=team_id(db, desired) if row["kind"] == "participant" else None,
+                    event_id=event_id, name=row["name"], email=row["email"], kind=row["kind"],
+                    team_id=team_id(db, desired, event_id) if row["kind"] == "participant" else None,
                     source_fields=row["source_fields"],
                 ))
-        elif (found.name, found.kind, current_team) != (row["name"], row["kind"], desired or None):
+        elif (found.name, found.kind, current_team, found.active) != (
+            row["name"], row["kind"], desired or None, True
+        ):
             changed += 1
             if apply:
+                found.active = True
                 found.name = row["name"]
                 found.source_fields = row["source_fields"]
                 found.kind = row["kind"]
                 found.team_id = (
-                    team_id(db, desired) if row["kind"] == "participant" else None
+                    team_id(db, desired, event_id) if row["kind"] == "participant" else None
                 )
         else:
             unchanged += 1
     if apply:
-        audit(db, actor, "roster.import", None,
+        audit(db, actor, event_id, "roster.import", None,
               {"rows": len(rows), "created": created, "changed": changed})
     return {
         "rows": len(rows), "created": created,
@@ -317,8 +355,10 @@ def report_native_invites(
 ):
     if len(set(payload.person_ids)) != len(payload.person_ids):
         raise HTTPException(status_code=422, detail="Duplicate recipient in selection.")
+    event = current_event(db, ctx, writable=True)
     recipients = list(db.scalars(
-        select(Person).where(Person.id.in_(payload.person_ids)).with_for_update()
+        select(Person).where(Person.id.in_(payload.person_ids),
+                             Person.event_id == event.id).with_for_update()
     ))
     if len(recipients) != len(payload.person_ids) or any(not p.active for p in recipients):
         raise HTTPException(status_code=422, detail="Some recipients no longer exist.")
@@ -328,7 +368,7 @@ def report_native_invites(
         if person.membership_status == "not_invited":
             person.membership_status = "reported_sent"
     db.add(AuditEvent(
-        staff_id=ctx.staff.id, action="invitation.reported_sent",
+        staff_id=ctx.staff.id, event_id=event.id, action="invitation.reported_sent",
         target_type="invitation_batch", details={
             "count": len(recipients), "kind": recipients[0].kind,
             "person_ids": payload.person_ids,
@@ -349,7 +389,8 @@ def preview_roster(
         rows = parse_rows(payload)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return import_report(db, rows, False, ctx.staff.id)
+    event = current_event(db, ctx)
+    return import_report(db, rows, False, ctx.staff.id, event.id)
 
 
 @router.post("/roster/import")
@@ -362,9 +403,10 @@ def import_roster(
         rows = parse_rows(payload)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    report = import_report(db, rows, True, ctx.staff.id)
+    event = current_event(db, ctx, writable=True)
+    report = import_report(db, rows, True, ctx.staff.id, event.id)
     digest = hashlib.sha256(payload.csv_text.encode("utf-8")).hexdigest()
-    db.add(ImportBatch(source_hash=digest, staff_id=ctx.staff.id,
+    db.add(ImportBatch(event_id=event.id, source_hash=digest, staff_id=ctx.staff.id,
                        row_count=report["rows"], created_count=report["created"],
                        changed_count=report["changed"]))
     db.commit()

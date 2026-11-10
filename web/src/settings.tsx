@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type React from "react";
 import { CheckCircle2, Cloud, Database, LockKeyhole, Save, ShieldCheck } from "lucide-react";
 import { api, type Auth, type Integration } from "./api";
+import { EventManagement } from "./events";
 
 export function SettingsScreen({auth}:{auth:Auth}) {
   const [config,setConfig]=useState<Integration|null>(null);
@@ -77,5 +78,6 @@ export function SettingsScreen({auth}:{auth:Auth}) {
         </section>
       </aside>
     </div>
+    <EventManagement auth={auth}/>
   </div>;
 }

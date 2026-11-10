@@ -70,19 +70,28 @@ alembic upgrade head
 alembic current
 ```
 
-The new revision is `0002_tickets (head)`. Restart the backend and the Vite development server to see the new Check-in, Tickets & Rewards and Staff Access tabs.
+The new revision is `0003_events (head)`. Restart the backend and the Vite development server to see the new Check-in, Tickets & Rewards and Staff Access tabs.
 
 **Windows note:** if your machine's Application Control blocks SQLAlchemy compiled wheels, retain your working pure-Python SQLAlchemy installation; upgrading the app does not require reinstalling SQLAlchemy. Use `npm.cmd` instead of `npm` when PowerShell blocks npm scripts.
+
+## Multiple events, reset safety, and recoverability
+
+- Every staff session selects an event independently using the top-bar selector. Event-specific people, teams, attendance, invitation reports, ticket policies and ticket ledgers are isolated by `event_id`; the first upgrade migrates all existing records to **Initial Event**.
+- Organisers can create events and archive/reopen an event under **Settings → Events, archives & resets**. Archived events remain searchable but cannot be mutated.
+- **Selective reset** supports attendance, unverified manual invitation reports, ticket balances and people/teams. The organiser must preview affected data, then enter `RESET <exact event name>` within ten minutes. Ticket resets append compensating ledger entries instead of deleting audit history. Roster reset soft-archives identities and enforces ticket dependencies. Re-import can reactivate them.
+- **Full fresh start** archives the original event intact and creates a separate empty event with fresh default ticket categories. It never deletes native Supervisely datasets, jobs or annotations.
+- Each reset creates an organiser-only private PostgreSQL event snapshot, downloadable as JSON. **These snapshots contain personal data, are not independently stored backups and have no automated restore action yet.** Safeguard the exported file. Use `pg_dump` to make a real off-machine database backup before important tests or production changes.
+- Local event resets do not revoke any previously sent native Supervisely invitations. The UI explicitly distinguishes locally reported invites from verified native membership.
 
 ## Working with the application
 
 1. Open **People & Teams → Import CSV roster** and map CSV columns for name, email, team and optional role. Preview then confirm; an identical reimport does not duplicate attendees.
 2. View competition teams or individual people; the Monitoring Team is pinned first. Organisers can add/edit/deactivate people.
 3. Select up to 50 people **of one role**, copy comma-separated emails, and send the actual invitations in Supervisely's website. Only then mark those attempts reported sent. Native join and pending-invite verification arrive in the later integration phase.
-4. Under **Check-in**, receptionist or organiser staff confirm arrivals. Repeat confirmations are safe and reversal is audited.
-5. Under **Tickets & Rewards**, choose a category and recipient scope, preview the immutable recipient set, review soft warnings, and confirm. Direct physical issue automatically allocates any missing ticket entitlement; redemption requires outstanding physically issued tickets. Organisers can reverse batches when doing so does not invalidate downstream balances.
-6. Under **Staff Access**, organisers can add **monitor** alongside **organiser** on the same staff account. This changes account permissions, not the attendee Monitoring Team listing.
-7. In **Settings**, configure the Supervisely server, team ID (the existing team is 125980) and workspace ID. This does not yet verify API access or alter Supervisely.
+4. Choose the selected event in the top bar. Under **Settings**, create, archive, reopen and reset event data with a preview and typed confirmation.\n5. Under **Check-in**, receptionist or organiser staff confirm arrivals. Repeat confirmations are safe and reversal is audited.
+6. Under **Tickets & Rewards**, choose a category and recipient scope, preview the immutable recipient set, review soft warnings, and confirm. Direct physical issue automatically allocates any missing ticket entitlement; redemption requires outstanding physically issued tickets. Organisers can reverse batches when doing so does not invalidate downstream balances.
+7. Under **Staff Access**, organisers can add **monitor** alongside **organiser** on the same staff account. This changes account permissions, not the attendee Monitoring Team listing.
+8. In **Settings**, configure the Supervisely server, team ID (the existing team is 125980) and workspace ID. This does not yet verify API access or alter Supervisely.
 
 Only the current screen refreshes while open, every five seconds. There are no background full-dataset network scans. Switching tabs loads current data immediately.
 

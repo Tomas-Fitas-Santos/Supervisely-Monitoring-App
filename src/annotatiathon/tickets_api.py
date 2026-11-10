@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from .auth import AuthContext, requires
 from .db import get_db
+from .events_api import current_event
 from .models import (
     AuditEvent,
     CompetitionTeam,
@@ -68,9 +69,11 @@ def categories(
     _ctx: AuthContext = Depends(requires(*VIEW_ROLES)),
     db: Session = Depends(get_db),
 ):
+    event = current_event(db, _ctx)
     return {"items": [
         category_view(item) for item in db.scalars(
-            select(TicketCategory).order_by(TicketCategory.name)
+            select(TicketCategory).where(TicketCategory.event_id == event.id)
+            .order_by(TicketCategory.name)
         )
     ]}
 
@@ -81,13 +84,18 @@ def create_category(
     ctx: AuthContext = Depends(requires("organiser", mutation=True)),
     db: Session = Depends(get_db),
 ):
-    if db.scalar(select(TicketCategory).where(TicketCategory.slug == payload.slug)):
+    event = current_event(db, ctx, writable=True)
+    if db.scalar(select(TicketCategory).where(
+        TicketCategory.slug == payload.slug, TicketCategory.event_id == event.id
+    )):
         raise HTTPException(status_code=409, detail="Category slug already exists.")
-    category = TicketCategory(slug=payload.slug, name=payload.name.strip())
+    category = TicketCategory(
+        event_id=event.id, slug=payload.slug, name=payload.name.strip()
+    )
     db.add(category)
     db.flush()
     db.add(AuditEvent(
-        staff_id=ctx.staff.id, action="tickets.category.create",
+        staff_id=ctx.staff.id, event_id=event.id, action="tickets.category.create",
         target_type="ticket_category", target_id=category.id,
         details={"slug": category.slug},
     ))
@@ -102,15 +110,16 @@ def edit_category(
     ctx: AuthContext = Depends(requires("organiser", mutation=True)),
     db: Session = Depends(get_db),
 ):
+    event = current_event(db, ctx, writable=True)
     category = db.get(TicketCategory, category_id)
-    if category is None:
+    if category is None or category.event_id != event.id:
         raise HTTPException(status_code=404, detail="Ticket category not found.")
     for field in payload.model_fields_set:
         setattr(category, field, getattr(payload, field))
     if category.warning_enabled and category.warning_threshold is None:
         raise HTTPException(status_code=422, detail="Enabled warning requires a threshold.")
     db.add(AuditEvent(
-        staff_id=ctx.staff.id, action="tickets.category.update",
+        staff_id=ctx.staff.id, event_id=event.id, action="tickets.category.update",
         target_type="ticket_category", target_id=category.id,
         details={"changed": sorted(payload.model_fields_set)},
     ))
@@ -118,7 +127,7 @@ def edit_category(
     return category_view(category)
 
 
-def resolve_people(db: Session, selection: Selection) -> list[Person]:
+def resolve_people(db: Session, selection: Selection, event_id: str) -> list[Person]:
     scope = selection.scope
     if scope in ("individuals", "teams"):
         ids = selection.person_ids if scope == "individuals" else selection.team_ids
@@ -131,7 +140,9 @@ def resolve_people(db: Session, selection: Selection) -> list[Person]:
             Person.kind == "participant", Person.team_id.in_(selection.team_ids)
         )
         count = db.scalar(select(func.count(CompetitionTeam.id)).where(
-            CompetitionTeam.id.in_(selection.team_ids)
+            CompetitionTeam.id.in_(selection.team_ids),
+            CompetitionTeam.event_id == event_id,
+            CompetitionTeam.active.is_(True),
         )) or 0
         if count != len(selection.team_ids):
             raise HTTPException(status_code=422, detail="One or more teams do not exist.")
@@ -139,7 +150,9 @@ def resolve_people(db: Session, selection: Selection) -> list[Person]:
         stmt = select(Person).where(Person.check_in_at.is_not(None))
     else:
         stmt = select(Person)
-    people = list(db.scalars(stmt.where(Person.active.is_(True)).order_by(Person.id)))
+    people = list(db.scalars(stmt.where(
+        Person.active.is_(True), Person.event_id == event_id
+    ).order_by(Person.id)))
     if scope == "individuals" and len(people) != len(selection.person_ids):
         raise HTTPException(status_code=422, detail="Some recipients are no longer active.")
     if not people:
@@ -149,7 +162,8 @@ def resolve_people(db: Session, selection: Selection) -> list[Person]:
     return people
 
 
-def balances(db: Session, category_id: str, ids: list[str]) -> dict[str, dict[str, int]]:
+def balances(db: Session, event_id: str, category_id: str,
+             ids: list[str]) -> dict[str, dict[str, int]]:
     totals: dict[str, dict[str, int]] = defaultdict(
         lambda: {"allocated": 0, "issued": 0, "redeemed": 0}
     )
@@ -158,6 +172,7 @@ def balances(db: Session, category_id: str, ids: list[str]) -> dict[str, dict[st
     for person_id, kind, quantity in db.execute(
         select(TicketLedgerEntry.person_id, TicketLedgerEntry.kind,
                func.sum(TicketLedgerEntry.quantity)).where(
+            TicketLedgerEntry.event_id == event_id,
             TicketLedgerEntry.category_id == category_id,
             TicketLedgerEntry.person_id.in_(ids),
         ).group_by(TicketLedgerEntry.person_id, TicketLedgerEntry.kind)
@@ -176,6 +191,7 @@ def warning_recipients(
         key: int(value) for key, value in db.execute(
             select(TicketLedgerEntry.person_id,
                    func.sum(TicketLedgerEntry.quantity)).where(
+                TicketLedgerEntry.event_id == category.event_id,
                 TicketLedgerEntry.category_id == category.id,
                 TicketLedgerEntry.person_id.in_(ids),
                 TicketLedgerEntry.kind == "issued",
@@ -193,7 +209,9 @@ def snapshot_response(
     db: Session, batch: TicketDistribution, category: TicketCategory
 ) -> dict:
     people = list(db.scalars(
-        select(Person).where(Person.id.in_(batch.recipient_ids)).order_by(Person.name)
+        select(Person).where(
+            Person.id.in_(batch.recipient_ids), Person.event_id == batch.event_id
+        ).order_by(Person.name)
     ))
     flagged = (
         warning_recipients(db, category, batch.recipient_ids, batch.quantity)
@@ -218,12 +236,15 @@ def preview_distribution(
     ctx: AuthContext = Depends(requires(*ACTION_ROLES, mutation=True)),
     db: Session = Depends(get_db),
 ):
+    event = current_event(db, ctx, writable=True)
     category = db.get(TicketCategory, payload.category_id)
-    if category is None or (not category.active and payload.operation != "redeem"):
+    if category is None or category.event_id != event.id or (
+        not category.active and payload.operation != "redeem"
+    ):
         raise HTTPException(status_code=422, detail="Select an active ticket category.")
-    people = resolve_people(db, payload.selection)
+    people = resolve_people(db, payload.selection, event.id)
     batch = TicketDistribution(
-        category_id=category.id, operation=payload.operation,
+        event_id=event.id, category_id=category.id, operation=payload.operation,
         quantity=payload.quantity, recipient_ids=[p.id for p in people],
         scope=payload.selection.scope, requested_by=ctx.staff.id,
     )
@@ -245,7 +266,7 @@ def insert_ledger(
     qty: int, staff_id: str, *, reversal_of: str | None = None
 ) -> None:
     db.add(TicketLedgerEntry(
-        person_id=pid, category_id=batch.category_id, distribution_id=batch.id,
+        event_id=batch.event_id, person_id=pid, category_id=batch.category_id, distribution_id=batch.id,
         kind=kind, quantity=qty, staff_id=staff_id, reversal_of=reversal_of,
     ))
 
@@ -256,8 +277,10 @@ def confirm_distribution(
     ctx: AuthContext = Depends(requires(*ACTION_ROLES, mutation=True)),
     db: Session = Depends(get_db),
 ):
+    event = current_event(db, ctx, writable=True)
     batch = db.scalar(select(TicketDistribution).where(
-        TicketDistribution.id == batch_id
+        TicketDistribution.id == batch_id,
+        TicketDistribution.event_id == event.id,
     ).with_for_update())
     if batch is None:
         raise HTTPException(status_code=404, detail="Distribution preview not found.")
@@ -273,13 +296,13 @@ def confirm_distribution(
     # Lock recipient rows in stable order: two simultaneous ticket allocations cannot
     # overspend a person's outstanding balance or issue duplicate grants.
     people = list(db.scalars(
-        select(Person).where(Person.id.in_(batch.recipient_ids)).order_by(
-            Person.id
-        ).with_for_update()
+        select(Person).where(
+            Person.id.in_(batch.recipient_ids), Person.event_id == event.id
+        ).order_by(Person.id).with_for_update()
     ))
     if len(people) != len(batch.recipient_ids) or any(not p.active for p in people):
         raise HTTPException(status_code=409, detail="Roster changed; create a new preview.")
-    current = balances(db, category.id, batch.recipient_ids)
+    current = balances(db, event.id, category.id, batch.recipient_ids)
     # Warnings are advisory, never a blocker, even when thresholds are exceeded.
     warned = warning_recipients(
         db, category, batch.recipient_ids, batch.quantity
@@ -300,7 +323,7 @@ def confirm_distribution(
     batch.confirmed_by = ctx.staff.id
     batch.confirmed_at = epoch()
     db.add(AuditEvent(
-        staff_id=ctx.staff.id, action=f"tickets.{batch.operation}",
+        staff_id=ctx.staff.id, event_id=event.id, action=f"tickets.{batch.operation}",
         target_type="ticket_distribution", target_id=batch.id,
         details={
             "category_id": category.id, "quantity": batch.quantity,
@@ -320,8 +343,10 @@ def reverse_distribution(
     ctx: AuthContext = Depends(requires("organiser", mutation=True)),
     db: Session = Depends(get_db),
 ):
+    event = current_event(db, ctx, writable=True)
     batch = db.scalar(select(TicketDistribution).where(
-        TicketDistribution.id == batch_id
+        TicketDistribution.id == batch_id,
+        TicketDistribution.event_id == event.id,
     ).with_for_update())
     if batch is None:
         raise HTTPException(status_code=404, detail="Batch not found.")
@@ -331,17 +356,18 @@ def reverse_distribution(
         raise HTTPException(status_code=409, detail="Only confirmed batches can be reversed.")
     entries = list(db.scalars(
         select(TicketLedgerEntry).where(
-            TicketLedgerEntry.distribution_id == batch.id
+            TicketLedgerEntry.distribution_id == batch.id,
+            TicketLedgerEntry.event_id == event.id,
         ).order_by(TicketLedgerEntry.id)
     ))
     if not entries:
         raise HTTPException(status_code=409, detail="No ledger entries for this batch.")
     # Lock every affected person before checking balance invariants.
     ids = sorted(set(batch.recipient_ids))
-    db.execute(select(Person.id).where(Person.id.in_(ids)).order_by(
-        Person.id
-    ).with_for_update()).all()
-    current = balances(db, batch.category_id, ids)
+    db.execute(select(Person.id).where(
+        Person.id.in_(ids), Person.event_id == event.id
+    ).order_by(Person.id).with_for_update()).all()
+    current = balances(db, event.id, batch.category_id, ids)
     for entry in entries:
         current[entry.person_id][entry.kind] -= entry.quantity
     if any(
@@ -363,7 +389,7 @@ def reverse_distribution(
     batch.reversed_at = epoch()
     batch.reversal_staff_id = ctx.staff.id
     db.add(AuditEvent(
-        staff_id=ctx.staff.id, action="tickets.batch.reverse",
+        staff_id=ctx.staff.id, event_id=event.id, action="tickets.batch.reverse",
         target_type="ticket_distribution", target_id=batch.id,
         details={"recipient_ids": batch.recipient_ids},
     ))
@@ -377,10 +403,12 @@ def ticket_balances(
     _ctx: AuthContext = Depends(requires(*VIEW_ROLES)),
     db: Session = Depends(get_db),
 ):
+    event = current_event(db, _ctx)
     query = select(
         TicketLedgerEntry.person_id, TicketLedgerEntry.category_id,
         TicketLedgerEntry.kind, func.sum(TicketLedgerEntry.quantity),
     )
+    query = query.where(TicketLedgerEntry.event_id == event.id)
     if person_id:
         query = query.where(TicketLedgerEntry.person_id == person_id)
     query = query.group_by(
@@ -408,8 +436,12 @@ def list_batches(
     _ctx: AuthContext = Depends(requires(*VIEW_ROLES)),
     db: Session = Depends(get_db),
 ):
-    category_names = {c.id: c.name for c in db.scalars(select(TicketCategory))}
+    event = current_event(db, _ctx)
+    category_names = {c.id: c.name for c in db.scalars(select(TicketCategory).where(
+        TicketCategory.event_id == event.id
+    ))}
     batches = db.scalars(select(TicketDistribution).where(
+        TicketDistribution.event_id == event.id,
         TicketDistribution.status != "preview"
     ).order_by(TicketDistribution.confirmed_at.desc()).limit(limit)).all()
     return {"items": [{

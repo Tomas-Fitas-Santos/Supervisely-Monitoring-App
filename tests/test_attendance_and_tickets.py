@@ -11,8 +11,10 @@ from sqlalchemy.pool import StaticPool
 from annotatiathon.app import app
 from annotatiathon.db import get_db
 from annotatiathon.models import (
+    DEFAULT_EVENT_ID,
     AuditEvent,
     Base,
+    Event,
     StaffAccount,
     TicketDistribution,
     TicketLedgerEntry,
@@ -27,6 +29,7 @@ def setup(monkeypatch):
     Base.metadata.create_all(engine)
     maker = sessionmaker(bind=engine, expire_on_commit=False)
     with maker.begin() as db:
+        db.add(Event(id=DEFAULT_EVENT_ID, name="Initial Event"))
         for email, role, password in [
             ("boss@example.org", "organiser", "organiser-password-12345"),
             ("monitor@example.org", "monitor", "monitor-password-12345"),

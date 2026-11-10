@@ -8,6 +8,7 @@ import {
 import { api, type Auth } from "./api";
 import { PeopleScreen } from "./people";
 import { SettingsScreen } from "./settings";
+import { EventSelector } from "./events";
 import { AttendanceScreen } from "./attendance";
 import { StaffScreen } from "./staff";
 import { TicketsScreen } from "./tickets";
@@ -162,7 +163,7 @@ function App() {
     <div className="main-area">
       <header className="topbar"><div className="breadcrumb">Nightjar <span>/</span> <strong>{
         navigation.find(n=>n.id===tab)?.label}</strong></div>
-        <div className="topbar-right"><span className="status-dot"/> Local development
+        <div className="topbar-right"><EventSelector auth={auth}/><span className="status-dot"/> Local development
           <span className="topbar-avatar">{auth.staff.name.slice(0,1).toUpperCase()}</span></div>
       </header>
       {tab==="overview"&&<Overview auth={auth}/>}
