@@ -324,9 +324,8 @@ def align_staff_access(db: Session, person: Person) -> None:
             staff.active = False
             fields["nightjar_disabled_for_role"] = True
             db.execute(delete(StaffSession).where(StaffSession.staff_id == staff.id))
-    elif fields.pop("nightjar_disabled_for_role", False):
-        if "monitor" in staff.roles:
-            staff.active = True
+    elif fields.pop("nightjar_disabled_for_role", False) and "monitor" in staff.roles:
+        staff.active = True
     person.source_fields = fields
 
 
