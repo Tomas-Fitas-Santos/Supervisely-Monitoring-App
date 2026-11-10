@@ -89,11 +89,17 @@ def send_verification(email: str, code: str) -> None:
 
 
 def eligible_monitor(db: Session, email: str) -> Person | None:
-    return db.scalar(
+    """Require an organiser/CSV roster entry, never an auto-discovered native member."""
+    records = db.scalars(
         select(Person).join(Event, Person.event_id == Event.id).where(
             Person.email == email, Person.kind == "monitor",
             Person.active.is_(True), Event.status == "active",
         ).order_by(Person.created_at.desc())
+    )
+    return next(
+        (person for person in records
+         if (person.source_fields or {}).get("source") != "supervisely_member_sync"),
+        None,
     )
 
 
