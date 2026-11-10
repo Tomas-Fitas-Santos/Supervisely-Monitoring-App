@@ -4,6 +4,7 @@ import {
 } from "lucide-react";
 import { api, type Auth } from "./api";
 import { TeamReviewOverview } from "./review_dashboard";
+import { AnnotationFrame } from "./annotation_overlay";
 
 type Job={id:string;team_name:string;sequence:number;status:string;review_status:string;
   dataset_id:string;frame_count:number;video_count:number;assigned_monitor_id:string|null;
@@ -242,13 +243,15 @@ export function QualityScreen({auth}:{auth:Auth}) {
         <div className="review-media-detail">
           {asset&&<><div className="review-frame-title"><strong>{asset.relative_path}</strong>
             <small>{asset.video_group||"Stand-alone image"}</small></div>
-          <img className="review-preview" alt={"Bird frame "+asset.relative_path}
-            src={"/api/v1/review/datasets/"+selected.dataset_id+"/assets/"+asset.id+"/image"}/>
+          <AnnotationFrame key={asset.id} alt={"Bird frame "+asset.relative_path}
+            src={"/api/v1/review/datasets/"+selected.dataset_id+"/assets/"+asset.id+"/image"}
+            annotation={annotation?.annotation||null}/>
           <div className="annotation-inspector">
             <strong>Supervisely annotation</strong>
             {annotation?
               <>
-                <p className="muted small">Downloaded from Supervisely · Native image #{annotation.native_image_id} · {Array.isArray(annotation.annotation.labels)?annotation.annotation.labels.length:0} label(s)</p>
+                <p className="muted small">Downloaded from Supervisely · Native image #{annotation.native_image_id} · {Array.isArray(annotation.annotation.objects)?annotation.annotation.objects.length:
+                  Array.isArray(annotation.annotation.labels)?annotation.annotation.labels.length:0} object(s)</p>
                 <details><summary>Inspect annotation JSON for this frame</summary>
                   <pre>{JSON.stringify(annotation.annotation,null,2)}</pre>
                 </details>
