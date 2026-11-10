@@ -182,6 +182,87 @@ def association_proposal(
     return matches, unmatched, remaining, conflicts
 
 
+@router.post("/people/supervisely/refresh")
+def refresh_native_membership(
+    ctx: AuthContext = Depends(requires(
+        "organiser", "monitor", "reception", "activity", "distribution", "observer",
+        mutation=True,
+    )),
+    db: Session = Depends(get_db),
+):
+    """Refresh only existing, unambiguously matched roster people from the live team.
+
+    Navigation and manual Refresh buttons can call this safely. It never creates
+    attendees, changes team assignments, alters Supervisely, or guesses missing
+    native emails. The review/confirmation flow remains for manual identity links.
+    """
+    event = current_event(db, ctx)
+    if event.status != "active":
+        return {"status": "archived", "matched": 0, "updated": 0,
+                "unmatched_native": 0, "unmatched_roster": 0,
+                "role_warnings": 0, "conflicts": 0, "native_mutations": False}
+
+    config = config_for_sync(db)
+    source = read_or_fail(config, db)
+    people = all_people(db, event.id)
+    matched, unmatched, remaining, conflicts = association_proposal(
+        source.members, people, []
+    )
+    # A duplicate login/email/native ID must never be silently resolved based
+    # on whichever remote account happened to arrive first.
+    if conflicts:
+        db.commit()  # Persist connection health only; roster remains unchanged.
+        return {"status": "needs_review", "matched": len(matched), "updated": 0,
+                "unmatched_native": len(unmatched),
+                "unmatched_roster": len(remaining),
+                "role_warnings": sum(bool(m["role_warning"]) for m in matched),
+                "conflicts": len(conflicts), "native_mutations": False}
+
+    ids = sorted({item["person_id"] for item in matched})
+    locked = {
+        p.id: p for p in db.scalars(
+            select(Person).where(
+                Person.event_id == event.id, Person.id.in_(ids),
+            ).order_by(Person.id).with_for_update()
+        )
+    }
+    if len(locked) != len(ids) or any(not p.active for p in locked.values()):
+        raise HTTPException(status_code=409, detail="Roster changed; refresh again.")
+    now = epoch()
+    updated = 0
+    for item in matched:
+        person = locked[item["person_id"]]
+        desired = (item["native_user_id"], item["native_login"],
+                   item["native_role"], "joined")
+        existing = (person.supervisely_user_id, person.supervisely_login,
+                    person.supervisely_role, person.membership_status)
+        if existing != desired:
+            person.supervisely_user_id = item["native_user_id"]
+            person.supervisely_login = item["native_login"]
+            person.supervisely_role = item["native_role"]
+            person.membership_status = "joined"
+            person.native_verified_at = now
+            updated += 1
+        elif person.native_verified_at is None or person.native_verified_at < now - 300:
+            person.native_verified_at = now
+
+    if updated:
+        db.add(AuditEvent(
+            staff_id=ctx.staff.id, event_id=event.id,
+            action="supervisely.membership.auto_refresh", target_type="team",
+            target_id=str(source.team_id),
+            details={"updated": updated, "matched": len(matched),
+                     "role_warnings": sum(bool(m["role_warning"]) for m in matched),
+                     "native_mutations": False},
+        ))
+    db.commit()
+    return {"status": "ok", "matched": len(matched), "updated": updated,
+            "unmatched_native": len(unmatched),
+            "unmatched_roster": len(remaining),
+            "role_warnings": sum(bool(m["role_warning"]) for m in matched),
+            "conflicts": 0, "native_mutations": False}
+
+
 @router.post("/people/supervisely/preview")
 def preview_native_sync(
     payload: PreviewRequest,
