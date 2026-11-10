@@ -3,6 +3,7 @@ import {
   CheckCircle2, ClipboardCheck, Image, RefreshCw, RotateCcw, ShieldCheck
 } from "lucide-react";
 import { api, type Auth } from "./api";
+import { TeamReviewOverview } from "./review_dashboard";
 
 type Job={id:string;team_name:string;sequence:number;status:string;review_status:string;
   dataset_id:string;frame_count:number;video_count:number;assigned_monitor_id:string|null;
@@ -25,6 +26,7 @@ type Reviews={count:number;keypoint_score:number;reviewed_frames:number;
 
 export function QualityScreen({auth}:{auth:Auth}) {
   const canReview=auth.staff.roles.some(role=>role==="organiser"||role==="monitor");
+  const [tab,setTab]=useState<"dashboard"|"rankings"|"review">("dashboard");
   const [jobs,setJobs]=useState<Job[]>([]);
   const [jobId,setJobId]=useState("");
   const [filter,setFilter]=useState<"review"|"all"|"active"|"completed">("review");
@@ -46,7 +48,7 @@ export function QualityScreen({auth}:{auth:Auth}) {
   const [busy,setBusy]=useState(false);
   const refresh=useCallback(async()=>{
     try{
-      const response=await api<{items:Job[]}>("/labeling/jobs?limit=2000");
+      const response=await api<{items:Job[]}>("/review/assigned-jobs");
       setJobs(response.items);
       setJobId(current=>response.items.some(j=>j.id===current)?current:
         (response.items.find(j=>["submitted","on_review","needs_correction"].includes(j.status))?.id||response.items[0]?.id||""));
@@ -139,11 +141,20 @@ export function QualityScreen({auth}:{auth:Auth}) {
   }
   return <div className="page-body">
     <div className="page-heading"><div><span className="eyebrow">MONITORING · QUALITY CONTROL</span>
-      <h2>Review & Scoring</h2>
-      <p className="muted">Inspect each person's submitted video, synchronized annotations and frame-level quality. One native submission per new job.</p>
+      <h2>Monitoring & Review</h2>
+      <p className="muted">Compare team performance, see provisional rankings, and review the jobs assigned to you.</p>
     </div><button className="btn secondary" onClick={()=>{void refresh();void loadReviews();}}>
       <RefreshCw size={15}/> Refresh jobs & annotations</button></div>
     {error&&<div className="alert danger" role="alert">{error}</div>}
+    <nav className="workspace-subtabs" aria-label="Monitoring & review sections">
+      <button className={tab==="dashboard"?"active":""} onClick={()=>setTab("dashboard")}>
+        Team dashboard</button>
+      <button className={tab==="rankings"?"active":""} onClick={()=>setTab("rankings")}>
+        Rankings board</button>
+      <button className={tab==="review"?"active":""} onClick={()=>setTab("review")}>
+        Review assigned jobs {reviewJobs.length?("(" + reviewJobs.length + ")"):""}</button>
+    </nav>
+    {tab!=="review"?<TeamReviewOverview auth={auth} mode={tab}/> : <>
     {notice&&<div className="alert success" role="status">{notice}</div>}
     <div className="content-grid reviews-layout">
       <section className="panel">
@@ -273,7 +284,7 @@ export function QualityScreen({auth}:{auth:Auth}) {
       </div>
     </section>}
     <div className="settings-note" style={{marginTop:18}}><ShieldCheck size={18}/>
-      <p>Nightjar's review scores and decisions are local audit records. The connected Supervisely instance remains the source of truth for native annotations and job states.</p>
-    </div>
+      <p>Nightjar's review scores and decisions are local audit records. The connected Supervisely instance remains the source of truth for native annotations and job states. Only assigned teams appear in the review queue.</p>
+    </div></>}
   </div>;
 }
