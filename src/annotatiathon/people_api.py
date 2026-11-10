@@ -639,7 +639,10 @@ def preview_roster(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     event = current_event(db, ctx)
-    return import_report(db, rows, False, ctx.staff.id, event.id)
+    try:
+        return import_report(db, rows, False, ctx.staff.id, event.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/roster/import")
@@ -653,7 +656,10 @@ def import_roster(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     event = current_event(db, ctx, writable=True)
-    report = import_report(db, rows, True, ctx.staff.id, event.id)
+    try:
+        report = import_report(db, rows, True, ctx.staff.id, event.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     digest = hashlib.sha256(payload.csv_text.encode("utf-8")).hexdigest()
     db.add(ImportBatch(event_id=event.id, source_hash=digest, staff_id=ctx.staff.id,
                        row_count=report["rows"], created_count=report["created"],
