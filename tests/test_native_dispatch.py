@@ -33,7 +33,10 @@ from annotatiathon.models import (
     epoch,
 )
 from annotatiathon.native_worker import (
-    process_correction_once, process_export_once, process_once, sync_all,
+    process_correction_once,
+    process_export_once,
+    process_once,
+    sync_all,
 )
 from annotatiathon.security import password_hash
 

@@ -17,8 +17,8 @@ from .people_api import router as people_router
 from .reviews_api import router as reviews_router
 from .settings_api import router as settings_router
 from .staff_api import router as staff_router
-from .tickets_api import router as tickets_router
 from .teams_api import router as teams_router
+from .tickets_api import router as tickets_router
 
 app = FastAPI(
     title="Nightjar Annotatiathon Operations",

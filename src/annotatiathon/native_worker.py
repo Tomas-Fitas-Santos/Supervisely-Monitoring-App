@@ -40,7 +40,10 @@ from .models import (
 )
 from .native_export_api import export_event_zip
 from .native_operations_api import (
-    can_queue_next, next_eligible, queue_publish, team_members,
+    can_queue_next,
+    next_eligible,
+    queue_publish,
+    team_members,
 )
 from .supervisely_client import NativeAPIError, require_connection
 
@@ -442,7 +445,7 @@ def process_correction_once(db: Session, api, config: SuperviselyConfig) -> dict
             NativeJobBinding.event_id == job.event_id,
             NativeJobBinding.job_id == job.id,
         )))
-        if len(bindings) != 2 or set(b.person_id for b in bindings) != set(by_person):
+        if len(bindings) != 2 or {b.person_id for b in bindings} != set(by_person):
             raise NativeWorkerError("correction_binding_mismatch")
         # Reconcile independently named restart jobs before any remote write,
         # including if the first remote restart succeeded but its response was lost.

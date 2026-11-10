@@ -15,7 +15,6 @@ from .auth import AuthContext, requires
 from .datasets_api import get_dataset
 from .db import get_db
 from .events_api import current_event
-from .pair_members import pair_members
 from .models import (
     AuditEvent,
     CompetitionTeam,
@@ -27,6 +26,7 @@ from .models import (
     Person,
     epoch,
 )
+from .pair_members import pair_members
 
 router = APIRouter(prefix="/api/v1/labeling", tags=["labeling plans"])
 VIEWERS = ("organiser", "monitor", "observer", "activity", "distribution", "reception")
@@ -327,7 +327,6 @@ def list_jobs(
         "status": job.status, "review_status": job.review_status,
         "correction_round": job.correction_round,
         "native_submissions": bindings.get(job.id, []),
-        "correction_round": job.correction_round,
         "assigned_monitor_id": job.assigned_monitor_id,
         "started_at": job.started_at, "submitted_at": job.submitted_at,
         "completed_at": job.completed_at,

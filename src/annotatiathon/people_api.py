@@ -14,7 +14,12 @@ from .auth import AuthContext, normalized_email, requires
 from .db import get_db
 from .events_api import current_event
 from .models import (
-    AuditEvent, CompetitionTeam, ImportBatch, MonitorAssignment, MonitorPairMember, Person,
+    AuditEvent,
+    CompetitionTeam,
+    ImportBatch,
+    MonitorAssignment,
+    MonitorPairMember,
+    Person,
 )
 
 router = APIRouter(prefix="/api/v1", tags=["people"])
