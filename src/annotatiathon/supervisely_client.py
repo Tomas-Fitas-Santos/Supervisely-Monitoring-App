@@ -57,16 +57,6 @@ def require_connection(config: SuperviselyConfig | None) -> tuple[str, str]:
     settings = get_settings()
     if not config or not config.team_id:
         raise NativeAPIError("missing_team", "Save a Supervisely team ID in Settings first.")
-    if not config.token_ciphertext:
-        raise NativeAPIError(
-            "missing_token", "An organiser must save a Supervisely token under Settings.",
-        )
-    try:
-        token = decrypt_token(config.token_ciphertext)
-    except ValueError as exc:
-        raise NativeAPIError(
-            "credential_unavailable", "Saved Supervisely credential cannot be decrypted.",
-        ) from exc
     url = urlsplit(config.server_url)
     allowed = {
         host.strip().lower() for host in settings.supervisely_allowed_hosts.split(",")
@@ -81,6 +71,16 @@ def require_connection(config: SuperviselyConfig | None) -> tuple[str, str]:
             "Supervisely origin is not allowlisted. Configure SUPERVISELY_ALLOWED_HOSTS "
             "on the server for a trusted enterprise instance.",
         )
+    if not config.token_ciphertext:
+        raise NativeAPIError(
+            "missing_token", "An organiser must save a Supervisely token under Settings.",
+        )
+    try:
+        token = decrypt_token(config.token_ciphertext)
+    except ValueError as exc:
+        raise NativeAPIError(
+            "credential_unavailable", "Saved Supervisely credential cannot be decrypted.",
+        ) from exc
     return config.server_url.rstrip("/"), token.strip()
 
 
