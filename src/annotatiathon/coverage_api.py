@@ -6,7 +6,6 @@ is stored in non-overlapping 1-based video frame ranges.
 """
 import csv
 import io
-from collections import Counter, defaultdict
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
@@ -33,7 +32,7 @@ from .models import (
 )
 
 router = APIRouter(prefix="/api/v1/coverage", tags=["dataset coverage review"])
-VIEWERS = ("organiser", "monitor", "observer", "reception", "activity", "distribution")
+VIEWERS = ("organiser", "monitor", "observer")
 
 
 class FolderClassificationInput(BaseModel):
@@ -237,6 +236,42 @@ def coverage_videos(
     return {
         "page": page, "size": size, "total": total,
         "items": items[(page - 1) * size:page * size],
+    }
+
+
+
+@router.get("/datasets/{dataset_id}/video-frames")
+def inspect_video_frames(
+    dataset_id: str,
+    video_group: str = Query(min_length=1, max_length=500),
+    page: int = Query(default=1, ge=1),
+    size: int = Query(default=12, ge=1, le=36),
+    ctx: AuthContext = Depends(requires(*VIEWERS)),
+    db: Session = Depends(get_db),
+):
+    """Paginated inspectable frames with stable 1-based lexical frame order."""
+    event = current_event(db, ctx)
+    dataset = get_dataset(db, event.id, dataset_id)
+    criteria = (
+        MediaAsset.event_id == event.id,
+        MediaAsset.dataset_id == dataset.id,
+        MediaAsset.kind == "video_frame",
+        MediaAsset.video_group == video_group,
+    )
+    total = db.scalar(select(func.count(MediaAsset.id)).where(*criteria)) or 0
+    if total == 0:
+        raise HTTPException(status_code=404, detail="Video not found in this dataset.")
+    records = list(db.execute(
+        select(MediaAsset.id, MediaAsset.relative_path)
+        .where(*criteria).order_by(MediaAsset.relative_path)
+        .limit(size).offset((page - 1) * size)
+    ))
+    return {
+        "page": page, "size": size, "total": total,
+        "items": [{
+            "id": media_id, "relative_path": path,
+            "frame": (page - 1) * size + index + 1,
+        } for index, (media_id, path) in enumerate(records)],
     }
 
 
