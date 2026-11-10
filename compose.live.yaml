@@ -1,0 +1,87 @@
+# Live-testing infrastructure. Isolated from compose.local.yaml and existing
+# local PostgreSQL: do NOT combine these two compose files.
+name: nightjar-live
+
+x-backend: &backend
+  build:
+    context: .
+    dockerfile: deploy/Dockerfile.api
+    target: base
+  env_file:
+    - .env.live
+  environment:
+    APP_ENV: production
+    LOCAL_DATA_DIR: /data
+    NIGHTJAR_ENCRYPTION_KEY: ${NIGHTJAR_ENCRYPTION_KEY:?Run scripts/init-live-test.ps1 first}
+  volumes:
+    - ./.nightjar-live-data:/data
+  restart: unless-stopped
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?Missing POSTGRES_USER}
+      POSTGRES_DB: ${POSTGRES_DB:?Missing POSTGRES_DB}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Missing POSTGRES_PASSWORD}
+    volumes:
+      - live_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    # No host port: the database is only accessible inside the stack.
+
+  migrate:
+    <<: *backend
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["alembic", "upgrade", "head"]
+
+  api:
+    <<: *backend
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    command: ["uvicorn", "annotatiathon.app:app", "--host", "0.0.0.0",
+              "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=5)"]
+      interval: 10s
+      timeout: 8s
+      retries: 12
+      start_period: 15s
+
+  web:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.web
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8080:80"
+    restart: unless-stopped
+    # Only this combined web/API origin is reachable from the host/tunnel.
+
+  worker:
+    <<: *backend
+    profiles: ["native"]
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.api
+      target: native
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    command: ["python", "-m", "annotatiathon.native_worker", "--loop",
+              "--poll-seconds", "12"]
+    # Explicitly start AFTER an organiser has verified shared credentials
+    # and Team ID/Workspace ID. Not part of default web startup.
+
+volumes:
+  live_pg_data:
