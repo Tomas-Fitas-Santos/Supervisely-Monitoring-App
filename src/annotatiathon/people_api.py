@@ -97,8 +97,10 @@ def person_record(p: Person, team: str | None = None,
         "membership_status": p.membership_status,
         "monitor_registration_approved": bool(
             p.kind == "monitor" and p.active and (
-                (p.source_fields or {}).get("source") != "supervisely_member_sync"
-                or (p.source_fields or {}).get("monitor_registration_approved") is True
+                (p.source_fields or {}).get(
+                    "monitor_registration_approved",
+                    (p.source_fields or {}).get("source") != "supervisely_member_sync",
+                ) is True
             )
         ),
         "native_auto_imported": (p.source_fields or {}).get("source") == "supervisely_member_sync",
@@ -402,7 +404,13 @@ def import_report(db: Session, rows: list[dict], apply: bool, actor: str,
             if apply:
                 found.active = True
                 found.name = row["name"]
-                found.source_fields = row["source_fields"]
+                # Preserve an explicit organiser approval/denial on reimport.
+                prior = found.source_fields or {}
+                found.source_fields = dict(row["source_fields"])
+                if "monitor_registration_approved" in prior:
+                    found.source_fields["monitor_registration_approved"] = (
+                        prior["monitor_registration_approved"]
+                    )
                 found.kind = row["kind"]
                 found.team_id = (
                     team_id(db, desired, event_id) if row["kind"] == "participant" else None
