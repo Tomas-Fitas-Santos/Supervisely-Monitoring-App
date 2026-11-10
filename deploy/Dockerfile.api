@@ -5,6 +5,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 WORKDIR /app
 COPY pyproject.toml /app/
 COPY src/ /app/src/
+# Both the API and native worker need FFmpeg: the API extracts video frames
+# during import, while Supervisely continues labeling image frames.
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && \
+    rm -rf /var/lib/apt/lists/*
 RUN python -m pip install --no-cache-dir .
 COPY alembic.ini /app/alembic.ini
 COPY migrations/ /app/migrations/
@@ -16,6 +20,6 @@ CMD ["uvicorn", "annotatiathon.app:app", "--host", "0.0.0.0", "--port", "8000", 
 
 FROM base AS native
 USER root
-RUN apt-get update &&     apt-get install -y --no-install-recommends libgl1 libglib2.0-0 libmagic1 ffmpeg &&     rm -rf /var/lib/apt/lists/* &&     python -m pip install --no-cache-dir ".[native]"
+RUN apt-get update &&     apt-get install -y --no-install-recommends libgl1 libglib2.0-0 libmagic1 &&     rm -rf /var/lib/apt/lists/* &&     python -m pip install --no-cache-dir ".[native]"
 USER nightjar
 CMD ["python", "-m", "annotatiathon.native_worker", "--loop", "--poll-seconds", "12"]
