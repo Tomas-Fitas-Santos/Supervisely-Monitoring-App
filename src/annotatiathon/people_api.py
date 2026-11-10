@@ -319,7 +319,7 @@ def align_staff_access(db: Session, person: Person) -> None:
     if staff is None or "organiser" in staff.roles:
         return
     fields = dict(person.source_fields or {})
-    if person.kind == "participant":
+    if person.kind == "participant" or not person.active:
         if "monitor" in staff.roles:
             staff.active = False
             fields["nightjar_disabled_for_role"] = True
@@ -399,6 +399,9 @@ def sync_person_supervisely_role(
     ).with_for_update())
     if person is None or not person.active:
         raise HTTPException(status_code=404, detail="Active person not found.")
+    staff = db.scalar(select(StaffAccount).where(StaffAccount.email == person.email))
+    if staff is not None and "organiser" in staff.roles:
+        return person_record(person)
     native_changed = enforce_native_role(db, person, person.kind, reconcile=True)
     audit(db, ctx.staff.id, event.id, "person.supervisely.role.sync", person.id, {
         "kind": person.kind, "supervisely_role_updated": native_changed,
@@ -498,6 +501,12 @@ def import_report(db: Session, rows: list[dict], apply: bool, actor: str,
     # Per-person edits provide an atomic verified native role transition.
     for row in rows:
         existing_person = existing.get(row["email"])
+        if existing_person is not None and existing_person.kind != row["kind"]:
+            privileged = db.scalar(select(StaffAccount).where(
+                StaffAccount.email == existing_person.email,
+            ))
+            if privileged is not None and "organiser" in privileged.roles:
+                raise ValueError("The organiser must remain a monitor.")
         if (existing_person is not None and existing_person.kind != row["kind"]
                 and (existing_person.supervisely_user_id is not None
                      or existing_person.membership_status == "joined")):
@@ -535,6 +544,7 @@ def import_report(db: Session, rows: list[dict], apply: bool, actor: str,
                 found.team_id = (
                     team_id(db, desired, event_id) if row["kind"] == "participant" else None
                 )
+                align_staff_access(db, found)
         else:
             unchanged += 1
     if apply:
@@ -543,6 +553,37 @@ def import_report(db: Session, rows: list[dict], apply: bool, actor: str,
     return {
         "rows": len(rows), "created": created,
         "changed": changed, "unchanged": unchanged,
+    }
+
+
+@router.get("/people/invitations/next")
+def next_invitation_batch(
+    kind: Literal["monitor", "participant"],
+    limit: int = Query(default=50, ge=1, le=50),
+    ctx: AuthContext = Depends(requires("organiser")),
+    db: Session = Depends(get_db),
+):
+    """Select the next not-yet-invited people, across all roster pages.
+
+    'Reported sent' is excluded even when the invite has not been accepted.
+    Copying a batch never marks it invited; the organiser must confirm
+    sending through Supervisely before the next batch advances.
+    """
+    event = current_event(db, ctx)
+    predicate = (
+        Person.event_id == event.id, Person.active.is_(True),
+        Person.kind == kind, Person.membership_status == "not_invited",
+    )
+    total = db.scalar(select(func.count(Person.id)).where(*predicate)) or 0
+    people = list(db.scalars(select(Person).where(*predicate).order_by(
+        Person.name, Person.email, Person.id,
+    ).limit(limit)))
+    return {
+        "kind": kind, "available": total, "selected": len(people),
+        "more_after_batch": max(total - len(people), 0),
+        "items": [{"id": p.id, "name": p.name, "email": p.email} for p in people],
+        "copy_separator": ",",
+        "native_invites_sent": False,
     }
 
 
@@ -568,9 +609,13 @@ def report_native_invites(
         raise HTTPException(status_code=422, detail="Some recipients no longer exist.")
     if len({p.kind for p in recipients}) > 1:
         raise HTTPException(status_code=422, detail="Invite one native role at a time.")
+    if any(p.membership_status != "not_invited" for p in recipients):
+        raise HTTPException(
+            status_code=409,
+            detail="One or more people were already invited or joined. Refresh the next batch.",
+        )
     for person in recipients:
-        if person.membership_status == "not_invited":
-            person.membership_status = "reported_sent"
+        person.membership_status = "reported_sent"
     db.add(AuditEvent(
         staff_id=ctx.staff.id, event_id=event.id, action="invitation.reported_sent",
         target_type="invitation_batch", details={
