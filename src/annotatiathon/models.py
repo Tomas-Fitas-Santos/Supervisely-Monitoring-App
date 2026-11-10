@@ -104,6 +104,8 @@ class Person(Base):
     membership_status: Mapped[str] = mapped_column(String(30), default="not_invited")
     supervisely_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     supervisely_login: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    supervisely_role: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    native_verified_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
     check_in_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
     source_fields: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[int] = mapped_column(Integer, default=epoch)
@@ -119,6 +121,8 @@ class SuperviselyConfig(Base):
     team_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     workspace_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    last_verified_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_error_code: Mapped[str | None] = mapped_column(String(40), nullable=True)
     updated_at: Mapped[int] = mapped_column(Integer, default=epoch, onupdate=epoch)
 
 
@@ -273,3 +277,19 @@ class ActivityAward(Base):
     person_id: Mapped[str] = mapped_column(ForeignKey("people.id"))
     distribution_id: Mapped[str] = mapped_column(ForeignKey("ticket_distributions.id"))
     awarded_at: Mapped[int] = mapped_column(Integer, default=epoch)
+
+
+class NativeSyncPlan(Base):
+    """Ten-minute, event/staff-scoped review of authoritative team membership."""
+
+    __tablename__ = "native_sync_plans"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=identifier)
+    event_id: Mapped[str] = mapped_column(ForeignKey("events.id"), index=True)
+    staff_id: Mapped[str] = mapped_column(ForeignKey("staff_accounts.id"))
+    team_id: Mapped[int] = mapped_column(Integer)
+    source_digest: Mapped[str] = mapped_column(String(64))
+    roster_digest: Mapped[str] = mapped_column(String(64))
+    associations: Mapped[list[dict]] = mapped_column(JSON)
+    expires_at: Mapped[int] = mapped_column(Integer)
+    applied_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[int] = mapped_column(Integer, default=epoch)

@@ -220,6 +220,8 @@ def state_data(db: Session, event_id: str) -> dict:
             "membership_status": p.membership_status,
             "supervisely_user_id": p.supervisely_user_id,
             "supervisely_login": p.supervisely_login,
+            "supervisely_role": p.supervisely_role,
+            "native_verified_at": p.native_verified_at,
             "check_in_at": p.check_in_at, "source_fields": p.source_fields,
         } for p in people],
         "teams": [{"id": t.id, "name": t.name, "active": t.active} for t in teams],

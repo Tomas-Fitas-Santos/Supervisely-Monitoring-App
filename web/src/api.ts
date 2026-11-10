@@ -5,7 +5,9 @@ export type Auth = { staff: Staff; csrf_token: string };
 export type Person = {
   id: string; name: string; email: string; kind: "monitor" | "participant";
   team_id: string | null; team_name: string | null; active: boolean;
-  membership_status: string; supervisely_login: string | null; check_in_at: number | null;
+  membership_status: string; supervisely_login: string | null;
+  supervisely_role: string | null; native_verified_at: number | null;
+  check_in_at: number | null;
 };
 export type Team = { id: string; name: string; type: string; checked_in: number;
   first_check_in: number | null; members: Person[] };

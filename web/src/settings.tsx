@@ -12,6 +12,7 @@ export function SettingsScreen({auth}:{auth:Auth}) {
   const [error,setError]=useState("");
   const [message,setMessage]=useState("");
   const [busy,setBusy]=useState(false);
+  const [nativeIdentity,setNativeIdentity]=useState<{account_login:string;team_name:string;member_count:number}|null>(null);
   useEffect(()=>{
     api<Integration>("/settings/supervisely").then(result=>{
       setConfig(result);setServer(result.settings.server_url);
@@ -25,9 +26,25 @@ export function SettingsScreen({auth}:{auth:Auth}) {
       const result=await api<Integration>("/settings/supervisely","PUT",
         {supervisely:{server_url:server,team_id:team?Number(team):null,
           workspace_id:workspace?Number(workspace):null}},auth.csrf_token);
-      setConfig(result);setMessage("Settings saved to PostgreSQL. Native membership and access are not yet verified.");
+      setConfig(result);setNativeIdentity(null);
+      setMessage("Settings saved. Run Verify connection to confirm the live native team.");
     }catch(exc){setError((exc as Error).message);}
     finally{setBusy(false);}
+  }
+  async function verify() {
+    setBusy(true);setError("");setMessage("");
+    try{
+      const result=await api<{
+        verified:boolean;account_login:string;team_name:string;member_count:number
+      }>("/settings/supervisely/verify","POST",undefined,auth.csrf_token);
+      setNativeIdentity(result);
+      setConfig(await api<Integration>("/settings/supervisely"));
+      setMessage("Connection verified against the live team. No native data was modified.");
+    }catch(e){
+      setNativeIdentity(null);
+      setConfig(await api<Integration>("/settings/supervisely").catch(()=>config));
+      setError((e as Error).message);
+    }finally{setBusy(false);}
   }
   return <div className="page-body">
     <div className="page-heading"><div><span className="eyebrow">ORGANISER SETTINGS</span>
@@ -50,10 +67,14 @@ export function SettingsScreen({auth}:{auth:Auth}) {
               onChange={e=>setWorkspace(e.target.value)} placeholder="Enter workspace ID"/></label>
           </div>
           <div className="settings-note"><ShieldCheck size={18}/>
-            <p>These IDs are saved locally. Verification against Supervisely is added with the integration module; saving does not change native membership.</p>
+            <p>These IDs are saved locally. Verify connection checks your server-side token, team, workspace ownership and actual member access. No remote records are changed.</p>
           </div>
-          <button type="submit" className="btn primary" disabled={busy}>
-            <Save size={17}/>{busy?"Saving…":"Save settings"}</button>
+          <div className="settings-action-row">
+            <button type="submit" className="btn primary" disabled={busy}>
+              <Save size={17}/>{busy?"Working…":"Save settings"}</button>
+            <button type="button" className="btn secondary" disabled={busy||!config?.settings.team_id}
+              onClick={()=>void verify()}><CheckCircle2 size={17}/> Verify connection</button>
+          </div>
         </form>
       </section>
       <aside className="settings-side">
@@ -66,7 +87,10 @@ export function SettingsScreen({auth}:{auth:Auth}) {
             <strong>{config?.credential_configured?"Yes":"No"}</strong></div>
           <div className="settings-row"><span>Team ID</span><strong>{config?.settings.team_id??"—"}</strong></div>
           <div className="settings-row"><span>Workspace ID</span><strong>{config?.settings.workspace_id??"—"}</strong></div>
-          <p className="muted small">Later, the organiser will be able to configure or rotate an API credential securely here. Individual staff accounts will never need one.</p>
+          {nativeIdentity&&<p className="muted small">Signed in as <strong>{nativeIdentity.account_login}</strong> · {nativeIdentity.team_name} · {nativeIdentity.member_count} members</p>}
+          {config?.last_checked_at&&<div className="settings-row"><span>Last verified</span><strong>{new Date(config.last_checked_at).toLocaleString()}</strong></div>}
+          {config?.last_error_code&&<div className="settings-row"><span>Last failure</span><strong>{config.last_error_code}</strong></div>}
+          <p className="muted small">Add SUPERVISELY_API_TOKEN to the backend .env file, restart FastAPI, then verify. Tokens are never entered in the browser or returned by the API. Team 125980 may be configured above.</p>
         </section>
         <section className="panel secure-panel"><LockKeyhole size={21}/>
           <div><h4>Security by design</h4>

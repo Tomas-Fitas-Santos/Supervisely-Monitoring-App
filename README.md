@@ -12,7 +12,7 @@
 - **Staff Access:** organiser-only multi-role editing; you can add Monitor to your existing organiser staff account without creating a second login. The application refuses to remove the last active organiser.
 - Automated backend/security tests, real PostgreSQL migrations and TypeScript build checks.
 
-**Not implemented yet:** actual native Supervisely API connection verification and membership synchronization; QR-scanner check-in; activities and prize-award automation; dataset uploads; labeling job planning/dispatch; review/scoring; event finalization. A reported sent invitation is **not** treated as verified native membership. The UI makes these gaps explicit.
+**Not implemented yet:** native invitation dispatch/role changes and pending invitation retrieval; QR-scanner check-in; activities and prize-award automation; dataset uploads; labeling job planning/dispatch; review/scoring; event finalization. A reported sent invitation is **not** treated as verified native membership. The UI makes these gaps explicit.
 
 ## Start locally on Windows
 
@@ -70,7 +70,7 @@ alembic upgrade head
 alembic current
 ```
 
-The new revision is `0003_events (head)`. Restart the backend and the Vite development server to see the new Check-in, Tickets & Rewards and Staff Access tabs.
+The new revision is `0005_native (head)`. Restart the backend and the Vite development server to see the new Check-in, Tickets & Rewards and Staff Access tabs.
 
 **Windows note:** if your machine's Application Control blocks SQLAlchemy compiled wheels, retain your working pure-Python SQLAlchemy installation; upgrading the app does not require reinstalling SQLAlchemy. Use `npm.cmd` instead of `npm` when PowerShell blocks npm scripts.
 
@@ -82,6 +82,15 @@ The new revision is `0003_events (head)`. Restart the backend and the Vite devel
 - **Full fresh start** archives the original event intact and creates a separate empty event with fresh default ticket categories. It never deletes native Supervisely datasets, jobs or annotations.
 - Each reset creates an organiser-only private PostgreSQL event snapshot, downloadable as JSON. **These snapshots contain personal data, are not independently stored backups and have no automated restore action yet.** Safeguard the exported file. Use `pg_dump` to make a real off-machine database backup before important tests or production changes.
 - Local event resets do not revoke any previously sent native Supervisely invitations. The UI explicitly distinguishes locally reported invites from verified native membership.
+
+## Native Supervisely verification and read-only membership reconciliation
+
+In the **backend-only** untracked `.env`, set `SUPERVISELY_API_TOKEN` to the token of an authorised organiser account; restart the backend after editing the file. Do not put this token in the browser, chat, frontend configuration, commits or screenshots. The default allowlisted server is `app.supervisely.com`. For trusted enterprise domains, explicitly configure `SUPERVISELY_ALLOWED_HOSTS` on the server.
+
+1. In **Settings → Supervisely**, enter team ID and (optionally) workspace ID, save and click **Verify connection**. This sends only read requests to official Supervisely API endpoints `users.me`, `teams.info`, `workspaces.info` (when configured) and paginated `members.list`.
+2. In **People & Teams → Verify & reconcile the team**, click **Refresh from Supervisely**. Review matched identities, role warnings, unlinked native accounts and unmatched roster entries. Email matching is exact; native username and ID are used when already verified. When an email is missing, explicitly associate that account with its roster entry.
+3. Confirm **local reconciliation**. The server rechecks the same team, the roster and the remote membership fingerprint and refuses to apply a stale preview. Matched active roster members are marked `joined` and their native login, ID and role are saved in the selected event. Unmatched roster members are left unchanged: absence from `members.list` is not proof of an unsent invitation.
+4. **No invitations, role changes, user removal or other remote mutations** occur in this milestone. There is no in-app demo workflow. The SDK semantics are grounded in the official UserApi member list and Supervisely REST endpoints. An actual live token acceptance check on the user's Pro team remains required.
 
 ## Working with the application
 

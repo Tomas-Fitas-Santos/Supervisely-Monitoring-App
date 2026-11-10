@@ -88,6 +88,8 @@ def person_record(p: Person, team: str | None = None) -> dict:
         "team_id": p.team_id, "team_name": team, "active": p.active,
         "membership_status": p.membership_status,
         "supervisely_login": p.supervisely_login,
+        "supervisely_role": p.supervisely_role,
+        "native_verified_at": p.native_verified_at,
         "check_in_at": p.check_in_at,
     }
 

@@ -7,13 +7,14 @@ from .auth import router as auth_router
 from .database import database_is_ready
 from .events_api import router as events_router
 from .people_api import router as people_router
+from .native_sync_api import router as native_router
 from .settings_api import router as settings_router
 from .staff_api import router as staff_router
 from .tickets_api import router as tickets_router
 
 app = FastAPI(
     title="Nightjar Annotatiathon Operations",
-    version="0.5.0",
+    version="0.6.0",
     description="Local-first staff API; competition operations will follow verified contracts.",
 )
 app.include_router(auth_router)
@@ -24,6 +25,7 @@ app.include_router(staff_router)
 app.include_router(tickets_router)
 app.include_router(events_router)
 app.include_router(activities_router)
+app.include_router(native_router)
 
 
 @app.get("/health/live", tags=["health"])

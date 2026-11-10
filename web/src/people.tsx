@@ -5,6 +5,7 @@ import {
   Plus, RefreshCw, Search, Upload, UserRound, UsersRound, X
 } from "lucide-react";
 import { api, type Auth, type PeopleResponse, type Person, type Team, type TeamResponse } from "./api";
+import { NativeMembershipPanel } from "./native";
 
 type PersonForm = {name:string;email:string;kind:"participant"|"monitor";team_name:string};
 const emptyForm: PersonForm = {name:"",email:"",kind:"participant",team_name:""};
@@ -178,7 +179,7 @@ export function PeopleScreen({auth}:{auth:Auth}) {
         <td><span className="soft-pill">{p.kind==="monitor"?"Monitor":"Participant"}</span></td>
         <td>{p.team_name||"—"}</td>
         <td><span className={"membership "+(p.membership_status==="joined"?"joined":"")}>
-          {statusName(p.membership_status)}</span></td>
+          {statusName(p.membership_status)}</span>{p.supervisely_role&&<span className="native-role-chip">{p.supervisely_role}</span>}</td>
         <td>{p.check_in_at?new Date(p.check_in_at*1000).toLocaleTimeString():"Not arrived"}</td>
         {admin&&<td><button className="link-button" onClick={()=>openEdit(p)}>Edit</button></td>}
       </tr>)}</tbody>
@@ -202,9 +203,10 @@ export function PeopleScreen({auth}:{auth:Auth}) {
     {admin&&<div className="toolbar-secondary">
       <button className="btn secondary" onClick={()=>setShowImporter(v=>!v)}><FileSpreadsheet size={17}/>
         {showImporter?"Close roster import":"Import CSV roster"}</button>
-      <span className="muted small">Native Supervisely membership sync will be added in a later integration milestone.</span>
+      <span className="muted small">Sync view refreshes local PostgreSQL only. Use the native sync panel below to check real Supervisely membership.</span>
     </div>}
     {showImporter&&admin&&<RosterImporter auth={auth} onComplete={()=>{setShowImporter(false);void refresh();}}/>}
+    {admin&&<NativeMembershipPanel auth={auth} onApplied={()=>void refresh()}/>}
     <section className="panel table-panel">
       <div className="panel-header-line">
         <div className="segmented"><button className={mode==="teams"?"selected":""}
