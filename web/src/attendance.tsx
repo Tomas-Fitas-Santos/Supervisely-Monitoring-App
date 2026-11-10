@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { CheckCircle2, Clock3, RefreshCw, Search, Undo2, UserRoundCheck, UsersRound } from "lucide-react";
-import { api, type Auth, type Person, type PeopleResponse } from "./api";
+import { api, refreshSuperviselyRoster, type Auth, type Person, type PeopleResponse } from "./api";
 
 type Summary = { registered: number; present: number; not_arrived: number };
 export function AttendanceScreen({auth}:{auth:Auth}) {
@@ -27,6 +27,18 @@ export function AttendanceScreen({auth}:{auth:Auth}) {
     const timer=window.setInterval(()=>{if(!document.hidden)void refresh();},5000);
     return ()=>window.clearInterval(timer);
   },[refresh]);
+  async function syncNative(){
+    try{
+      const result=await refreshSuperviselyRoster(auth.csrf_token,true);
+      await refresh();
+      if(result?.status==="ok")setNotice(
+        "Supervisely sync: "+result.created+" added, "+result.updated+" updated."
+      );
+      if(result?.status==="needs_review")setNotice(
+        "Some Supervisely identities require organiser review in People & Teams."
+      );
+    }catch(e){setError("Supervisely sync: "+(e as Error).message);}
+  }
   async function toggle(person:Person) {
     if(!allowed)return;
     const reverse=Boolean(person.check_in_at);
@@ -75,7 +87,7 @@ export function AttendanceScreen({auth}:{auth:Auth}) {
     <div className="page-heading"><div><span className="eyebrow">EVENT OPERATIONS · ADMISSION</span>
       <h2>Attendance & Check-in</h2>
       <p className="muted">Search by name or email. Enter the team table at the first arrival; partners inherit it automatically.</p>
-      </div><button className="btn secondary" onClick={()=>void refresh()}><RefreshCw size={15}/> Refresh</button></div>
+      </div><button className="btn secondary" onClick={()=>void syncNative()}><RefreshCw size={15}/> Refresh from Supervisely</button></div>
     {error&&<div role="alert" className="alert danger">{error}</div>}
     {notice&&<div role="status" className="alert success">{notice}</div>}
     <div className="stat-grid compact">
