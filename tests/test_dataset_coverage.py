@@ -5,7 +5,7 @@ mode or fabricated Supervisely success is introduced into the application.
 """
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -179,7 +179,6 @@ def test_manual_folder_assignment_updates_ecomorphology_without_changing_assets(
     assert row["manual"] is True
     assert row["species_name"] == "Verified unknown owl species"
     with maker() as db:
-        from sqlalchemy import func,select
         assert db.scalar(select(func.count(MediaAsset.id)).where(
             MediaAsset.dataset_id == did
         )) == 8
