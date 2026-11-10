@@ -217,7 +217,7 @@ export function CoverageScreen({auth}:{auth:Auth}) {
             <span className="eyebrow">16 OPERATIONAL ECOMORPHOLOGIES</span>
             <h3>Frame coverage by body plan</h3>
           </div><BarChart3 size={21}/></div>
-          <p className="muted small">Target: {nf.format(TARGET_PER_GROUP)} unique video frames per group, based on the workbook's 120,000-frame planning target. Still images are separate.</p>
+          <p className="muted small">Target: {nf.format(TARGET_PER_GROUP)} unique video frames per group, based on the workbook's 120,000-frame planning target.</p>
           <div className="coverage-bars">
             {groups.map(g=><div key={g.name} className="coverage-bar-row">
               <div className="coverage-bar-head"><span>{g.name}</span>
@@ -250,7 +250,7 @@ export function CoverageScreen({auth}:{auth:Auth}) {
       </div>
       <section className="panel" style={{marginTop:20}}>
         <span className="eyebrow">COVERAGE INVENTORY</span>
-        <h3>Frames, still images and videos per ecomorphology</h3>
+        <h3>Video frames and source videos per ecomorphology</h3>
         <div className="table-scroll">
           <table className="data-table coverage-table">
             <thead><tr><th>Ecomorphology</th><th>Video frames</th><th>Images</th>
@@ -298,7 +298,7 @@ export function CoverageScreen({auth}:{auth:Auth}) {
         <p className="muted small">Known eBird species folders are suggested from your workbook. Unknown folders remain unclassified until an organiser maps them. Mapping a folder does not change any original files.</p>
         <div className="table-scroll coverage-folder-table">
           <table className="data-table"><thead><tr><th>Source folder</th><th>Species</th>
-            <th>Ecomorphology</th><th>Frames</th><th>Images</th><th>Videos</th>
+            <th>Ecomorphology</th><th>Frames</th><th>Videos</th>
             {organiser&&<th>Manage</th>}</tr></thead>
             <tbody>{sourceRows.map(r=><tr key={r.source_folder}>
               <td>{r.source_folder}</td><td>{r.species_name||"Not identified"}</td>
@@ -440,7 +440,7 @@ export function CoverageScreen({auth}:{auth:Auth}) {
           {!organiser&&<p className="muted small">Only organisers can change movement classifications. All monitors can inspect the recorded coverage.</p>}
         </div>}
       </section>
-      <p className="muted small coverage-footnote">Classification groups are operational ecomorphologies, not phylogenetic taxa. Per-movement totals exclude unlabeled frames. Standalone images count separately because movement cannot be established from a single still frame.</p>
+      <p className="muted small coverage-footnote">Classification groups are operational ecomorphologies, not phylogenetic taxa. Per-movement totals exclude unlabeled frames. All newly imported media are video-derived frames.</p>
     </>}
   </div>;
 }
