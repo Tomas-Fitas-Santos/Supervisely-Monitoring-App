@@ -53,7 +53,7 @@ export function QualityScreen({auth}:{auth:Auth}) {
       const response=await api<{items:Job[]}>("/review/assigned-jobs");
       setJobs(response.items);
       setJobId(current=>response.items.some(j=>j.id===current)?current:
-        (response.items.find(j=>["submitted","on_review","needs_correction"].includes(j.status))?.id||response.items[0]?.id||""));
+        (response.items.find(j=>j.status==="on_review")?.id||""));
       setError("");
     }catch(e){setError((e as Error).message);}
   },[canReview]);
@@ -87,6 +87,13 @@ export function QualityScreen({auth}:{auth:Auth}) {
     (filter==="review"&&j.status==="on_review")||
     (filter==="active"&&["queued","publishing","in_progress"].includes(j.status))||
     (filter==="completed"&&j.status==="completed"));
+  useEffect(()=>{
+    const available=jobs.filter(j=>filter==="all"||
+      (filter==="review"&&j.status==="on_review")||
+      (filter==="active"&&["queued","publishing","in_progress"].includes(j.status))||
+      (filter==="completed"&&j.status==="completed"));
+    setJobId(current=>available.some(j=>j.id===current)?current:(available[0]?.id||""));
+  },[jobs,filter]);
   const asset=media?.items.find(a=>a.id===assetId);
   const stored=reviews?.items.find(r=>r.media_id===assetId);
   useEffect(()=>{
@@ -163,7 +170,7 @@ export function QualityScreen({auth}:{auth:Auth}) {
         <span className="eyebrow">SUBMISSIONS · {reviewJobs.length} AWAITING REVIEW</span>
         <h3>Choose an annotator's video</h3>
         <label className="review-filter">Show jobs<select value={filter}
-          onChange={e=>setFilter(e.target.value as typeof filter)}>
+          onChange={e=>{setFilter(e.target.value as typeof filter);setPage(1);}}>
           <option value="review">Ready for review ({reviewJobs.length})</option>
           <option value="active">Queue and in progress</option>
           <option value="completed">Accepted</option>
