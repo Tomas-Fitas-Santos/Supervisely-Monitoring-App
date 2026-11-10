@@ -157,6 +157,11 @@ def request_registration(
     payload: RequestCode, request: Request, db: Session = Depends(get_db),
 ):
     same_origin(request)
+    if not smtp_ready():
+        raise HTTPException(
+            status_code=503,
+            detail="Registration email delivery is not configured. Contact the organiser.",
+        )
     monitor = eligible_monitor(db, payload.email)
     # Unknown/ineligible/existing accounts all receive the same public reply.
     if monitor is None:
@@ -172,7 +177,12 @@ def request_registration(
         return GENERIC_REPLY
     code = f"{secrets.randbelow(100_000_000):08d}"
     digest = code_digest(payload.email, code)
-    send_verification(payload.email, code)
+    try:
+        send_verification(payload.email, code)
+    except HTTPException:
+        # An SMTP outage must not reveal which public email addresses are
+        # approved event monitors. Organisers can diagnose using email test.
+        return GENERIC_REPLY
     if challenge is None:
         db.add(RegistrationChallenge(
             email=payload.email, code_digest=digest,
