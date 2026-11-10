@@ -479,6 +479,11 @@ class LabelingJob(Base):
     plan_id: Mapped[str] = mapped_column(ForeignKey("labeling_plans.id"), index=True)
     team_id: Mapped[str] = mapped_column(ForeignKey("competition_teams.id"), index=True)
     sequence: Mapped[int] = mapped_column(Integer)
+    assignee_person_id: Mapped[str | None] = mapped_column(
+        ForeignKey("people.id"), nullable=True, index=True
+    )
+    # Manual jobs are never auto-released by the plan scheduler.
+    release_mode: Mapped[str] = mapped_column(String(24), default="automatic")
     media_ids: Mapped[list[str]] = mapped_column(JSON)
     frame_count: Mapped[int] = mapped_column(Integer)
     video_count: Mapped[int] = mapped_column(Integer)
