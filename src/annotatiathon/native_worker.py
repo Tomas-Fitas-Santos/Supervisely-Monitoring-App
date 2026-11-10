@@ -37,6 +37,7 @@ from .models import (
     SuperviselyConfig,
     epoch,
 )
+from .native_export_api import export_event_zip
 from .native_operations_api import next_eligible, queue_publish, team_members
 from .supervisely_client import NativeAPIError, require_connection
 
@@ -397,6 +398,61 @@ def process_once(db: Session, api, config: SuperviselyConfig) -> dict | None:
     return {"operation_id": opid, "status": "done", **details}
 
 
+def process_export_once(db: Session, api) -> dict | None:
+    """Archive a complete read-only annotation snapshot after event closure."""
+    tasks = list(db.scalars(
+        select(NativeOperation)
+        .join(Event, Event.id == NativeOperation.event_id)
+        .where(
+            NativeOperation.kind == "export_event",
+            NativeOperation.status == "pending",
+            Event.status == "archived",
+        )
+        .order_by(NativeOperation.created_at)
+        .with_for_update(skip_locked=True)
+        .limit(1)
+    ))
+    if not tasks:
+        db.rollback()
+        return None
+    task = tasks[0]
+    task.status = "running"
+    task.claimed_at = epoch()
+    task.attempts += 1
+    tid = task.id
+    event_id = task.event_id
+    db.commit()
+    try:
+        result = export_event_zip(db, api, event_id)
+    except Exception as exc:  # noqa: BLE001 - a remote read can fail mid-archive
+        db.rollback()
+        failed = db.get(NativeOperation, tid)
+        failed.status = "attention"
+        failed.error_code = (
+            exc.code if isinstance(exc, (NativeWorkerError, NativeAPIError))
+            else "annotation_export_interrupted"
+        )
+        db.add(AuditEvent(
+            event_id=event_id, action="native.export.attention",
+            target_type="native_operation", target_id=tid,
+            details={"error_code": failed.error_code},
+        ))
+        db.commit()
+        logger.warning("Native export %s requires inspection (%s)",
+                       tid, type(exc).__name__)
+        return {"operation_id": tid, "status": "attention"}
+    finished = db.get(NativeOperation, tid)
+    finished.status = "done"
+    finished.completed_at = epoch()
+    db.add(AuditEvent(
+        event_id=event_id, action="native.export.finished",
+        target_type="native_operation", target_id=tid,
+        details=result,
+    ))
+    db.commit()
+    return {"operation_id": tid, "status": "done", **result}
+
+
 def run_worker(*, once: bool, poll_seconds: int) -> None:
     if not once and not 3 <= poll_seconds <= 300:
         raise ValueError("Polling interval must be 3-300 seconds.")
@@ -414,10 +470,11 @@ def run_worker(*, once: bool, poll_seconds: int) -> None:
                 config_isolation = identifier
             try:
                 operation = process_once(db, api, config)
+                export = process_export_once(db, api)
                 sync_result = sync_all(db, api, config)
-                if operation or sync_result["changed_jobs"]:
-                    logger.info("Nightjar native worker: operation=%s sync=%s",
-                                operation, sync_result)
+                if operation or export or sync_result["changed_jobs"]:
+                    logger.info("Nightjar native worker: operation=%s export=%s sync=%s",
+                                operation, export, sync_result)
             except Exception as exc:  # noqa: BLE001 - keep long-lived worker alive
                 db.rollback()
                 logger.warning("Supervisely worker cycle failed (type %s); "

@@ -1,4 +1,7 @@
 """Mocked official SDK contract: durable first release, recovery, pair status polling."""
+import io
+import json
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace as Obj
 
@@ -28,7 +31,7 @@ from annotatiathon.models import (
     SuperviselyConfig,
     epoch,
 )
-from annotatiathon.native_worker import process_once, sync_all
+from annotatiathon.native_worker import process_export_once, process_once, sync_all
 from annotatiathon.security import password_hash
 
 
@@ -58,6 +61,9 @@ class MockSDK:
         )
         self.workspace = Obj(get_info_by_id=lambda ident: Obj(id=ident, team_id=125980))
         self.image = Obj(get_list=self.images_list, upload_paths=self.upload_paths)
+        self.annotation = Obj(download_json=lambda image_id: {
+            "native_image_id": image_id, "labels": [{"class": "bird"}],
+        })
         self.labeling_job = Obj(
             get_list=self.jobs_list,
             create=self.jobs_create,
@@ -195,6 +201,10 @@ def configured(monkeypatch, tmp_path):
         db.flush()
         plan_id = plan.id
     monkeypatch.setattr(
+        "annotatiathon.native_export_api.get_settings",
+        lambda: type("Settings", (), {"local_data_dir": str(tmp_path)})(),
+    )
+    monkeypatch.setattr(
         "annotatiathon.native_operations_api.get_settings",
         lambda: type("Settings", (), {
             "supervisely_api_token": SecretStr("PLACEHOLDER_TEST_TOKEN"),
@@ -303,3 +313,49 @@ def test_pause_blocks_releasing_new_native_jobs(configured):
     assert resume.status_code == 200
     with maker() as db:
         assert process_once(db, sdk, db.get(SuperviselyConfig, 1))["status"] == "done"
+
+
+
+def test_read_only_native_export_preserves_source_and_curated_manifest(configured):
+    http, maker, csrf, plan_id, sdk = configured
+    launch(http, csrf, plan_id)
+    with maker() as db:
+        config = db.get(SuperviselyConfig, 1)
+        assert process_once(db, sdk, config)["status"] == "done"
+        job = db.scalar(select(LabelingJob).where(LabelingJob.sequence == 1))
+        job.status = "completed"
+        job.review_status = "accepted"
+        db.get(Event, DEFAULT_EVENT_ID).status = "archived"
+        db.commit()
+    prepare = call(http, csrf, "/native/export/prepare")
+    assert prepare.status_code == 202, prepare.text
+    with maker() as db:
+        result = process_export_once(db, sdk)
+        assert result["status"] == "done", result
+        assert result["total_copies"] == 2
+        assert result["curated_copies"] == 2
+    status = http.get("/api/v1/native/export").json()
+    assert status["ready_to_download"] is True
+    response = http.get("/api/v1/native/export/download")
+    assert response.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+        paths = archive.namelist()
+        full = [
+            json.loads(row)
+            for row in archive.read("full_manifest.jsonl").decode().splitlines()
+        ]
+        curated = [
+            json.loads(row)
+            for row in archive.read("curated_manifest.jsonl").decode().splitlines()
+        ]
+        assert len(full) == len(curated) == 2
+        assert len({item["native_image_id"] for item in full}) == 2
+        assert all(len(item["native_job_ids"]) == 2 for item in full)
+        assert all(item["source_sha256"] == "a"*64 for item in full)
+        assert len([name for name in paths if name.startswith("annotations/")]) == 2
+        info = json.loads(archive.read("README.json"))
+        assert info["annotation_state"] == "current_snapshot_only"
+    again = call(http, csrf, "/native/export/prepare")
+    assert again.status_code == 202
+    assert again.json()["status"] == "done"
+    assert len(sdk.jobs) == 2

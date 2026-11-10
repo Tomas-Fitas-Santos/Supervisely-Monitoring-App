@@ -111,3 +111,14 @@ concurrency, image isolation, read-only monitor access, resubmission after
 rejection, real native annotation export, low-bandwidth recovery, and
 storage/throughput at competition scale. This is an acceptance gate, not
 a deployment-only checkbox.
+
+## Read-only native annotation export
+
+The **Results & Exports** screen can enqueue one final `export_event` operation
+for an archived event. The worker uses the documented
+`api.annotation.download_json(native_image_id)` method, never modifying the
+native jobs. It creates an atomic ZIP with full provenance and accepted-only
+curated manifests. Large exports remain in `LOCAL_DATA_DIR/exports/` until
+downloaded. They contain annotation JSON only, not the original multi-GB media
+or historical annotation version records. Ensure the source media directory
+and database are preserved together after event closeout.

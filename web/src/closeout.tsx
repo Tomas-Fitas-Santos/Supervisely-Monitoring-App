@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from "react";
 import { Archive, BarChart3, CheckCircle2, Download, RefreshCw, ShieldAlert } from "lucide-react";
 import { api, type Auth } from "./api";
 
+type NativeExport={operation_id:string|null;status:string;error_code:string|null;
+  attempts:number;ready_to_download:boolean;size_bytes:number|null};
 type Report={
   event_id:string;event_name:string;event_status:string;
   people:{registered:number;participants:number;monitors:number;checked_in:number};
@@ -16,15 +18,25 @@ type Report={
 };
 export function CloseoutScreen({auth}:{auth:Auth}) {
   const [report,setReport]=useState<Report|null>(null);
+  const [nativeExport,setNativeExport]=useState<NativeExport|null>(null);
   const [error,setError]=useState("");
   const [notice,setNotice]=useState("");
   const [confirmation,setConfirmation]=useState("");
   const [busy,setBusy]=useState(false);
   const refresh=useCallback(async()=>{
-    try{setReport(await api<Report>("/closeout/report"));setError("");}
+    try{
+      const [result,exportState]=await Promise.all([
+        api<Report>("/closeout/report"),api<NativeExport>("/native/export")
+      ]);
+      setReport(result);setNativeExport(exportState);setError("");
+    }
     catch(e){setError((e as Error).message);}
   },[]);
   useEffect(()=>{void refresh();},[refresh]);
+  useEffect(()=>{
+    const timer=window.setInterval(()=>{if(!document.hidden)void refresh();},12000);
+    return()=>window.clearInterval(timer);
+  },[refresh]);
   async function finalize(){
     if(!report||confirmation!=="CLOSE "+report.event_name)return;
     if(!window.confirm(
@@ -35,6 +47,20 @@ export function CloseoutScreen({auth}:{auth:Auth}) {
     try{
       await api("/closeout/finalize","POST",{confirmation},auth.csrf_token);
       setNotice("Event closed, archived and snapshotted. Previous records remain accessible.");
+      await refresh();
+    }catch(e){setError((e as Error).message);}
+    finally{setBusy(false);}
+  }
+  async function nativeExportAction(retry:boolean){
+    if(!report||!window.confirm(retry?
+      "Retry an interrupted read-only native annotation export?":
+      "Queue a read-only native annotation snapshot? This can take considerable time "+
+      "for a large dataset and requires the separate SDK worker."))return;
+    setBusy(true);setError("");setNotice("");
+    try{
+      await api("/native/export/"+(retry?"retry":"prepare"),"POST",undefined,
+        auth.csrf_token);
+      setNotice("Export task queued. The separate SDK worker will download annotation JSON.");
       await refresh();
     }catch(e){setError((e as Error).message);}
     finally{setBusy(false);}
@@ -92,6 +118,30 @@ export function CloseoutScreen({auth}:{auth:Auth}) {
           ] as const).map(([key,label])=><a key={key} className="btn secondary"
             href={"/api/v1/closeout/exports/"+key} download>
             <Download size={15}/>{label}</a>)}</div>
+          <div className="native-export-controls" style={{marginTop:20}}>
+            <span className="eyebrow">SUPERVISELY ANNOTATION SNAPSHOT</span>
+            <h4>Full and curated native JSON</h4>
+            <p className="muted small">A separate export from CSV. The archive contains
+              current annotation JSON for every recorded native image copy,
+              full and curated source mapping manifests, and no media bytes or historical versions.</p>
+            <p className="muted small">Status: <strong>{nativeExport?.status||"not_requested"}</strong>
+              {nativeExport?.error_code?" · "+nativeExport.error_code:""}</p>
+            {report.event_status==="archived"&&nativeExport?.status==="not_requested"&&
+              <button className="btn primary" disabled={busy}
+                onClick={()=>void nativeExportAction(false)}>
+                <Download size={15}/> Prepare native annotation export</button>}
+            {nativeExport&&["attention","blocked"].includes(nativeExport.status)&&
+              <button className="btn secondary" disabled={busy}
+                onClick={()=>void nativeExportAction(true)}>
+                <RefreshCw size={14}/> Retry export</button>}
+            {nativeExport?.ready_to_download&&<a className="btn primary"
+              href="/api/v1/native/export/download" download>
+              <Download size={15}/> Download annotation ZIP
+              {nativeExport.size_bytes!==null?
+                " ("+(nativeExport.size_bytes/1e6).toFixed(1)+" MB)":""}</a>}
+            {nativeExport&&["pending","running"].includes(nativeExport.status)&&
+              <p className="muted small">Export in progress. This screen updates automatically.</p>}
+          </div>
           <div className="settings-note" style={{marginTop:18}}><ShieldAlert size={18}/>
             <p>Nightjar exports are not substitutes for native Supervisely annotation exports. Native media, annotations and labeling jobs are never deleted here.</p></div>
         </section>
