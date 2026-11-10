@@ -239,6 +239,39 @@ def read_team_snapshot(config: SuperviselyConfig, *, personal_token: str | None 
     )
 
 
+def _read_member_by_id(
+    client: httpx.Client, base: str, token: str, team_id: int, user_id: int,
+) -> NativeMember | None:
+    """Use Supervisely SDK's targeted members.list filter instead of full roster.
+
+    UserApi.get_member_info_by_id uses this exact filter, which keeps role
+    updates responsive even when the team contains hundreds of members.
+    """
+    result = _request_json(client, base, token, "members.list", {
+        "teamId": team_id, "filter": [{"field": "id", "operator": "=", "value": user_id}],
+        "page": 1, "per_page": 20,
+    })
+    entities = result.get("entities")
+    if not isinstance(entities, list) or len(entities) > 1:
+        raise NativeAPIError("bad_response", "Supervisely member lookup was ambiguous.")
+    if not entities:
+        return None
+    raw = entities[0]
+    if not isinstance(raw, dict) or _identifier(raw) != user_id:
+        raise NativeAPIError("bad_response", "Supervisely returned a mismatched member.")
+    login = raw.get("login")
+    role = raw.get("role")
+    email = raw.get("email")
+    if (not isinstance(login, str) or not login.strip()
+            or not isinstance(role, str) or not role.strip()
+            or (email is not None and not isinstance(email, str))):
+        raise NativeAPIError("bad_response", "Supervisely returned an invalid member.")
+    return NativeMember(
+        id=user_id, login=login.strip(), role=role.lower(),
+        email=(email.strip().lower() or None) if email else None,
+    )
+
+
 def change_member_role(
     config: SuperviselyConfig,
     *,
@@ -263,9 +296,8 @@ def change_member_role(
     ) as client:
         account = _request_json(client, base, token, "users.me", {})
         acting_id = _identifier(account)
-        members = _read_members(client, base, token, config.team_id)
-        actor = next((m for m in members if m.id == acting_id), None)
-        target = next((m for m in members if m.id == user_id), None)
+        actor = _read_member_by_id(client, base, token, config.team_id, acting_id)
+        target = _read_member_by_id(client, base, token, config.team_id, user_id)
         if actor is None or actor.role != "admin":
             raise NativeAPIError(
                 "admin_required",
@@ -298,8 +330,7 @@ def change_member_role(
         _request_json(client, base, token, "members.editInfo", {
             "id": target.id, "teamId": config.team_id, "roleId": matches[0],
         })
-        verified_members = _read_members(client, base, token, config.team_id)
-        verified = next((m for m in verified_members if m.id == target.id), None)
+        verified = _read_member_by_id(client, base, token, config.team_id, target.id)
         if verified is None or verified.role != target_role:
             raise NativeAPIError(
                 "role_unverified",
