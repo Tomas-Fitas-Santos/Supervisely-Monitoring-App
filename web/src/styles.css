@@ -173,3 +173,19 @@ input,select{border:1px solid #dfe5ed;border-radius:9px;background:white;padding
   .job-detail-grid,.review-status-strip{grid-template-columns:1fr 1fr}
   .review-media-heading{flex-direction:column;align-items:flex-start}
 }
+
+
+/* Color-coded Supervisely annotation tools (one box, four visible/occluded pairs) */
+.annotation-palette{margin:4px 0 20px;padding:14px 16px;border:1px solid #dce9e5;border-radius:11px;background:#f9fbfa}
+.annotation-palette summary{font-size:12px;font-weight:750;color:#315e55;cursor:pointer}
+.annotation-palette>p{margin:12px 0}
+.annotation-class-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:14px}
+.annotation-class{display:flex;gap:11px;align-items:center;min-width:0;padding:10px;background:white;border:1px solid #e5ece9;border-radius:9px}
+.annotation-swatch{width:20px;height:20px;flex-shrink:0;display:block;border:3px solid transparent}
+.annotation-swatch.rectangle{border-radius:4px}
+.annotation-swatch.point{border-radius:50%}
+.annotation-class strong,.annotation-class small{display:block;overflow-wrap:anywhere}
+.annotation-class strong{font-size:11px;color:#32465b}
+.annotation-class small{font-size:10px;color:#7c8d96;margin-top:3px}
+@media(max-width:1100px){.annotation-class-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:610px){.annotation-class-grid{grid-template-columns:1fr}}
