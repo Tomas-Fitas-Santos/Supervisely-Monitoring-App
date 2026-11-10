@@ -190,8 +190,8 @@ def test_manual_folder_assignment_updates_ecomorphology_without_changing_assets(
 
 
 def test_monitor_may_inspect_but_cannot_edit(ctx):
-    http, _, did, _ = ctx
-    http.post("/api/v1/auth/logout")
+    http, _, did, owner_csrf = ctx
+    http.post("/api/v1/auth/logout", headers={"X-CSRF-Token": owner_csrf})
     r=http.post("/api/v1/auth/login",json={
         "email":"monitor@example.org","password":"StrongMonitorPassword!",
     })
