@@ -289,7 +289,7 @@ def test_monitor_pair_creation_disband_and_plan_provenance(ctx):
 
 
 def test_interrupt_resume_and_delete_broken_upload(ctx):
-    client, maker, csrf = ctx
+    client, _maker, csrf = ctx
     created = act(client, csrf, "/datasets/uploads", {
         "name": "Interrupted ZIP", "upload_kind": "zip",
     })
@@ -339,7 +339,7 @@ def test_stale_upload_can_be_deleted_without_page_state(ctx):
 
 
 def test_ready_dataset_is_protected_from_cleanup(ctx):
-    client, maker, csrf = ctx
+    client, _maker, csrf = ctx
     dsid = ingest(client, csrf)
     assert act(client, csrf, f"/datasets/{dsid}", method="DELETE").status_code == 409
     assert client.get(f"/api/v1/datasets/{dsid}/summary").status_code == 200
