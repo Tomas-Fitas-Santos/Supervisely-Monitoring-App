@@ -58,7 +58,7 @@ class EventSnapshot(Base):
 class StaffAccount(Base):
     __tablename__ = "staff_accounts"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=identifier)
-    email: Mapped[str] = mapped_column(String(320), index=True)
+    email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(200))
     password_hash: Mapped[str] = mapped_column(Text)
     roles: Mapped[list[str]] = mapped_column(JSON, default=list)
@@ -94,7 +94,7 @@ class Person(Base):
     event_id: Mapped[str] = mapped_column(ForeignKey("events.id"), index=True)
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=identifier)
     name: Mapped[str] = mapped_column(String(200), index=True)
-    email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
+    email: Mapped[str] = mapped_column(String(320), index=True)
     kind: Mapped[str] = mapped_column(String(20), index=True)
     team_id: Mapped[str | None] = mapped_column(
         ForeignKey("competition_teams.id"), index=True, nullable=True
