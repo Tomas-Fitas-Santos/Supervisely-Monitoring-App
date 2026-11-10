@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState , ShieldCheck } from "react";
 import type React from "react";
 import {
   Check, ChevronLeft, ChevronRight, ClipboardCopy, FileSpreadsheet, Filter,
@@ -165,6 +165,18 @@ export function PeopleScreen({auth}:{auth:Auth}) {
     }catch(exc){setError((exc as Error).message);}
     finally{setBusy(false);}
   }
+  async function setMonitorApproval(person:Person,approved:boolean){
+    setBusy(true);setError("");
+    try{
+      const changed=await api<Person>("/people/"+person.id+"/monitor-registration",
+        "PUT",{approved},auth.csrf_token);
+      setEditing({...person,monitor_registration_approved:changed.monitor_registration_approved});
+      setMessage(approved?"Monitor may now create a Nightjar account with email verification.":
+        "New Nightjar registration disabled for this monitor.");
+      await refresh();
+    }catch(exc){setError((exc as Error).message);}
+    finally{setBusy(false);}
+  }
   async function copyEmails() {
     if(selectedPeople.length===0)return;
     try {
@@ -294,6 +306,19 @@ export function PeopleScreen({auth}:{auth:Auth}) {
           {personForm.kind==="participant"&&<label>Competition team name<input value={personForm.team_name}
             onChange={e=>setPersonForm({...personForm,team_name:e.target.value})}
             placeholder="e.g. Team 014"/></label>}
+          {editing?.kind==="monitor"&&<div className="settings-note">
+            <ShieldCheck size={18}/>
+            <div><p className="muted small">
+              Nightjar account creation: <strong>{editing.monitor_registration_approved?
+                "Approved":"Not approved"}</strong>. Only approved monitor emails
+              can register after verifying email ownership.
+            </p>
+            <button type="button" disabled={busy} className="btn secondary"
+              onClick={()=>void setMonitorApproval(editing,!editing.monitor_registration_approved)}>
+              {editing.monitor_registration_approved?
+                "Disable new registrations":"Approve for Nightjar registration"}
+            </button></div>
+          </div>}
           <div className="modal-actions">{editing&&<button type="button" disabled={busy}
             className="btn danger-outline" onClick={()=>void deactivate(editing)}>Deactivate</button>}
             <button className="btn secondary" type="button" onClick={()=>setEditing(undefined)}>Cancel</button>
