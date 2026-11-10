@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .annotation_schema import annotation_class_view
 from .auth import AuthContext, requires
 from .datasets_api import get_dataset
 from .db import get_db
@@ -30,6 +31,15 @@ from .pair_members import pair_members
 
 router = APIRouter(prefix="/api/v1/labeling", tags=["labeling plans"])
 VIEWERS = ("organiser", "monitor", "observer", "activity", "distribution", "reception")
+
+
+@router.get("/annotation-classes")
+def list_annotation_classes(
+    _ctx: AuthContext = Depends(requires(*VIEWERS)),
+):
+    """The exact geometric class and color contract the native worker deploys."""
+    return {"items": annotation_class_view(), "project_scope": "Supervisely project"}
+
 
 
 class PlanInput(BaseModel):
