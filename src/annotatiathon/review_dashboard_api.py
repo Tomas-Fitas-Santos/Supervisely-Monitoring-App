@@ -156,7 +156,7 @@ def team_metrics(
         "teams": team_statistics(db, event.id),
         "ranking_status": "provisional",
         "accuracy_definition": "Correct / (correct + missing + incorrect) reviewed keypoints",
-        "time_definition": "Seconds from job start to submission / frames in timed jobs",
+        "time_definition": "Seconds from Nightjar publishing the job to the detected Supervisely submission / frames; includes any waiting time",
         "frames_definition": "Annotated frames contain at least one downloaded Supervisely label; historical jobs may lack this count",
         "winner_policy": "Not final until all relevant submissions are scored and accepted",
     }
