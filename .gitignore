@@ -51,3 +51,6 @@ logs/
 
 # Isolated free live-testing media; never commit event files
 .nightjar-live-data/
+
+# Temporary HTTPS tunnel password-gate hashes; never commit
+.nightjar-live-auth/
