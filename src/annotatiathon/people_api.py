@@ -32,6 +32,12 @@ VIEWER = ("organiser", "monitor", "reception", "activity", "distribution", "obse
 
 class PersonInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    date_of_birth: str | None = Field(default=None, max_length=40)
+    phone: str | None = Field(default=None, max_length=80)
+    under_18: str | None = Field(default=None, max_length=80)
+    image_consent: str | None = Field(default=None, max_length=80)
+    data_consent: str | None = Field(default=None, max_length=80)
+    food_allergies: str | None = Field(default=None, max_length=1000)
     name: str = Field(min_length=1, max_length=200)
     email: str = Field(min_length=3, max_length=320)
     kind: Literal["participant", "monitor"] = "participant"
@@ -50,6 +56,12 @@ class PersonInput(BaseModel):
 
 class PersonUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    date_of_birth: str | None = Field(default=None, max_length=40)
+    phone: str | None = Field(default=None, max_length=80)
+    under_18: str | None = Field(default=None, max_length=80)
+    image_consent: str | None = Field(default=None, max_length=80)
+    data_consent: str | None = Field(default=None, max_length=80)
+    food_allergies: str | None = Field(default=None, max_length=1000)
     name: str | None = Field(default=None, min_length=1, max_length=200)
     email: str | None = Field(default=None, min_length=3, max_length=320)
     kind: Literal["participant", "monitor"] | None = None
@@ -93,9 +105,57 @@ def team_id(db: Session, team_name: str | None, event_id: str) -> str | None:
     return team.id
 
 
+# CSV uploads keep their source headings intact. Resolve English and
+# Portuguese registration fields without an additional schema migration.
+PRIVATE_FIELDS: dict[str, tuple[str, ...]] = {
+    "date_of_birth": ("date_of_birth", "date of birth", "birth date",
+                      "data de nascimento", "nascimento"),
+    "phone": ("phone", "phone number", "telefone", "telemóvel", "telemovel",
+              "contacto telefónico", "contacto telefonico"),
+    "under_18": ("under_18", "under 18", "minor", "menores de 18 anos",
+                 "menor de 18 anos"),
+    "image_consent": ("image_consent", "image consent",
+                      "autorização de cedência de imagem",
+                      "autorizacao de cedencia de imagem"),
+    "data_consent": ("data_consent", "data processing consent",
+                     "autorização de tratamento de dados",
+                     "autorizacao de tratamento de dados"),
+    "food_allergies": ("food_allergies", "food allergies", "allergies",
+                       "alergias/intolerâncias alimentares",
+                       "alergias/intolerancias alimentares",
+                       "alergias", "intolerâncias alimentares"),
+}
+
+
+def private_person_fields(person: Person) -> dict:
+    source = person.source_fields or {}
+    normalized = {" ".join(str(key).strip().casefold().split()): value
+                  for key, value in source.items()}
+    result = {}
+    for field, aliases in PRIVATE_FIELDS.items():
+        result[field] = next(
+            (str(normalized[key]).strip() for alias in aliases
+             if (key := " ".join(alias.casefold().split())) in normalized
+             and normalized[key] is not None),
+            "",
+        )
+    return result
+
+
+def update_private_fields(person: Person, payload: PersonInput | PersonUpdate) -> None:
+    fields = payload.model_fields_set.intersection(PRIVATE_FIELDS)
+    if fields:
+        source = dict(person.source_fields or {})
+        for key in fields:
+            source[key] = str(getattr(payload, key) or "").strip()
+        person.source_fields = source
+
+
 def person_record(p: Person, team: str | None = None,
-                  table_number: int | None = None) -> dict:
+                  table_number: int | None = None, *,
+                  include_private: bool = False) -> dict:
     return {
+        **(private_person_fields(p) if include_private else {}),
         "id": p.id, "name": p.name, "email": p.email, "kind": p.kind,
         "team_id": p.team_id, "team_name": team, "active": p.active,
         "membership_status": p.membership_status,
@@ -160,6 +220,9 @@ def list_people(
         "items": [person_record(
             p, teams_by_id[p.team_id].name if p.team_id in teams_by_id else None,
             teams_by_id[p.team_id].table_number if p.team_id in teams_by_id else None,
+            include_private=bool(
+                {"organiser", "reception"} & set(_ctx.staff.roles)
+            ),
         ) for p in people],
         "total": total, "page": page, "size": size,
     }
@@ -247,6 +310,7 @@ def create_person(
     if existing and existing.active:
         raise HTTPException(status_code=409, detail="This email already exists.")
     if existing:
+        update_private_fields(existing, payload)
         existing.name = payload.name.strip()
         existing.kind = payload.kind
         existing.active = True
@@ -261,6 +325,7 @@ def create_person(
         event_id=event.id, name=payload.name.strip(), email=payload.email, kind=payload.kind,
         team_id=team_id(db, payload.team_name, event.id) if payload.kind == "participant" else None,
     )
+    update_private_fields(person, payload)
     db.add(person)
     db.flush()
     audit(db, ctx.staff.id, event.id, "person.create", person.id, {"kind": person.kind})
@@ -413,6 +478,7 @@ def update_person(
         )
     if "active" in fields and payload.active is not None:
         person.active = payload.active
+    update_private_fields(person, payload)
     align_staff_access(db, person)
     audit(db, ctx.staff.id, event.id, "person.update", person.id, {
         "fields": sorted(fields), "supervisely_role_updated": native_changed,
@@ -420,7 +486,7 @@ def update_person(
     })
     db.commit()
     team = db.get(CompetitionTeam, person.team_id) if person.team_id else None
-    return person_record(person, team.name if team else None)
+    return person_record(person, team.name if team else None, include_private=True)
 
 
 @router.post("/people/{person_id}/supervisely-role")
