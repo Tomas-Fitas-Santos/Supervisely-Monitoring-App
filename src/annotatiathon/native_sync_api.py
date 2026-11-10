@@ -205,6 +205,10 @@ def refresh_native_membership(
 
     config = config_for_sync(db)
     source = read_or_fail(config, db)
+    # Serialize local reconciliation for this event after the remote fetch.
+    # This prevents simultaneous monitor refreshes from inserting duplicate
+    # members while avoiding a lock during the slow Supervisely API call.
+    event = current_event(db, ctx, writable=True)
     people = all_people(db, event.id)
     matched, unmatched, remaining, conflicts = association_proposal(
         source.members, people, []
