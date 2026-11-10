@@ -23,73 +23,43 @@ import "./styles.css";
 type Tab = "overview" | "people" | "attendance" | "tickets" | "activities" | "datasets" | "competition" | "quality" | "coverage" | "closeout" | "staff" | "settings";
 
 function Login({ onLogin }: { onLogin: (auth: Auth) => void }) {
-  const [mode,setMode] = useState<"login"|"register"|"complete">("login");
+  const [mode,setMode] = useState<"login"|"register">("login");
   const [email,setEmail] = useState("");
   const [password,setPassword] = useState("");
   const [confirmation,setConfirmation] = useState("");
-  const [code,setCode] = useState("");
   const [error,setError] = useState("");
   const [notice,setNotice] = useState("");
   const [working,setWorking] = useState(false);
-  const [smtpAvailable,setSmtpAvailable] = useState<boolean|null>(null);
-  const [resendSeconds,setResendSeconds] = useState(0);
-
-  useEffect(()=>{
-    if(mode==="login")return;
-    void api<{email_verification_available:boolean}>("/auth/register/status")
-      .then(status=>setSmtpAvailable(status.email_verification_available))
-      .catch(()=>setSmtpAvailable(null));
-  },[mode]);
-  useEffect(()=>{
-    if(resendSeconds<=0)return;
-    const timer=window.setTimeout(()=>setResendSeconds(v=>Math.max(0,v-1)),1000);
-    return ()=>window.clearTimeout(timer);
-  },[resendSeconds]);
-
-  async function requestCode(){
-    const response=await api<{message:string;resend_after_seconds:number}>(
-      "/auth/register/request","POST",{email:email.trim().toLowerCase()});
-    setNotice(response.message);
-    setResendSeconds(response.resend_after_seconds);
-    setMode("complete");
-  }
 
   async function submit(e:React.FormEvent) {
-    e.preventDefault();setError("");setNotice("");setWorking(true);
+    e.preventDefault();
+    setError("");setNotice("");setWorking(true);
     try {
-      if(mode==="login"){
-        onLogin(await api<Auth>("/auth/login","POST",{email,password}));
-      }else if(mode==="register"){
-        if(smtpAvailable===false)throw new Error(
-          "Email registration is not yet enabled. Ask the organiser to configure and test SMTP.");
-        await requestCode();
-      }else {
-        if(password!==confirmation)throw new Error("The two passwords do not match.");
-        const result=await api<{message:string}>("/auth/register/complete",
-          "POST",{email,code,password});
-        // The email was verified and the account created: sign in immediately.
+      const accountEmail=email.trim().toLowerCase();
+      if(mode==="register") {
+        if(password!==confirmation)
+          throw new Error("The two passwords do not match.");
+        const result=await api<{registered:boolean;message:string}>(
+          "/auth/register","POST",{email:accountEmail,password});
         try {
-          onLogin(await api<Auth>("/auth/login","POST",{email,password}));
+          // Registration and the independent Supervisely link are separate.
+          onLogin(await api<Auth>("/auth/login","POST",{email:accountEmail,password}));
         }catch(loginError) {
           setMode("login");
-          setPassword("");setConfirmation("");setCode("");
-          setNotice(result.message+" Please sign in with your new password.");
+          setConfirmation("");
+          setPassword("");
+          setNotice(result.message);
           setError("Automatic sign-in failed: "+(loginError as Error).message);
         }
+      }else{
+        onLogin(await api<Auth>("/auth/login","POST",{email:accountEmail,password}));
       }
     }catch(exc){setError((exc as Error).message);}
     finally{setWorking(false);}
   }
-  async function resendCode(){
-    if(working||resendSeconds>0)return;
-    setWorking(true);setError("");setNotice("");
-    try{await requestCode();}
-    catch(exc){setError((exc as Error).message);}
-    finally{setWorking(false);}
-  }
-  function switchMode(to:"login"|"register"){
-    setMode(to);setError("");setNotice("");setCode("");
-    setPassword("");setConfirmation("");
+  function switchMode(){
+    setMode(v=>v==="login"?"register":"login");
+    setError("");setNotice("");setPassword("");setConfirmation("");
   }
 
   return <main className="login-shell">
@@ -107,58 +77,38 @@ function Login({ onLogin }: { onLogin: (auth: Auth) => void }) {
       <div className="login-card">
         <div className="mobile-brand"><Bird size={23}/> NIGHTJAR</div>
         <span className="eyebrow">{mode==="login"?"WELCOME BACK":"MONITOR REGISTRATION"}</span>
-        <h2>{mode==="login"?"Sign in to Nightjar":
-          mode==="register"?"Create your monitor account":"Verify your email"}</h2>
+        <h2>{mode==="login"?"Sign in to Nightjar":"Create your monitor account"}</h2>
         <p className="muted">{mode==="login"?
           "Sign in with your Nightjar account, not your Supervisely credentials.":
-          mode==="register"?
-          "Use the same email listed for you as a monitor on the approved event roster.":
-          "Enter the eight-digit code sent to your email, then choose a Nightjar password."}</p>
-        {mode!=="login"&&smtpAvailable===false&&
-          <div role="alert" className="alert danger">
-            Email registration is not ready yet. Contact the organiser to enable SMTP email delivery.
-          </div>}
+          "Use the email already listed for you as an approved monitor. Create a Nightjar-only password; link Supervisely separately in Settings."}</p>
         <form onSubmit={e=>void submit(e)} className="form-stack">
           <label>Email address<input type="email" autoComplete="username" autoFocus required
             value={email} onChange={e=>setEmail(e.target.value)}
-            disabled={mode==="complete"} placeholder="you@institution.pt"/></label>
-          {mode==="complete"&&<label>8-digit verification code<input
-            inputMode="numeric" autoComplete="one-time-code" minLength={8} maxLength={8}
-            pattern="[0-9]{8}" value={code} required
-            onChange={e=>setCode(e.target.value.replace(/\D/g,""))}
-            placeholder="Enter the emailed code"/></label>}
-          {mode!=="register"&&<label>{mode==="login"?"Password":"New password (12+ characters)"}
+            placeholder="you@institution.pt"/></label>
+          <label>{mode==="login"?"Password":"Choose your Nightjar password (12+ characters)"}
             <input type="password" autoComplete={mode==="login"?"current-password":"new-password"}
-              required minLength={mode==="complete"?12:undefined}
+              required minLength={mode==="register"?12:undefined}
               value={password} onChange={e=>setPassword(e.target.value)}
-              placeholder="Enter your password"/></label>}
-          {mode==="complete"&&<label>Confirm your new password
+              placeholder="Enter password"/></label>
+          {mode==="register"&&<label>Confirm Nightjar password
             <input type="password" autoComplete="new-password" minLength={12}
               required value={confirmation} onChange={e=>setConfirmation(e.target.value)}
               placeholder="Enter the same password again"/></label>}
           {error&&<div role="alert" className="alert danger">{error}</div>}
           {notice&&<div role="status" className="alert success">{notice}</div>}
-          <button className="btn primary large" disabled={working||(mode==="register"&&smtpAvailable===false)}
-            type="submit">
-            {working?"Working…":mode==="login"?"Sign in":
-              mode==="register"?"Send verification code":"Verify and enter Nightjar"}
+          <button className="btn primary large" disabled={working} type="submit">
+            {working?"Working…":mode==="login"?"Sign in":"Create account and sign in"}
             <ArrowRight size={17}/>
           </button>
         </form>
         <div className="settings-action-row" style={{marginTop:15}}>
-          <button type="button" className="btn secondary" disabled={working}
-            onClick={()=>switchMode(mode==="login"?"register":"login")}>
+          <button type="button" className="btn secondary" disabled={working} onClick={switchMode}>
             {mode==="login"?"Create monitor account":"Back to sign in"}
           </button>
-          {mode==="complete"&&<button type="button" className="btn secondary"
-            disabled={working||resendSeconds>0||smtpAvailable===false}
-            onClick={()=>void resendCode()}>
-            {resendSeconds>0?"Resend in "+resendSeconds+"s":"Resend verification code"}
-          </button>}
         </div>
         <p className="login-hint"><CircleHelp size={15}/>
-          Only approved event monitors can register. Check your email and spam folder,
-          or contact the organiser if your address is not listed.</p>
+          Only approved monitors in the current SQL event roster can register.
+          If your email is not listed, ask the organiser to add or approve you.</p>
       </div>
       <div className="login-bottom">TÉCNICO · Bird Annotatiathon</div>
     </section>
