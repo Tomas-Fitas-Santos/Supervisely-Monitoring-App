@@ -261,6 +261,8 @@ def list_teams(
     grouped: dict[str | None, list[Person]] = defaultdict(list)
     for person in people:
         grouped[person.team_id if person.kind == "participant" else None].append(person)
+    can_view_private = bool({"organiser", "reception"} & set(_ctx.staff.roles))
+    can_view_allergies = "distribution" in _ctx.staff.roles
     people_by_id = {p.id: p for p in people}
     monitor_pairs: dict[str, list[Person]] = defaultdict(list)
     for link in db.scalars(select(MonitorPairMember).where(
@@ -280,7 +282,11 @@ def list_teams(
             "monitor_person_id": (responsibility.get(team.id)
                                   if responsibility.get(team.id) in monitor_names else None),
             "monitor_name": monitor_names.get(responsibility.get(team.id)),
-            "members": [person_record(p, team.name, team.table_number) for p in members],
+            "members": [person_record(
+                p, team.name, team.table_number,
+                include_private=can_view_private,
+                include_food_allergies=can_view_allergies,
+            ) for p in members],
             "checked_in": sum(1 for p in members if p.check_in_at),
             "first_check_in": min((p.check_in_at for p in members if p.check_in_at),
                                   default=None),
@@ -292,7 +298,10 @@ def list_teams(
         result.sort(key=lambda x: (-len(x["members"]), x["name"].lower()))
     else:
         result.sort(key=lambda x: x["name"].lower())
-    monitors = [person_record(p) for p in people if p.kind == "monitor"]
+    monitors = [person_record(
+        p, include_private=can_view_private,
+        include_food_allergies=can_view_allergies,
+    ) for p in people if p.kind == "monitor"]
     return {
         "teams": [{
             "id": "monitoring", "name": "Monitoring Team", "type": "monitoring",
