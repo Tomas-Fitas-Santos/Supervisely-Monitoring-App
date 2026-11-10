@@ -6,8 +6,8 @@ from .attendance_api import router as attendance_router
 from .auth import router as auth_router
 from .database import database_is_ready
 from .events_api import router as events_router
-from .people_api import router as people_router
 from .native_sync_api import router as native_router
+from .people_api import router as people_router
 from .settings_api import router as settings_router
 from .staff_api import router as staff_router
 from .tickets_api import router as tickets_router
