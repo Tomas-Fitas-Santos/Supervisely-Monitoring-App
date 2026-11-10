@@ -403,12 +403,15 @@ def capture_job_annotations(db: Session, api, job: LabelingJob) -> bool:
     captured = epoch()
     try:
         rows = []
+        annotated_frames = 0
         for media_id in job.media_ids:
             asset = assets[media_id]
             native = mappings[media_id]
             annotation = api.annotation.download_json(native.native_image_id)
             if not isinstance(annotation, dict):
                 raise NativeWorkerError("native_annotation_invalid")
+            if isinstance(annotation.get("labels"), list) and annotation["labels"]:
+                annotated_frames += 1
             row = {
                 "source_media_id": media_id,
                 "source_relative_path": asset.relative_path,
@@ -432,6 +435,7 @@ def capture_job_annotations(db: Session, api, job: LabelingJob) -> bool:
                 "event_id": job.event_id, "dataset_id": dataset.id,
                 "job_id": job.id, "correction_round": job.correction_round,
                 "captured_at": captured, "media": rows,
+                "annotated_frames": annotated_frames,
                 "annotation_state": "current_supervisely_snapshot",
             }, stream, ensure_ascii=False, separators=(",", ":"))
         os.replace(temporary, destination)
