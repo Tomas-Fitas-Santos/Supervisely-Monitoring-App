@@ -290,6 +290,11 @@ def enforce_native_role(
         raise HTTPException(status_code=409, detail="Configure the Supervisely team before editing this member.")
     target_role = "manager" if desired_kind == "monitor" else "annotator"
     original = person.supervisely_role
+    if not original or original == "unknown":
+        raise HTTPException(
+            status_code=409,
+            detail="Supervisely role has not been verified. Refresh team membership before editing.",
+        )
     if original == target_role and not reconcile:
         return False
     try:
@@ -352,6 +357,12 @@ def update_person(
                 status_code=409, detail="The organiser account must retain its admin/monitor role.",
             )
     if "email" in fields and payload.email is not None and payload.email != person.email:
+        staff_login = db.scalar(select(StaffAccount).where(StaffAccount.email == person.email))
+        if staff_login is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="Cannot change an existing Nightjar login's email here. Contact the organiser.",
+            )
         if person.supervisely_user_id is not None:
             raise HTTPException(
                 status_code=409,
@@ -535,10 +546,9 @@ def import_report(db: Session, rows: list[dict], apply: bool, actor: str,
                 # Preserve an explicit organiser approval/denial on reimport.
                 prior = found.source_fields or {}
                 found.source_fields = dict(row["source_fields"])
-                if "monitor_registration_approved" in prior:
-                    found.source_fields["monitor_registration_approved"] = (
-                        prior["monitor_registration_approved"]
-                    )
+                for retained in ("monitor_registration_approved", "nightjar_disabled_for_role"):
+                    if retained in prior:
+                        found.source_fields[retained] = prior[retained]
                 found.kind = row["kind"]
                 found.team_id = (
                     team_id(db, desired, event_id) if row["kind"] == "participant" else None
