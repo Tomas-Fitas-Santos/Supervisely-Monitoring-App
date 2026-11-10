@@ -75,12 +75,6 @@ services:
     build:
       context: .
       dockerfile: deploy/Dockerfile.web
-    volumes:
-      # Create first with scripts/enable-live-access.ps1, never commit it.
-      - type: bind
-        source: ./.nightjar-live-auth/.htpasswd
-        target: /etc/nginx/live-auth.htpasswd
-        read_only: true
     depends_on:
       api:
         condition: service_healthy
