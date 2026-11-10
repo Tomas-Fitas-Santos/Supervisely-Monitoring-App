@@ -285,3 +285,61 @@ def test_monitor_pair_creation_disband_and_plan_provenance(ctx):
         assert len(db.scalars(select(MonitorPairMember).where(
             MonitorPairMember.active.is_(True)
         )).all()) == 0
+
+
+
+def test_interrupt_resume_and_delete_broken_upload(ctx):
+    client, maker, csrf = ctx
+    created = act(client, csrf, "/datasets/uploads", {
+        "name": "Interrupted ZIP", "upload_kind": "zip",
+    })
+    assert created.status_code == 201
+    dsid = created.json()["id"]
+    part = b"hello interrupted zip"
+    chunk = client.put(
+        f"/api/v1/datasets/uploads/{dsid}/chunk",
+        params={"relative_path": "source.zip", "offset": 0, "total": 100},
+        data=part, headers={"X-CSRF-Token": csrf},
+    )
+    assert chunk.status_code == 200, chunk.text
+    active_delete = act(client, csrf, f"/datasets/{dsid}", method="DELETE")
+    assert active_delete.status_code == 409
+    stopped = act(client, csrf, f"/datasets/{dsid}/interrupt")
+    assert stopped.status_code == 200
+    assert stopped.json()["status"] == "interrupted"
+    stored = client.get(f"/api/v1/datasets/{dsid}/upload-status",
+                        params={"include_files": "true"})
+    assert stored.status_code == 200
+    assert stored.json()["file_progress"] == [{
+        "relative_path": "source.zip", "received_bytes": len(part),
+        "expected_bytes": 100,
+    }]
+    resumed = act(client, csrf, f"/datasets/{dsid}/resume")
+    assert resumed.status_code == 200
+    assert resumed.json()["status"] == "uploading"
+    assert act(client, csrf, f"/datasets/{dsid}/interrupt").status_code == 200
+    removed = act(client, csrf, f"/datasets/{dsid}", method="DELETE")
+    assert removed.status_code == 200
+    assert removed.json()["deleted"] is True
+    assert client.get(f"/api/v1/datasets/{dsid}/upload-status").status_code == 404
+    assert not any(row["id"] == dsid for row in client.get("/api/v1/datasets").json()["items"])
+
+
+def test_stale_upload_can_be_deleted_without_page_state(ctx):
+    client, maker, csrf = ctx
+    created = act(client, csrf, "/datasets/uploads", {
+        "name": "Abandoned old upload", "upload_kind": "zip",
+    })
+    dsid = created.json()["id"]
+    from annotatiathon.models import MediaDataset, epoch
+    with maker.begin() as db:
+        db.get(MediaDataset, dsid).last_activity_at = epoch() - 3600
+    assert client.get("/api/v1/datasets").json()["items"][0]["status"] == "interrupted"
+    assert act(client, csrf, f"/datasets/{dsid}", method="DELETE").status_code == 200
+
+
+def test_ready_dataset_is_protected_from_cleanup(ctx):
+    client, maker, csrf = ctx
+    dsid = ingest(client, csrf)
+    assert act(client, csrf, f"/datasets/{dsid}", method="DELETE").status_code == 409
+    assert client.get(f"/api/v1/datasets/{dsid}/summary").status_code == 200

@@ -360,7 +360,7 @@ export function PeopleScreen({auth}:{auth:Auth}) {
             <div><p className="muted small">
               Nightjar account creation: <strong>{editing.monitor_registration_approved?
                 "Approved":"Not approved"}</strong>. Only approved monitor emails
-              can create a Nightjar-only account with their approved roster email and password.
+              can register after verifying email ownership.
             </p>
             <button type="button" disabled={busy} className="btn secondary"
               onClick={()=>void setMonitorApproval(editing,!editing.monitor_registration_approved)}>
