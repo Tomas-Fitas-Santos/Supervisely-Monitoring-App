@@ -354,6 +354,12 @@ def reverse_distribution(
         return {"id": batch.id, "status": "reversed", "already_reversed": True}
     if batch.status != "confirmed":
         raise HTTPException(status_code=409, detail="Only confirmed batches can be reversed.")
+    if batch.operation == "activity_award":
+        raise HTTPException(
+            status_code=409,
+            detail="Activity prize allocations require an activity-aware reset; "
+                   "do not reverse their ticket batches independently.",
+        )
     entries = list(db.scalars(
         select(TicketLedgerEntry).where(
             TicketLedgerEntry.distribution_id == batch.id,

@@ -17,6 +17,10 @@ from .auth import AuthContext, requires
 from .db import get_db
 from .models import (
     DEFAULT_EVENT_ID,
+    Activity,
+    ActivityAward,
+    ActivityPrize,
+    ActivityResult,
     AuditEvent,
     CompetitionTeam,
     Event,
@@ -30,7 +34,7 @@ from .models import (
 )
 
 router = APIRouter(prefix="/api/v1/events", tags=["events"])
-AREAS = ("attendance", "invitations", "tickets", "roster")
+AREAS = ("attendance", "invitations", "tickets", "roster", "activities")
 
 
 def current_event(
@@ -197,6 +201,18 @@ def state_data(db: Session, event_id: str) -> dict:
     ledger = list(db.scalars(select(TicketLedgerEntry).where(
         TicketLedgerEntry.event_id == event_id
     ).order_by(TicketLedgerEntry.id)))
+    activities = list(db.scalars(select(Activity).where(
+        Activity.event_id == event_id
+    ).order_by(Activity.id)))
+    results = list(db.scalars(select(ActivityResult).where(
+        ActivityResult.event_id == event_id
+    ).order_by(ActivityResult.id)))
+    prizes = list(db.scalars(select(ActivityPrize).where(
+        ActivityPrize.event_id == event_id
+    ).order_by(ActivityPrize.id)))
+    awards = list(db.scalars(select(ActivityAward).where(
+        ActivityAward.event_id == event_id
+    ).order_by(ActivityAward.id)))
     return {
         "people": [{
             "id": p.id, "name": p.name, "email": p.email, "kind": p.kind,
@@ -223,6 +239,27 @@ def state_data(db: Session, event_id: str) -> dict:
             "category_id": entry.category_id, "kind": entry.kind,
             "quantity": entry.quantity,
         } for entry in ledger],
+        "activities": [{
+            "id": a.id, "name": a.name, "description": a.description,
+            "location": a.location, "start_at": a.start_at, "end_at": a.end_at,
+            "status": a.status, "active": a.active,
+            "awards_finalised_at": a.awards_finalised_at,
+        } for a in activities],
+        "activity_results": [{
+            "id": r.id, "activity_id": r.activity_id,
+            "subject_type": r.subject_type, "subject_id": r.subject_id,
+            "rank": r.rank, "score_points": r.score_points, "notes": r.notes,
+        } for r in results],
+        "activity_prizes": [{
+            "id": p.id, "activity_id": p.activity_id,
+            "category_id": p.category_id, "min_rank": p.min_rank,
+            "max_rank": p.max_rank, "quantity": p.quantity,
+        } for p in prizes],
+        "activity_awards": [{
+            "id": a.id, "activity_id": a.activity_id,
+            "prize_id": a.prize_id, "person_id": a.person_id,
+            "distribution_id": a.distribution_id,
+        } for a in awards],
     }
 
 
@@ -241,14 +278,17 @@ def reset_summary(state: dict) -> dict:
         ),
         "ticket_batches": sum(1 for b in state["batches"] if b["status"] == "confirmed"),
         "ticket_ledger_entries": len(state["ledger"]),
+        "activities": sum(1 for a in state["activities"] if a["active"]),
+        "activity_results": len(state["activity_results"]),
+        "activity_awards": len(state["activity_awards"]),
     }
 
 
 class ResetRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     mode: Literal["selected", "fresh"]
-    areas: list[Literal["attendance", "invitations", "tickets", "roster"]] = Field(
-        default_factory=list, max_length=4
+    areas: list[Literal["attendance", "invitations", "tickets", "roster", "activities"]] = Field(
+        default_factory=list, max_length=5
     )
 
 
@@ -273,6 +313,24 @@ def preview_reset(
             status_code=409,
             detail="Roster reset requires ticket reset in the same operation. "
                    "Previous ticket batches must remain traceable.",
+        )
+    if (payload.mode == "selected" and "tickets" in payload.areas
+            and "activities" not in payload.areas and state["activity_awards"]):
+        raise HTTPException(
+            status_code=409,
+            detail="Ticket reset must also reset activities when prizes have been awarded.",
+        )
+    if (payload.mode == "selected" and "activities" in payload.areas
+            and "tickets" not in payload.areas and state["activity_awards"]):
+        raise HTTPException(
+            status_code=409,
+            detail="Activity reset must also reset tickets when prizes have been awarded.",
+        )
+    if (payload.mode == "selected" and "roster" in payload.areas
+            and "activities" not in payload.areas and state["activity_results"]):
+        raise HTTPException(
+            status_code=409,
+            detail="Roster reset requires activity reset when ranked results exist.",
         )
     selected = list(AREAS) if payload.mode == "fresh" else payload.areas
     plan = ResetPlan(
@@ -353,6 +411,12 @@ def reset_selected(db: Session, event_id: str, actor: str, areas: list[str]) -> 
             Person.event_id == event_id, Person.membership_status == "reported_sent"
         )):
             person.membership_status = "not_invited"
+    if "activities" in areas:
+        # Soft-archive activities, preserving all ranked results and award evidence.
+        for activity in db.scalars(select(Activity).where(
+            Activity.event_id == event_id, Activity.active.is_(True)
+        )):
+            activity.active = False
     if "roster" in areas:
         # Archive rather than delete: old ledger and audit identities remain intact.
         for person in db.scalars(select(Person).where(Person.event_id == event_id)):

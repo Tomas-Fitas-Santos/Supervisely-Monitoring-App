@@ -201,3 +201,75 @@ class TicketLedgerEntry(Base):
         ForeignKey("ticket_ledger.id"), nullable=True, unique=True
     )
     created_at: Mapped[int] = mapped_column(Integer, default=epoch, index=True)
+
+
+class Activity(Base):
+    """Event-local activity. Award finalisation freezes results and prize rules."""
+
+    __tablename__ = "activities"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=identifier)
+    event_id: Mapped[str] = mapped_column(ForeignKey("events.id"), index=True)
+    name: Mapped[str] = mapped_column(String(200))
+    description: Mapped[str] = mapped_column(Text, default="")
+    location: Mapped[str] = mapped_column(String(200), default="")
+    start_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    end_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="scheduled")
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    awards_finalised_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_by: Mapped[str] = mapped_column(ForeignKey("staff_accounts.id"))
+    created_at: Mapped[int] = mapped_column(Integer, default=epoch)
+    updated_at: Mapped[int] = mapped_column(Integer, default=epoch, onupdate=epoch)
+
+
+class ActivityResult(Base):
+    """One individual or one competition team's rank and optional score per activity."""
+
+    __tablename__ = "activity_results"
+    __table_args__ = (
+        UniqueConstraint("activity_id", "subject_type", "subject_id",
+                         name="uq_activity_subject_result"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=identifier)
+    event_id: Mapped[str] = mapped_column(ForeignKey("events.id"), index=True)
+    activity_id: Mapped[str] = mapped_column(ForeignKey("activities.id"), index=True)
+    subject_type: Mapped[str] = mapped_column(String(20))
+    subject_id: Mapped[str] = mapped_column(String(36))
+    rank: Mapped[int] = mapped_column(Integer)
+    score_points: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    notes: Mapped[str] = mapped_column(Text, default="")
+    recorded_by: Mapped[str] = mapped_column(ForeignKey("staff_accounts.id"))
+    created_at: Mapped[int] = mapped_column(Integer, default=epoch)
+    updated_at: Mapped[int] = mapped_column(Integer, default=epoch, onupdate=epoch)
+
+
+class ActivityPrize(Base):
+    """A rank interval awards a ticket entitlement to each qualifying participant."""
+
+    __tablename__ = "activity_prizes"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=identifier)
+    event_id: Mapped[str] = mapped_column(ForeignKey("events.id"), index=True)
+    activity_id: Mapped[str] = mapped_column(ForeignKey("activities.id"), index=True)
+    category_id: Mapped[str] = mapped_column(ForeignKey("ticket_categories.id"))
+    min_rank: Mapped[int] = mapped_column(Integer)
+    max_rank: Mapped[int] = mapped_column(Integer)
+    quantity: Mapped[int] = mapped_column(Integer)
+    created_by: Mapped[str] = mapped_column(ForeignKey("staff_accounts.id"))
+    created_at: Mapped[int] = mapped_column(Integer, default=epoch)
+
+
+class ActivityAward(Base):
+    """Immutable provenance tying an award recipient to an allocated ticket batch."""
+
+    __tablename__ = "activity_awards"
+    __table_args__ = (
+        UniqueConstraint("activity_id", "prize_id", "person_id",
+                         name="uq_activity_prize_recipient"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=identifier)
+    event_id: Mapped[str] = mapped_column(ForeignKey("events.id"), index=True)
+    activity_id: Mapped[str] = mapped_column(ForeignKey("activities.id"), index=True)
+    prize_id: Mapped[str] = mapped_column(ForeignKey("activity_prizes.id"))
+    person_id: Mapped[str] = mapped_column(ForeignKey("people.id"))
+    distribution_id: Mapped[str] = mapped_column(ForeignKey("ticket_distributions.id"))
+    awarded_at: Mapped[int] = mapped_column(Integer, default=epoch)
