@@ -117,3 +117,7 @@ input,select{border:1px solid #dfe5ed;border-radius:9px;background:white;padding
 .coverage-matrix th:first-child{background:#f3f6f8;z-index:2}
 .coverage-matrix th:not(:first-child){white-space:normal;min-width:86px;max-width:142px}
 .coverage-matrix td:not(:first-child){text-align:right;font-variant-numeric:tabular-nums}
+
+.dataset-recovery-actions{display:flex;align-items:center;flex-wrap:wrap;gap:9px;margin-top:14px}
+.dataset-status.interrupted,.dataset-status.failed{background:#fff0e7;color:#9c5925}
+.dataset-status.uploading,.dataset-status.validating{background:#e9f2fc;color:#3b638c}
