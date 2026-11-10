@@ -200,7 +200,7 @@ export function CompetitionScreen({auth}:{auth:Auth}) {
       <div className="stat-card"><Layers3 size={19}/><span className="muted small">In queue / labeling</span><strong>{active}</strong></div>
       <div className="stat-card"><ClipboardCheck size={19}/><span className="muted small">Awaiting review</span><strong>{awaiting}</strong></div>
       <div className="stat-card"><CheckCircle2 size={19}/><span className="muted small">Accepted</span><strong>{complete}</strong></div>
-    </div>
+    </div>}
 
     {admin&&section==="manual"&&<section className="panel manual-job-panel">
       <div className="panel-heading">
