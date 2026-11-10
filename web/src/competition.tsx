@@ -34,6 +34,7 @@ type AnnotationClass={name:string;shape:"rectangle"|"point";color:string;descrip
 
 export function CompetitionScreen({auth}:{auth:Auth}) {
   const admin=auth.staff.roles.includes("organiser");
+  const [section,setSection]=useState<"overview"|"manual"|"automatic">("overview");
   const [datasets,setDatasets]=useState<Dataset[]>([]);
   const [dataset,setDataset]=useState("");
   const [plans,setPlans]=useState<Plan[]>([]);
@@ -164,6 +165,7 @@ export function CompetitionScreen({auth}:{auth:Auth}) {
       },auth.csrf_token);
       setDrafts([]);
       setNotice(result.count+" video job(s) created. "+result.message);
+      setSection("overview");
       await refresh();await refreshOptions();
     }catch(e){setError((e as Error).message);}
     finally{setBusy(false);}
@@ -181,18 +183,26 @@ export function CompetitionScreen({auth}:{auth:Auth}) {
     <div className="page-heading"><div>
       <span className="eyebrow">ANNOTATIATHON · JOB OPERATIONS</span>
       <h2>Competition & Jobs</h2>
-      <p className="muted">One intact video per job, one assigned annotator. Each team member receives a different video and submits independently.</p>
+      <p className="muted">Create manual assignments, manage the publishing queue and configure optional automatic distribution in separate workspaces.</p>
     </div><button className="btn secondary" onClick={()=>{void refresh();void refreshOptions();}}>
       <RefreshCw size={15}/> Refresh status</button></div>
     {error&&<div role="alert" className="alert danger">{error}</div>}
     {notice&&<div role="status" className="alert success">{notice}</div>}
-    <div className="stat-grid compact">
+    <nav className="workspace-subtabs" aria-label="Competition and jobs sections">
+      <button className={section==="overview"?"active":""} onClick={()=>setSection("overview")}>
+        Jobs & worker queue</button>
+      {admin&&<button className={section==="manual"?"active":""} onClick={()=>setSection("manual")}>
+        Create video jobs</button>}
+      {admin&&<button className={section==="automatic"?"active":""} onClick={()=>setSection("automatic")}>
+        Automatic distribution</button>}
+    </nav>
+    {section==="overview"&&<div className="stat-grid compact">
       <div className="stat-card"><Layers3 size={19}/><span className="muted small">In queue / labeling</span><strong>{active}</strong></div>
       <div className="stat-card"><ClipboardCheck size={19}/><span className="muted small">Awaiting review</span><strong>{awaiting}</strong></div>
       <div className="stat-card"><CheckCircle2 size={19}/><span className="muted small">Accepted</span><strong>{complete}</strong></div>
     </div>
 
-    {admin&&<section className="panel manual-job-panel">
+    {admin&&section==="manual"&&<section className="panel manual-job-panel">
       <div className="panel-heading">
         <div><span className="eyebrow">DURING THE EVENT · MANUAL DISPATCH</span>
           <h3>Assign a video to an annotator</h3>
@@ -261,6 +271,7 @@ export function CompetitionScreen({auth}:{auth:Auth}) {
       </div>}
     </section>}
 
+    {section==="overview"&&<>
     <div className="content-grid competition-layout">
       <section className="panel">
         <span className="eyebrow">JOB INVENTORY</span><h3>Individual assignments</h3>
@@ -339,9 +350,14 @@ export function CompetitionScreen({auth}:{auth:Auth}) {
         <button className="btn secondary" disabled={page*50>=media.total} onClick={()=>setPage(n=>n+1)}>Next</button></div>
     </section>}
 
-    {admin&&<details className="panel manual-automatic-panel">
-      <summary><Layers3 size={17}/> Automatic distribution (optional)</summary>
-      <p className="muted small">Automatically allocate intact videos across teams. Jobs per team is a maximum capacity; redundancy means how many <strong>different teams</strong> receive a video, not how many people in one team get it. Within a team, videos alternate between the two annotators. Generating a plan does not publish jobs.</p>
+    </>}
+    {admin&&section==="automatic"&&<section className="panel manual-automatic-panel">
+      <div className="panel-heading"><div><span className="eyebrow">AUTOMATIC PLANNING</span>
+        <h3>Generate jobs from a video collection</h3>
+        <p>Automatically distribute whole videos across eligible teams, with one job per person and video.</p>
+      </div></div>
+
+      <p className="muted small">Each job contains exactly one entire video. <strong>Maximum jobs per team</strong> limits how many distinct video jobs a team receives. <strong>Different teams per video</strong> controls cross-team redundancy; it never creates duplicate copies for the two members of the same team. Jobs alternate between the two annotators. <strong>Maximum videos per team</strong> is an optional cap. Creating a plan is a draft: only approval and launch send it to the worker.</p>
       <div className="form-grid triple">
         <label>Maximum jobs per team<input type="number" min={1} max={100}
           value={jobsPerTeam} onChange={e=>setJobsPerTeam(Number(e.target.value))}/></label>
@@ -374,6 +390,6 @@ export function CompetitionScreen({auth}:{auth:Auth}) {
               "/native/plans/"+plan.id+"/resume","Resume automatic releases?")}>Resume</button>}
         </div>)}
       </div>
-    </details>}
+    </section>}
   </div>;
 }
