@@ -7,10 +7,11 @@ export type Person = {
   team_id: string | null; team_name: string | null; active: boolean;
   membership_status: string; supervisely_login: string | null;
   supervisely_role: string | null; native_verified_at: number | null;
-  check_in_at: number | null;
+  check_in_at: number | null; table_number: number | null;
 };
 export type Team = { id: string; name: string; type: string;
-  monitor_person_id?: string | null; monitor_name?: string | null; checked_in: number;
+  monitor_person_id?: string | null; monitor_name?: string | null;
+  table_number?: number | null; checked_in: number;
   first_check_in: number | null; members: Person[] };
 export type TeamResponse = { teams: Team[]; totals: { people: number; monitors: number; competition_teams: number } };
 export type PeopleResponse = { items: Person[]; total: number; page: number; size: number };

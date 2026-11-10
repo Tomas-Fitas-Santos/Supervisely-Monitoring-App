@@ -226,9 +226,11 @@ def state_data(db: Session, event_id: str) -> dict:
             "supervisely_login": p.supervisely_login,
             "supervisely_role": p.supervisely_role,
             "native_verified_at": p.native_verified_at,
-            "check_in_at": p.check_in_at, "source_fields": p.source_fields,
+            "check_in_at": p.check_in_at, "table_number": p.table_number,
+            "source_fields": p.source_fields,
         } for p in people],
-        "teams": [{"id": t.id, "name": t.name, "active": t.active} for t in teams],
+        "teams": [{"id": t.id, "name": t.name, "active": t.active,
+                   "table_number": t.table_number} for t in teams],
         "categories": [{
             "id": c.id, "slug": c.slug, "name": c.name, "active": c.active,
             "warning_enabled": c.warning_enabled,
@@ -417,10 +419,15 @@ def reset_selected(db: Session, event_id: str, actor: str, areas: list[str]) -> 
     if "tickets" in areas:
         reset_ticket_balances(db, event_id, actor)
     if "attendance" in areas:
+        for team in db.scalars(select(CompetitionTeam).where(
+            CompetitionTeam.event_id == event_id,
+        )):
+            team.table_number = None
         for person in db.scalars(select(Person).where(
             Person.event_id == event_id, Person.check_in_at.is_not(None)
         )):
             person.check_in_at = None
+            person.table_number = None
     if "invitations" in areas:
         for person in db.scalars(select(Person).where(
             Person.event_id == event_id, Person.membership_status == "reported_sent"

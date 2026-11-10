@@ -139,13 +139,13 @@ def test_archive_enforces_read_only_and_can_reopen(user):
         "confirmation": "Initial Event"
     })
     assert reopen.status_code == 200
-    assert mutation(http, csrf, "/attendance/" + pid + "/check-in").status_code == 200
+    assert mutation(http, csrf, "/attendance/" + pid + "/check-in", {"table_number": 7}).status_code == 200
 
 
 def test_selective_reset_is_audited_snapshot_export_and_zeroed_ledger(user):
     http, dbmaker, csrf = user
     person_id = add_person(http, csrf, "ticket@example.org")
-    assert mutation(http, csrf, "/attendance/" + person_id + "/check-in").status_code == 200
+    assert mutation(http, csrf, "/attendance/" + person_id + "/check-in", {"table_number": 7}).status_code == 200
     assert mutation(http, csrf, "/people/invitations-reported", {
         "person_ids": [person_id]
     }).status_code == 200

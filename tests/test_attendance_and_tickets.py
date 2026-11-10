@@ -146,7 +146,7 @@ def test_ticket_preview_is_snapshot_and_confirmation_is_idempotent(setup):
     a = new_person(client, csrf, "a@example.org", "Team One")
     b = new_person(client, csrf, "b@example.org", "Team One")
     category = new_category(client, csrf)
-    client.post("/api/v1/attendance/"+a+"/check-in", headers={"X-CSRF-Token": csrf})
+    client.post("/api/v1/attendance/"+a+"/check-in", headers={"X-CSRF-Token": csrf}, json={"table_number": 18})
     first = preview(client, csrf, category, scope="all_checked_in")
     assert first["count"] == 1
     assert first["recipients"][0]["id"] == a

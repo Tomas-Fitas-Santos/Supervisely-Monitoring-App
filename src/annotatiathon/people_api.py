@@ -82,7 +82,8 @@ def team_id(db: Session, team_name: str | None, event_id: str) -> str | None:
     return team.id
 
 
-def person_record(p: Person, team: str | None = None) -> dict:
+def person_record(p: Person, team: str | None = None,
+                  table_number: int | None = None) -> dict:
     return {
         "id": p.id, "name": p.name, "email": p.email, "kind": p.kind,
         "team_id": p.team_id, "team_name": team, "active": p.active,
@@ -91,6 +92,7 @@ def person_record(p: Person, team: str | None = None) -> dict:
         "supervisely_role": p.supervisely_role,
         "native_verified_at": p.native_verified_at,
         "check_in_at": p.check_in_at,
+        "table_number": table_number if p.team_id else p.table_number,
     }
 
 
@@ -131,11 +133,14 @@ def list_people(
         query.order_by(Person.kind.desc(), Person.name, Person.email)
         .offset((page - 1) * size).limit(size)
     ).all()
-    names = {t.id: t.name for t in db.scalars(select(CompetitionTeam).where(
+    teams_by_id = {t.id: t for t in db.scalars(select(CompetitionTeam).where(
         CompetitionTeam.event_id == event.id
     ))}
     return {
-        "items": [person_record(p, names.get(p.team_id)) for p in people],
+        "items": [person_record(
+            p, teams_by_id[p.team_id].name if p.team_id in teams_by_id else None,
+            teams_by_id[p.team_id].table_number if p.team_id in teams_by_id else None,
+        ) for p in people],
         "total": total, "page": page, "size": size,
     }
 
@@ -170,10 +175,11 @@ def list_teams(
         members = grouped.get(team.id, [])
         result.append({
             "id": team.id, "name": team.name, "type": "competition",
+            "table_number": team.table_number,
             "monitor_person_id": (responsibility.get(team.id)
                                   if responsibility.get(team.id) in monitor_names else None),
             "monitor_name": monitor_names.get(responsibility.get(team.id)),
-            "members": [person_record(p, team.name) for p in members],
+            "members": [person_record(p, team.name, team.table_number) for p in members],
             "checked_in": sum(1 for p in members if p.check_in_at),
             "first_check_in": min((p.check_in_at for p in members if p.check_in_at),
                                   default=None),

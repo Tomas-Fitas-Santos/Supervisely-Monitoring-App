@@ -85,6 +85,7 @@ class CompetitionTeam(Base):
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=identifier)
     name: Mapped[str] = mapped_column(String(200), index=True)
+    table_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[int] = mapped_column(Integer, default=epoch)
 
 
@@ -107,6 +108,7 @@ class Person(Base):
     supervisely_role: Mapped[str | None] = mapped_column(String(40), nullable=True)
     native_verified_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
     check_in_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    table_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
     source_fields: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[int] = mapped_column(Integer, default=epoch)
     updated_at: Mapped[int] = mapped_column(Integer, default=epoch, onupdate=epoch)
