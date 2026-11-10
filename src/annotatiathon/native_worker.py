@@ -326,7 +326,7 @@ def sync_all(db: Session, api, config: SuperviselyConfig) -> dict:
             before = job.status
             try:
                 after = sync_one(db, api, job)
-            except Exception:
+            except Exception:  # noqa: BLE001 - isolation of remote status errors
                 db.rollback()
                 logger.warning("Native status reconciliation requires inspection for job %s", job.id)
                 continue
@@ -372,7 +372,7 @@ def process_once(db: Session, api, config: SuperviselyConfig) -> dict | None:
     db.commit()
     try:
         details = publish_job(db, job, api, config)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - remote outcome may be uncertain
         db.rollback()
         failed = db.get(NativeOperation, opid)
         failed.status = "attention"
@@ -418,7 +418,7 @@ def run_worker(*, once: bool, poll_seconds: int) -> None:
                 if operation or sync_result["changed_jobs"]:
                     logger.info("Nightjar native worker: operation=%s sync=%s",
                                 operation, sync_result)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - keep long-lived worker alive
                 db.rollback()
                 logger.warning("Supervisely worker cycle failed (type %s); "
                                "no exception details logged.", type(exc).__name__)

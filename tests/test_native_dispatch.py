@@ -262,7 +262,7 @@ def test_initial_release_and_next_after_both_submit(configured):
         assert next_run["status"] == "done"
         assert len(sdk.datasets) == 2
         assert len(sdk.jobs) == 4
-        images_by_dataset = [set(i.id for i in sdk.images[d.id]) for d in sdk.datasets]
+        images_by_dataset = [{i.id for i in sdk.images[d.id]} for d in sdk.datasets]
         assert images_by_dataset[0].isdisjoint(images_by_dataset[1])
     overview = http.get("/api/v1/native/overview").json()
     assert overview["native_bindings"] == 4

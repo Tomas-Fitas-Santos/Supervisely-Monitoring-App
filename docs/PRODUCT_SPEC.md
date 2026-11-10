@@ -17,7 +17,7 @@ Professional browser login; organiser, monitor, reception, activity, distributio
 
 ## Logistics (agreed)
 - Roster CSV import populates PostgreSQL. Edit, add, deactivate and search participants/monitors. Teams have two participants; monitors are pinned first in team views. Sorting includes names and check-in order.
-- Fast QR-assisted or name/email/team lookup check-in; staff confirms identity. Duplicate scans do not duplicate attendance. No Supervisely identity capture at check-in.
+- Reception uses name/email/team lookup; staff confirms identity and enters the first member’s team table number. The partner automatically inherits the same table. No QR scan or Supervisely ID capture at entry. Duplicate check-ins do not duplicate attendance.
 - Ticket categories start with pizza, drinks and massage, and are organiser-configurable. Awarded/allocated, physically issued and redeemed must be distinct. A participant's history links each action to its source and staff actor.
 - Issue/grant to one person, selected people, teams, filtered groups, all checked-in people or everyone. Bulk operations have immutable recipient snapshots, a preview and idempotent batch execution.
 - Soft warnings only, never hard blocking. Defaults: warn when a new issuance exceeds 2 pizza tickets in the rolling last 60 minutes or exceeds 3 drink tickets in the same window. All thresholds, time windows, enabled states and categories are configurable. Massage has no default alert.
