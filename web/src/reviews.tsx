@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import {
-  CheckCircle2, ClipboardCheck, Image, RefreshCw, RotateCcw, ShieldCheck, UsersRound
+  CheckCircle2, ClipboardCheck, Image, RefreshCw, RotateCcw, ShieldCheck
 } from "lucide-react";
 import { api, type Auth } from "./api";
 
