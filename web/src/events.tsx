@@ -10,7 +10,7 @@ type EventRecord = {id:string;name:string;status:"active"|"archived";
   created_at:number;archived_at:number|null;reset_from_id:string|null};
 type EventList={items:EventRecord[];current_event_id:string};
 type ResetMode="selected"|"fresh";
-type ResetArea="attendance"|"invitations"|"tickets"|"roster"|"activities";
+type ResetArea="attendance"|"invitations"|"tickets"|"roster"|"activities"|"assignments";
 type ResetPreview={plan_id:string;event_id:string;event_name:string;mode:ResetMode;
   areas:ResetArea[];counts:{people:number;teams:number;checked_in:number;
     manual_invites:number;ticket_batches:number;ticket_ledger_entries:number;activities:number;activity_results:number;activity_awards:number};
@@ -23,6 +23,7 @@ const AREAS:{key:ResetArea;title:string;description:string}[]=[
   {key:"tickets",title:"Ticket balances",description:"Compensate allocations, issuance and redemption in the ledger; preserve transaction history and category policies."},
   {key:"roster",title:"People & Teams",description:"Archive roster entries and teams. Reset dependent ticket and activity results when present."},
   {key:"activities",title:"Activities & Prizes",description:"Archive activity schedules and ranked results. Also reset tickets when awards have been allocated."},
+  {key:"assignments",title:"Monitor assignments",description:"Clear monitor-to-team responsibilities without changing teams, staff roles or Supervisely."},
 ];
 const stamp=(v:number)=>new Date(v*1000).toLocaleString();
 

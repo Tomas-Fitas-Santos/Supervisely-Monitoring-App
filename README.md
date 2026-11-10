@@ -70,7 +70,7 @@ alembic upgrade head
 alembic current
 ```
 
-The new revision is `0005_native (head)`. Restart the backend and the Vite development server to see the new Check-in, Tickets & Rewards and Staff Access tabs.
+The new revision is `0006_monitor_assignments (head)`. Restart the backend and the Vite development server to see the new Check-in, Tickets & Rewards and Staff Access tabs.
 
 **Windows note:** if your machine's Application Control blocks SQLAlchemy compiled wheels, retain your working pure-Python SQLAlchemy installation; upgrading the app does not require reinstalling SQLAlchemy. Use `npm.cmd` instead of `npm` when PowerShell blocks npm scripts.
 
@@ -91,6 +91,12 @@ In the **backend-only** untracked `.env`, set `SUPERVISELY_API_TOKEN` to the tok
 2. In **People & Teams → Verify & reconcile the team**, click **Refresh from Supervisely**. Review matched identities, role warnings, unlinked native accounts and unmatched roster entries. Email matching is exact; native username and ID are used when already verified. When an email is missing, explicitly associate that account with its roster entry.
 3. Confirm **local reconciliation**. The server rechecks the same team, the roster and the remote membership fingerprint and refuses to apply a stale preview. Matched active roster members are marked `joined` and their native login, ID and role are saved in the selected event. Unmatched roster members are left unchanged: absence from `members.list` is not proof of an unsent invitation.
 4. **No invitations, role changes, user removal or other remote mutations** occur in this milestone. There is no in-app demo workflow. The SDK semantics are grounded in the official UserApi member list and Supervisely REST endpoints. An actual live token acceptance check on the user's Pro team remains required.
+
+## Event-local monitor responsibilities
+
+In **People & Teams → Monitor assignments**, assign each competition pair to a responsible monitor or preview a balanced distribution. **Fill only unassigned** preserves existing assignments and assigns remaining teams to the least-loaded monitor. **Rebalance all** recalculates responsibility for every active competition team. The organiser reviews the deterministic plan and confirms, with a ten-minute expiry and roster fingerprint validation to prevent stale changes. Manual moves are audited. The Teams list displays the responsible monitor.
+
+These responsibilities are independent of native Supervisely admin/manager roles and **do not modify labeling jobs**. Event archiving makes responsibility data read-only; selective resets can clear just monitor assignments, while resetting People & Teams automatically clears them too.
 
 ## Working with the application
 

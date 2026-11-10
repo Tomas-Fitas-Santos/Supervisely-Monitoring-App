@@ -25,6 +25,7 @@ from .models import (
     CompetitionTeam,
     Event,
     EventSnapshot,
+    MonitorAssignment,
     Person,
     ResetPlan,
     TicketCategory,
@@ -34,7 +35,7 @@ from .models import (
 )
 
 router = APIRouter(prefix="/api/v1/events", tags=["events"])
-AREAS = ("attendance", "invitations", "tickets", "roster", "activities")
+AREAS = ("attendance", "invitations", "tickets", "roster", "activities", "assignments")
 
 
 def current_event(
@@ -201,6 +202,9 @@ def state_data(db: Session, event_id: str) -> dict:
     ledger = list(db.scalars(select(TicketLedgerEntry).where(
         TicketLedgerEntry.event_id == event_id
     ).order_by(TicketLedgerEntry.id)))
+    assignments = list(db.scalars(select(MonitorAssignment).where(
+        MonitorAssignment.event_id == event_id
+    ).order_by(MonitorAssignment.id)))
     activities = list(db.scalars(select(Activity).where(
         Activity.event_id == event_id
     ).order_by(Activity.id)))
@@ -241,6 +245,10 @@ def state_data(db: Session, event_id: str) -> dict:
             "category_id": entry.category_id, "kind": entry.kind,
             "quantity": entry.quantity,
         } for entry in ledger],
+        "monitor_assignments": [{
+            "id": a.id, "team_id": a.team_id,
+            "monitor_person_id": a.monitor_person_id, "active": a.active,
+        } for a in assignments],
         "activities": [{
             "id": a.id, "name": a.name, "description": a.description,
             "location": a.location, "start_at": a.start_at, "end_at": a.end_at,
@@ -280,6 +288,9 @@ def reset_summary(state: dict) -> dict:
         ),
         "ticket_batches": sum(1 for b in state["batches"] if b["status"] == "confirmed"),
         "ticket_ledger_entries": len(state["ledger"]),
+        "monitor_assignments": sum(
+            1 for a in state["monitor_assignments"] if a["active"]
+        ),
         "activities": sum(1 for a in state["activities"] if a["active"]),
         "activity_results": len(state["activity_results"]),
         "activity_awards": len(state["activity_awards"]),
@@ -289,8 +300,10 @@ def reset_summary(state: dict) -> dict:
 class ResetRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     mode: Literal["selected", "fresh"]
-    areas: list[Literal["attendance", "invitations", "tickets", "roster", "activities"]] = Field(
-        default_factory=list, max_length=5
+    areas: list[Literal[
+        "attendance", "invitations", "tickets", "roster", "activities", "assignments"
+    ]] = Field(
+        default_factory=list, max_length=6
     )
 
 
@@ -419,6 +432,12 @@ def reset_selected(db: Session, event_id: str, actor: str, areas: list[str]) -> 
             Activity.event_id == event_id, Activity.active.is_(True)
         )):
             activity.active = False
+    if "assignments" in areas or "roster" in areas:
+        for mapping in db.scalars(select(MonitorAssignment).where(
+            MonitorAssignment.event_id == event_id,
+            MonitorAssignment.active.is_(True),
+        )):
+            mapping.active = False
     if "roster" in areas:
         # Archive rather than delete: old ledger and audit identities remain intact.
         for person in db.scalars(select(Person).where(Person.event_id == event_id)):

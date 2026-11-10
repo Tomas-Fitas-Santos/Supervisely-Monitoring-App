@@ -293,3 +293,33 @@ class NativeSyncPlan(Base):
     expires_at: Mapped[int] = mapped_column(Integer)
     applied_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[int] = mapped_column(Integer, default=epoch)
+
+
+class MonitorAssignment(Base):
+    """Event-local responsibility assignment; never changes native Supervisely roles."""
+
+    __tablename__ = "monitor_assignments"
+    __table_args__ = (UniqueConstraint("team_id", name="uq_monitor_assignment_team"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=identifier)
+    event_id: Mapped[str] = mapped_column(ForeignKey("events.id"), index=True)
+    team_id: Mapped[str] = mapped_column(ForeignKey("competition_teams.id"), index=True)
+    monitor_person_id: Mapped[str] = mapped_column(ForeignKey("people.id"), index=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    assigned_by: Mapped[str] = mapped_column(ForeignKey("staff_accounts.id"))
+    created_at: Mapped[int] = mapped_column(Integer, default=epoch)
+    updated_at: Mapped[int] = mapped_column(Integer, default=epoch, onupdate=epoch)
+
+
+class MonitorAssignmentPlan(Base):
+    """Short-lived balanced allocation proposal; optimistic snapshot validation."""
+
+    __tablename__ = "monitor_assignment_plans"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=identifier)
+    event_id: Mapped[str] = mapped_column(ForeignKey("events.id"), index=True)
+    staff_id: Mapped[str] = mapped_column(ForeignKey("staff_accounts.id"))
+    mode: Mapped[str] = mapped_column(String(20))
+    roster_digest: Mapped[str] = mapped_column(String(64))
+    proposals: Mapped[list[dict]] = mapped_column(JSON)
+    expires_at: Mapped[int] = mapped_column(Integer)
+    applied_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[int] = mapped_column(Integer, default=epoch)

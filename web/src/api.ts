@@ -9,7 +9,8 @@ export type Person = {
   supervisely_role: string | null; native_verified_at: number | null;
   check_in_at: number | null;
 };
-export type Team = { id: string; name: string; type: string; checked_in: number;
+export type Team = { id: string; name: string; type: string;
+  monitor_person_id?: string | null; monitor_name?: string | null; checked_in: number;
   first_check_in: number | null; members: Person[] };
 export type TeamResponse = { teams: Team[]; totals: { people: number; monitors: number; competition_teams: number } };
 export type PeopleResponse = { items: Person[]; total: number; page: number; size: number };

@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 import { api, type Auth, type PeopleResponse, type Person, type Team, type TeamResponse } from "./api";
 import { NativeMembershipPanel } from "./native";
+import { MonitorAssignmentsPanel } from "./monitoring";
 
 type PersonForm = {name:string;email:string;kind:"participant"|"monitor";team_name:string};
 const emptyForm: PersonForm = {name:"",email:"",kind:"participant",team_name:""};
@@ -207,6 +208,7 @@ export function PeopleScreen({auth}:{auth:Auth}) {
     </div>}
     {showImporter&&admin&&<RosterImporter auth={auth} onComplete={()=>{setShowImporter(false);void refresh();}}/>}
     {admin&&<NativeMembershipPanel auth={auth} onApplied={()=>void refresh()}/>}
+    {admin&&<MonitorAssignmentsPanel auth={auth} onApplied={()=>void refresh()}/>}
     <section className="panel table-panel">
       <div className="panel-header-line">
         <div className="segmented"><button className={mode==="teams"?"selected":""}
@@ -233,6 +235,7 @@ export function PeopleScreen({auth}:{auth:Auth}) {
         <div className="team-detail">
           <button className="back-link" onClick={()=>setSelectedTeam(null)}><ChevronLeft size={16}/> All teams</button>
           <div className="team-detail-header"><h3>{activeTeam.name}</h3>
+            {activeTeam.type==="competition"&&<span className="soft-pill">Responsible monitor: {activeTeam.monitor_name||"Unassigned"}</span>}
             <span className="soft-pill">{activeTeam.members.length} member(s)</span></div>
           {peopleTable(activeTeam.members,false)}
         </div>:
@@ -242,6 +245,7 @@ export function PeopleScreen({auth}:{auth:Auth}) {
           <div className="team-main"><strong>{team.name}</strong>
             <span>{team.type==="monitoring"?"Pinned · Event staff":team.members.map(p=>p.name).join(" · ")||"No participants assigned"}</span></div>
           <span className="team-count">{team.members.length} members</span>
+          {team.type==="competition"&&<span className="team-monitor-name">{team.monitor_name||"Monitor unassigned"}</span>}
           <span className="team-attendance">{team.checked_in} checked in</span>
           <ChevronRight size={18} className="muted-icon"/>
         </button>)}{shownTeams.length===0&&<div className="empty-table">No teams found.</div>}</div>)

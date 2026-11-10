@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from .auth import AuthContext, normalized_email, requires
 from .db import get_db
 from .events_api import current_event
-from .models import AuditEvent, CompetitionTeam, ImportBatch, Person
+from .models import AuditEvent, CompetitionTeam, ImportBatch, MonitorAssignment, Person
 
 router = APIRouter(prefix="/api/v1", tags=["people"])
 VIEWER = ("organiser", "monitor", "reception", "activity", "distribution", "observer")
@@ -153,6 +153,15 @@ def list_teams(
     people = list(db.scalars(select(Person).where(
         Person.event_id == event.id, Person.active.is_(True)
     )))
+    monitor_names = {p.id: p.name for p in people if p.kind == "monitor"}
+    responsibility = {
+        item.team_id: item.monitor_person_id for item in db.scalars(
+            select(MonitorAssignment).where(
+                MonitorAssignment.event_id == event.id,
+                MonitorAssignment.active.is_(True),
+            )
+        )
+    }
     grouped: dict[str | None, list[Person]] = defaultdict(list)
     for person in people:
         grouped[person.team_id if person.kind == "participant" else None].append(person)
@@ -161,6 +170,9 @@ def list_teams(
         members = grouped.get(team.id, [])
         result.append({
             "id": team.id, "name": team.name, "type": "competition",
+            "monitor_person_id": (responsibility.get(team.id)
+                                  if responsibility.get(team.id) in monitor_names else None),
+            "monitor_name": monitor_names.get(responsibility.get(team.id)),
             "members": [person_record(p, team.name) for p in members],
             "checked_in": sum(1 for p in members if p.check_in_at),
             "first_check_in": min((p.check_in_at for p in members if p.check_in_at),
