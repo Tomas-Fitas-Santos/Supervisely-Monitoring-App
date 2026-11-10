@@ -45,6 +45,8 @@ class MockSDK:
 
     def __init__(self):
         self.projects = []
+        self.project_metas = {}
+        self.meta_updates = []
         self.datasets = []
         self.images = {}
         self.jobs = []
@@ -53,6 +55,8 @@ class MockSDK:
         self.project = Obj(
             get_list=self.projects_list,
             create=self.project_create,
+            get_meta=self.projects_get_meta,
+            update_meta=self.projects_update_meta,
             get_info_by_id=lambda ident: next(
                 (p for p in self.projects if p.id == ident), None
             ),
@@ -83,10 +87,21 @@ class MockSDK:
     def projects_list(self, workspace_id):
         return [p for p in self.projects if p.workspace_id == workspace_id]
 
+    def projects_get_meta(self, project_id):
+        return json.loads(json.dumps(self.project_metas[project_id]))
+
+    def projects_update_meta(self, project_id, metadata):
+        self.meta_updates.append(project_id)
+        self.project_metas[project_id] = json.loads(json.dumps(metadata))
+        return metadata
+
     def project_create(self, workspace_id, name, **kwargs):
         assert kwargs["change_name_if_conflict"] is False
         p = Obj(id=self.new_id(), workspace_id=workspace_id, name=name)
         self.projects.append(p)
+        self.project_metas[p.id] = {
+            "projectType": "images", "classes": [], "tags": []
+        }
         return p
 
     def datasets_list(self, project_id):
