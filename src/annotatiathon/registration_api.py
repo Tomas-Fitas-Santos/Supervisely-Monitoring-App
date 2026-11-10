@@ -82,22 +82,22 @@ def create_monitor_account(
         roles=["monitor"],
     )
     db.add(staff)
-    db.flush()
-    db.add(AuditEvent(
-        staff_id=staff.id,
-        event_id=person.event_id,
-        action="staff.monitor.self_register",
-        target_type="staff",
-        target_id=staff.id,
-        details={
-            "roster_person_id": person.id,
-            "matched_approved_roster_email": True,
-            "email_ownership_verified": False,
-            "roles": ["monitor"],
-            "supervisely_linked": False,
-        },
-    ))
     try:
+        db.flush()
+        db.add(AuditEvent(
+            staff_id=staff.id,
+            event_id=person.event_id,
+            action="staff.monitor.self_register",
+            target_type="staff",
+            target_id=staff.id,
+            details={
+                "roster_person_id": person.id,
+                "matched_approved_roster_email": True,
+                "email_ownership_verified": False,
+                "roles": ["monitor"],
+                "supervisely_linked": False,
+            },
+        ))
         db.commit()
     except IntegrityError as exc:
         db.rollback()
