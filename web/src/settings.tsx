@@ -8,12 +8,14 @@ type Shared={server_url:string;team_id:number|null;workspace_id:number|null;
   verified:boolean;last_verified_at:number|null;editable:boolean};
 type Personal={linked:boolean;user_id:number|null;login:string|null;role:string|null;
   verified_team_id:number|null;verified_at:number|null;matches_current_team:boolean};
+type MailStatus={configured:boolean;sender:string|null;port:number|null;ssl:boolean|null};
 
 export function SettingsScreen({auth}:{auth:Auth}) {
   const organiser=auth.staff.roles.includes("organiser");
   const [shared,setShared]=useState<Shared|null>(null);
   const [personal,setPersonal]=useState<Personal|null>(null);
   const [config,setConfig]=useState<Integration|null>(null);
+  const [emailDelivery,setEmailDelivery]=useState<MailStatus|null>(null);
   const [server,setServer]=useState("https://app.supervisely.com");
   const [team,setTeam]=useState("");
   const [workspace,setWorkspace]=useState("");
@@ -30,8 +32,11 @@ export function SettingsScreen({auth}:{auth:Auth}) {
     ]);
     setShared(teamSettings);setPersonal(link);
     if(organiser){
-      const result=await api<Integration>("/settings/supervisely");
-      setConfig(result);
+      const [result,mail]=await Promise.all([
+        api<Integration>("/settings/supervisely"),
+        api<MailStatus>("/settings/registration-email"),
+      ]);
+      setConfig(result);setEmailDelivery(mail);
       setServer(result.settings.server_url);
       setTeam(String(result.settings.team_id??""));
       setWorkspace(String(result.settings.workspace_id??""));
@@ -71,6 +76,13 @@ export function SettingsScreen({auth}:{auth:Auth}) {
         {api_token:myToken},auth.csrf_token);
       setMyToken("");
       setMessage("Your Supervisely account was verified and linked. Personal token not stored.");
+    });
+  }
+  function sendTestEmail() {
+    void work(async()=>{
+      const result=await api<{sent:boolean;message:string}>(
+        "/settings/registration-email/test","POST",undefined,auth.csrf_token);
+      setMessage(result.message+" Check "+auth.staff.email+" (including spam).");
     });
   }
 
@@ -138,6 +150,23 @@ export function SettingsScreen({auth}:{auth:Auth}) {
             <strong>{config?.credential_configured?"Encrypted and saved":"Not configured"}</strong></div>
           <div className="settings-row"><span>Team verified</span>
             <strong>{config?.verified?"Yes":"Not yet"}</strong></div>
+          <div className="settings-divider"/>
+          <h3>Monitor account verification emails</h3>
+          <p className="muted">Approved monitors can register themselves after entering
+            a one-time email code. Configure SMTP in your private Docker .env.live,
+            then verify delivery before sharing the Nightjar link.</p>
+          <div className="settings-row"><span>Email sending</span>
+            <strong>{emailDelivery?.configured?"Configured":"Not configured"}</strong></div>
+          {emailDelivery?.sender&&<div className="settings-row"><span>Sender address</span>
+            <strong>{emailDelivery.sender}</strong></div>}
+          <button type="button" className="btn secondary"
+            disabled={busy||!emailDelivery?.configured} onClick={sendTestEmail}>
+            <CheckCircle2 size={16}/> Send test to my organiser email
+          </button>
+          {!emailDelivery?.configured&&<p className="muted small">
+            Set SMTP_HOST, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD and SMTP_SENDER
+            in .env.live, then recreate the API container. Your SMTP password
+            is never displayed in Nightjar.</p>}
         </>}
       </section>
 
