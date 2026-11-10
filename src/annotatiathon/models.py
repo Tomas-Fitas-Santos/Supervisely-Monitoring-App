@@ -83,6 +83,17 @@ class StaffAccount(Base):
     created_at: Mapped[int] = mapped_column(Integer, default=epoch)
 
 
+class RegistrationChallenge(Base):
+    """Single-use email verification; only pre-registered event monitors qualify."""
+
+    __tablename__ = "registration_challenges"
+    email: Mapped[str] = mapped_column(String(320), primary_key=True)
+    code_digest: Mapped[str] = mapped_column(String(128))
+    expires_at: Mapped[int] = mapped_column(Integer)
+    requested_at: Mapped[int] = mapped_column(Integer)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+
+
 class StaffSession(Base):
     __tablename__ = "staff_sessions"
     event_id: Mapped[str | None] = mapped_column(ForeignKey("events.id"), nullable=True)
@@ -137,6 +148,7 @@ class SuperviselyConfig(Base):
     )
     team_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     workspace_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    token_ciphertext: Mapped[str | None] = mapped_column(Text, nullable=True)
     verified: Mapped[bool] = mapped_column(Boolean, default=False)
     last_verified_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
     last_error_code: Mapped[str | None] = mapped_column(String(40), nullable=True)
