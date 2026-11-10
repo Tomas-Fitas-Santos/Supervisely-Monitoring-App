@@ -240,3 +240,89 @@ def test_pending_invitation_role_edit_does_not_silently_diverge(setup):
     assert "pending" in response.json()["detail"].lower()
     with maker() as db:
         assert db.get(Person, person_id).kind == "monitor"
+
+
+
+def test_saving_existing_participant_repairs_stale_native_manager_role(setup):
+    """Regression: screenshot shows Participant in app, Manager on Supervisely."""
+    http, maker, monkeypatch = setup
+    csrf = login(http)
+    calls = []
+
+    def update(config, *, user_id, target_role, expected_role):
+        calls.append((user_id, target_role, expected_role))
+        return NativeMember(id=user_id, login="other", email="other@example.org",
+                            role="annotator")
+
+    monkeypatch.setattr("annotatiathon.people_api.change_member_role", update)
+    with maker.begin() as db:
+        db.add(Person(
+            event_id=DEFAULT_EVENT_ID, name="Other", email="other@example.org",
+            kind="participant", membership_status="joined",
+            supervisely_user_id=8803, supervisely_role="manager",
+            supervisely_login="other",
+        ))
+    person_id = next(p["id"] for p in http.get("/api/v1/people").json()["items"]
+                     if p["email"] == "other@example.org")
+    result = http.patch("/api/v1/people/" + person_id, headers=csrf,
+                        json={"kind": "participant", "name": "Other"})
+    assert result.status_code == 200, result.text
+    assert calls == [(8803, "annotator", "manager")]
+    assert result.json()["kind"] == "participant"
+    assert result.json()["supervisely_role"] == "annotator"
+    with maker() as db:
+        person = db.get(Person, person_id)
+        assert person.kind == "participant"
+        assert person.supervisely_role == "annotator"
+
+
+def test_mismatched_native_role_save_failure_does_not_claim_success(setup):
+    http, maker, monkeypatch = setup
+    csrf = login(http)
+
+    def broken(*args, **kwargs):
+        raise NativeAPIError(
+            "timeout", "Supervisely timed out; retry later.",
+        )
+
+    monkeypatch.setattr("annotatiathon.people_api.change_member_role", broken)
+    with maker.begin() as db:
+        db.add(Person(
+            event_id=DEFAULT_EVENT_ID, name="Mismatch",
+            email="mismatch@example.org", kind="participant",
+            membership_status="joined", supervisely_user_id=8810,
+            supervisely_role="manager",
+        ))
+    person_id = next(p["id"] for p in http.get("/api/v1/people").json()["items"]
+                     if p["email"] == "mismatch@example.org")
+    result = http.patch("/api/v1/people/" + person_id, headers=csrf,
+                        json={"kind": "participant", "name": "Not applied"})
+    assert result.status_code == 502, result.text
+    assert "Supervisely timed out" in result.text
+    with maker() as db:
+        person = db.get(Person, person_id)
+        assert person.name == "Mismatch"
+        assert person.supervisely_role == "manager"
+
+
+def test_normal_roster_edit_does_not_call_native_when_roles_match(setup):
+    http, maker, monkeypatch = setup
+    csrf = login(http)
+    calls = []
+    monkeypatch.setattr(
+        "annotatiathon.people_api.change_member_role",
+        lambda *args, **kwargs: calls.append(1),
+    )
+    with maker.begin() as db:
+        db.add(Person(event_id=DEFAULT_EVENT_ID, name="Good",
+            email="good@example.org", kind="monitor",
+            membership_status="joined", supervisely_user_id=9001,
+            supervisely_role="manager",
+        ))
+    person_id = next(p["id"] for p in http.get("/api/v1/people").json()["items"]
+                     if p["email"] == "good@example.org")
+    result = http.patch("/api/v1/people/" + person_id, headers=csrf,
+                        json={"kind": "monitor", "name": "Updated"})
+    assert result.status_code == 200, result.text
+    assert result.json()["name"] == "Updated"
+    assert calls == []
