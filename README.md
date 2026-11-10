@@ -14,6 +14,15 @@
 
 **Implemented locally:** manual identity-confirmed check-in and shared team table assignments (no QR), activities and prizes, real ZIP/folder dataset import, balanced pair job planning, native job dispatch and status polling, monitor scoring/correction, and closing/exporting events. **Not yet live-verified:** two-account collaborative annotation semantics, native login-based invitation handling, load tests and deployment. Reported invitations are never treated as verified membership.
 
+## Secure self-registration and configuration
+
+- Import the official CSV with monitors marked as `monitor` before inviting monitors to create Nightjar accounts.
+- Configure an SMTP server for email verification and a stable `NIGHTJAR_ENCRYPTION_KEY`. Do not put a Supervisely token in `.env`.
+- Monitor: choose **Create monitor account** on the Nightjar login page, verify the emailed 8-digit code, set a password, and log in.
+- Monitor: under **Settings**, optionally verify their personal Supervisely account by pasting a token. That token is discarded after verification.
+- Organiser: save the shared Supervisely Team ID, Workspace ID, and encrypted admin/manager integration token in Settings.
+- Distinguish a verified native team member appearing in the roster from an authorised Nightjar monitor login. Only an approved organiser/CSV roster monitor can register.
+
 ## Start locally on Windows
 
 Requires Python 3.12+, Docker Desktop with Compose, Node.js 22+ and npm.
@@ -38,7 +47,7 @@ Create the first organiser (no account/password is baked into the code or reposi
 python -m annotatiathon.manage create-staff --email "organiser@your-domain.pt" --name "Event Organiser" --roles organiser
 ```
 
-A password is prompted securely; it is not passed on the command line. For additional staff, use the same command with roles such as `monitor,reception` or `activity,distribution`.
+A password is prompted securely; it is not passed on the command line. Organisers are provisioned by this command. **Monitors can instead self-register** from the login page if their email appears as an active `monitor` in the official event roster. They receive an eight-digit code by email and choose their own 12+-character password. An email imported automatically from Supervisely does not qualify for self-registration until explicitly approved in the roster. For other staff roles, use the same command with roles such as `reception` or `activity,distribution`.
 
 Start the backend in **Terminal 1**:
 
@@ -85,12 +94,12 @@ The new revision is `0010_pair_queue (head)`. Restart the backend and the Vite d
 
 ## Native Supervisely verification and read-only membership reconciliation
 
-In the **backend-only** untracked `.env`, set `SUPERVISELY_API_TOKEN` to the token of an authorised organiser account; restart the backend after editing the file. Do not put this token in the browser, chat, frontend configuration, commits or screenshots. The default allowlisted server is `app.supervisely.com`. For trusted enterprise domains, explicitly configure `SUPERVISELY_ALLOWED_HOSTS` on the server.
+The organiser now configures **Team ID, Workspace ID and the shared Supervisely API token directly in Settings**. The token is verified against the live team, encrypted with `NIGHTJAR_ENCRYPTION_KEY`, and stored in PostgreSQL. The encryption key is a stable application secret supplied by the deployment environment (or an untracked local `.env`) and must be backed up separately from PostgreSQL. The token is never returned to the frontend after submission. Generate a Fernet key with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`. `SUPERVISELY_API_TOKEN` is no longer used or required in `.env`. Configure `SMTP_HOST`, `SMTP_PORT`, `SMTP_SENDER` and any needed `SMTP_USERNAME`/`SMTP_PASSWORD` for monitor email verification. The default allowlisted Supervisely host is `app.supervisely.com`.
 
-1. In **Settings → Supervisely**, enter team ID and (optionally) workspace ID, save and click **Verify connection**. This sends only read requests to official Supervisely API endpoints `users.me`, `teams.info`, `workspaces.info` (when configured) and paginated `members.list`.
-2. In **People & Teams → Verify & reconcile the team**, click **Refresh from Supervisely**. Review matched identities, role warnings, unlinked native accounts and unmatched roster entries. Email matching is exact; native username and ID are used when already verified. When an email is missing, explicitly associate that account with its roster entry.
+1. Organiser: in **Settings → Team & Workspace**, save team and workspace IDs; paste a personal admin/manager Supervisely token under **Organiser integration token** and click **Verify and save token**. This uses read requests to `users.me`, `teams.info`, `workspaces.info` and `members.list`. All monitors see the shared IDs but only the organiser can change them.
+2. In **People & Teams**, click **Refresh from Supervisely** to update local joined members and add new participants/monitors with a unique native email. Opening the app and relevant pages also triggers a rate-limited sync. To resolve unlinked accounts, use **Verify & reconcile the team** and click **Refresh from Supervisely** there. Review matched identities, role warnings, unlinked native accounts and unmatched roster entries. Email matching is exact; native username and ID are used when already verified. When an email is missing, explicitly associate that account with its roster entry.
 3. Confirm **local reconciliation**. The server rechecks the same team, the roster and the remote membership fingerprint and refuses to apply a stale preview. Matched active roster members are marked `joined` and their native login, ID and role are saved in the selected event. Unmatched roster members are left unchanged: absence from `members.list` is not proof of an unsent invitation.
-4. Connection verification and membership reconciliation are read-only; native publishing occurs only after explicit organiser launch and starting the optional SDK worker. Native invitation/role mutations are still not automatic. There is no in-app demo workflow. The SDK semantics are grounded in the official UserApi member list and Supervisely REST endpoints. An actual live token acceptance check on the user's Pro team remains required.
+4. The team integration is shared by the event, and all monitor logins can use **Settings → My Supervisely connection** to paste and verify their own token. Personal tokens are **not stored**; the verified account ID, login, and role are linked to the Nightjar staff account. Team ID and workspace ID remain organiser-only. Connection verification and membership reconciliation are read-only; native publishing occurs only after explicit organiser launch and starting the optional SDK worker. Native invitation/role mutations are still not automatic. There is no in-app demo workflow. The SDK semantics are grounded in the official UserApi member list and Supervisely REST endpoints. An actual live token acceptance check on the user's Pro team remains required.
 
 ## Event-local monitor responsibilities
 
@@ -108,7 +117,7 @@ These responsibilities are independent of native Supervisely admin/manager roles
 7. Under **Staff Access**, organisers can add **monitor** alongside **organiser** on the same staff account. This changes account permissions, not the attendee Monitoring Team listing.
 8. In **Settings**, configure the Supervisely server, team ID (the existing team is 125980) and workspace ID. This does not yet verify API access or alter Supervisely.
 
-Only the current screen refreshes while open, every five seconds. There are no background full-dataset network scans. Switching tabs loads current data immediately.
+Only the current screen refreshes its local PostgreSQL view while open, every five seconds. Supervisely roster reads are separately throttled (60 seconds) on app load and navigation, with **Refresh from Supervisely** available in People & Teams and Check-in for an immediate live check. There are no background full-dataset network scans.
 
 ## Tests and safety
 
@@ -125,7 +134,7 @@ Architecture, scope and remaining acceptance gates are documented under `docs/`.
 
 ## SDK-based Supervisely publishing (optional, live operations)
 
-The local competition queue uses a **separate explicit SDK worker**, not HTTP requests tied to the page. Install with `python -m pip install -e ".[native]"`. Configure `SUPERVISELY_API_TOKEN` in the backend-only untracked `.env`, verify the team and workspace from Settings, reconcile both native participant IDs, upload a local dataset, generate and approve the distribution plan, and click **Launch event**. Start the worker in a third terminal: `python -m annotatiathon.native_worker --loop --poll-seconds 12`. For one cycle only, use `--once`. The server remains responsive; no native writes occur until an organiser launches and a worker is running.
+The local competition queue uses a **separate explicit SDK worker**, not HTTP requests tied to the page. Install with `python -m pip install -e ".[native]"`. Save the encrypted organiser token in Settings, verify the team and workspace from Settings, reconcile both native participant IDs, upload a local dataset, generate and approve the distribution plan, and click **Launch event**. Start the worker in a third terminal: `python -m annotatiathon.native_worker --loop --poll-seconds 12`. For one cycle only, use `--once`. The server remains responsive; no native writes occur until an organiser launches and a worker is running.
 
 Native jobs are published in **two records per two-person team** using `api.labeling_job.create(name, dataset_id, user_ids=[...], images_ids=[...])`. Each pair job receives its own Supervisely dataset of copied image/frame assets, protecting overlapping jobs from other teams from sharing annotation IDs. Both native users receive one native labeling job over that pair-specific dataset. The SDK returns separate job entities and does **not** prove that both users can concurrently edit a single shared answer; perform a live two-account collaboration acceptance test before the official event. Worker errors enter an explicit attention state and never silently retry uncertain remote writes. After inspecting remote state, use the displayed **Retry** command; it reconciles deterministic project/dataset names, media IDs and native jobs rather than blindly duplicating them.
 
