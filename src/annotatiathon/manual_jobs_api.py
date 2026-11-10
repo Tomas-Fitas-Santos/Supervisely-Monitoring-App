@@ -16,8 +16,13 @@ from .datasets_api import get_dataset
 from .db import get_db
 from .events_api import current_event
 from .models import (
-    AuditEvent, CompetitionTeam, LabelingJob, LabelingPlan, MediaAsset,
-    Event, Person,
+    AuditEvent,
+    CompetitionTeam,
+    Event,
+    LabelingJob,
+    LabelingPlan,
+    MediaAsset,
+    Person,
 )
 from .native_operations_api import native_ready, queue_publish
 from .pair_members import pair_members
