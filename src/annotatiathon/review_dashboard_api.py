@@ -4,6 +4,7 @@ All event monitors can inspect team aggregates. Annotation review data and
 write access are intentionally handled by the team-assigned review routes.
 Ranking is based on actually *scored* keypoints, not empty/unreviewed frames.
 """
+import json
 from collections import defaultdict
 from pathlib import Path
 
@@ -76,14 +77,26 @@ def team_statistics(db: Session, event_id: str) -> list[dict]:
         # Submitted frames are known from the job manifest; label-bearing
         # frames would require reviewing the actual annotation JSON.
         frames_submitted = sum(job.frame_count for job in submitted)
-        synced = sum(
-            job.frame_count for job in submitted
-            if (job.dataset_id in datasets and (
-                Path(datasets[job.dataset_id].root_path) /
-                "annotations" / job.id /
-                ("round-" + str(job.correction_round)) / "manifest.json"
-            ).is_file())
-        )
+        synced = 0
+        annotated_frames = 0
+        has_annotation_counts = False
+        for job in submitted:
+            dataset = datasets.get(job.dataset_id)
+            if dataset is None:
+                continue
+            manifest = (Path(dataset.root_path) / "annotations" / job.id /
+                        ("round-" + str(job.correction_round)) / "manifest.json")
+            if not manifest.is_file():
+                continue
+            synced += job.frame_count
+            try:
+                details = json.loads(manifest.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            count = details.get("annotated_frames")
+            if type(count) is int and 0 <= count <= job.frame_count:
+                annotated_frames += count
+                has_annotation_counts = True
         rows.append({
             "team_id": team.id, "team_name": team.name,
             "monitor_person_id": monitors.get(team.id),
@@ -94,6 +107,7 @@ def team_statistics(db: Session, event_id: str) -> list[dict]:
             "frames_assigned": total_frames,
             "frames_submitted": frames_submitted,
             "frames_synced": synced,
+            "frames_annotated": annotated_frames if has_annotation_counts else None,
             "frames_reviewed": len({(r.job_id, r.media_id) for r in evaluated}),
             "correct_keypoints": correct, "missing_keypoints": missing,
             "incorrect_keypoints": incorrect,
@@ -143,6 +157,6 @@ def team_metrics(
         "ranking_status": "provisional",
         "accuracy_definition": "Correct / (correct + missing + incorrect) reviewed keypoints",
         "time_definition": "Seconds from job start to submission / frames in timed jobs",
-        "frames_definition": "Submitted and synced frames are not necessarily annotated frames",
+        "frames_definition": "Annotated frames contain at least one downloaded Supervisely label; historical jobs may lack this count",
         "winner_policy": "Not final until all relevant submissions are scored and accepted",
     }
