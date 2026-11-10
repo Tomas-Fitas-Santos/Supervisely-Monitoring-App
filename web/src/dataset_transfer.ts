@@ -64,7 +64,7 @@ async function requestError(response: Response): Promise<Error> {
     ? body.detail : "Upload failed (" + response.status + ")");
 }
 
-function assertOriginalFiles(files: File[], kind: UploadKind): void {
+export function validateDatasetSources(files: File[], kind: UploadKind): void {
   if (!files.length || (kind === "zip" && files.length !== 1)) {
     throw new Error("Select the original ZIP archive or full dataset folder.");
   }
@@ -97,7 +97,7 @@ export function beginDatasetTransfer(params: {
     throw new Error("A dataset transfer is already running in this browser tab.");
   }
   const { datasetId, name, kind, files, csrf, resume } = params;
-  assertOriginalFiles(files, kind);
+  validateDatasetSources(files, kind);
   const total = files.reduce((sum, f) => sum + f.size, 0);
   const controller = new AbortController();
   task = {
