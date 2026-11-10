@@ -704,3 +704,20 @@ def test_private_roster_csv_fields_are_restricted_and_editable(configured):
     }, headers={"X-CSRF-Token": csrf})
     assert patch.status_code == 200, patch.text
     assert patch.json()["food_allergies"] == "None reported"
+    with maker.begin() as db:
+        db.add(StaffAccount(
+            email="food@example.org", name="Food Distribution",
+            roles=["distribution"], password_hash=password_hash("FoodPassword123!"),
+        ))
+    with TestClient(app) as food_client:
+        login = food_client.post("/api/v1/auth/login", json={
+            "email": "food@example.org", "password": "FoodPassword123!",
+        })
+        assert login.status_code == 200
+        roster_food = food_client.get("/api/v1/people")
+        assert roster_food.status_code == 200
+        food_person = next(p for p in roster_food.json()["items"] if p["id"] == pid)
+        assert food_person["food_allergies"] == "None reported"
+        assert "date_of_birth" not in food_person
+        assert "data_consent" not in food_person
+        assert "phone" not in food_person
