@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+!.env.live.example
 *.pem
 *.key
 secrets/
@@ -47,3 +48,6 @@ logs/
 
 # Local, potentially large, private dataset staging and media
 .nightjar-data/
+
+# Isolated free live-testing media; never commit event files
+.nightjar-live-data/
