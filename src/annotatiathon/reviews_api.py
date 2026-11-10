@@ -71,34 +71,17 @@ def verify_monitor(db: Session, ctx: AuthContext, job: LabelingJob) -> None:
 
 @router.get("/assigned-jobs")
 def assigned_jobs(
+    limit: int = 100,
+    cursor: str | None = None,
+    status: str | None = None,
+    plan_id: str | None = None,
     ctx: AuthContext = Depends(requires(*VIEWERS)),
     db: Session = Depends(get_db),
 ):
-    """Only the teams assigned to this monitor can appear in the review queue.
-
-    Dashboards use a separate aggregate endpoint open to every monitor.
-    """
+    from .job_reads import read_job_page
     event = current_event(db, ctx)
-    from .labeling_api import list_jobs
-
-    all_jobs = list_jobs(
-        plan_id=None, team_id=None, status=None, limit=2000,
-        ctx=ctx, db=db,
-    )["items"]
-    if "organiser" in ctx.staff.roles:
-        return {"items": all_jobs}
-    monitor = db.scalar(select(Person).where(
-        Person.event_id == event.id, Person.email == ctx.staff.email,
-        Person.kind == "monitor", Person.active.is_(True),
-    ))
-    if monitor is None:
-        return {"items": []}
-    teams = set(db.scalars(select(MonitorAssignment.team_id).where(
-        MonitorAssignment.event_id == event.id,
-        MonitorAssignment.monitor_person_id == monitor.id,
-        MonitorAssignment.active.is_(True),
-    )))
-    return {"items": [job for job in all_jobs if job["team_id"] in teams]}
+    return read_job_page(db, ctx, event.id, limit=limit, cursor=cursor,
+                         status=status, plan_id=plan_id)
 
 
 @router.get("/jobs/{job_id}/annotations/{media_id}")
@@ -346,21 +329,8 @@ def view_media(
     if asset is None:
         raise HTTPException(status_code=404, detail="Image not found.")
     if "organiser" not in ctx.staff.roles:
-        candidates = db.scalars(select(LabelingJob).where(
-            LabelingJob.event_id == event.id,
-            LabelingJob.dataset_id == dataset.id,
-        ))
-        assigned = False
-        for job in candidates:
-            if asset.id in job.media_ids:
-                try:
-                    verify_monitor(db, ctx, job)
-                    assigned = True
-                    break
-                except HTTPException as exc:
-                    if exc.status_code != 403:
-                        raise
-        if not assigned:
+        from .job_reads import can_view_asset
+        if not can_view_asset(db, ctx, event.id, dataset.id, asset.id):
             raise HTTPException(status_code=403, detail="Frame is not assigned to one of your teams.")
     media_base = (Path(dataset.root_path) / "media").resolve()
     target = (media_base / asset.relative_path).resolve()

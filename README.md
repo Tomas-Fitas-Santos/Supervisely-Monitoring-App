@@ -38,9 +38,10 @@ A root-folder selection and ZIP import are validated identically; the optional
 outer `BirdGaze/` wrapper is automatically detected. A single species folder
 is not mistaken for the wrapper.
 
-For raw video files, the API image includes FFmpeg and samples at **1 frame
-per second** into JPEGs. Video frame folders preserve their original sampled
-frames. The original compressed videos are retained privately in the dataset
+For raw video files, choose **All source frames** to extract every decoded frame
+into JPEGs or **1 frame per second** to sample. Video frame folders retain the
+supplied images; add a [frame manifest](docs/FRAME_IMPORT.md) to declare source
+ordinals and sampling density. The original compressed videos are retained privately in the dataset
 directory. All new imports are video-specific frame groups internally
 (`videos/<species>/<video-title>/<frame>`) because the Supervisely labeling
 workflow operates on image frames. A labeling job contains one video assigned
@@ -52,9 +53,9 @@ workbook. The workbook's 72 known scientific-name source folders are recognized;
 unknown folders remain Unclassified until curated. Organisers can correct
 classifications with an audit trail. Movement tags record observed primary
 movement over disjoint frame ranges; they do not infer movements from species.
-Frame ordering is lexicographic within each video (zero-padded filenames
-recommended). The planning target remains 120,000 frames, or 7,500 per group.
-Video files, when extracted by FFmpeg, are ordered by generated frame number.
+Frame ordering uses source ordinals when available and falls back to filename
+order for legacy frames. The existing planner targets 120,000 frames, or
+7,500 per group.
 
 ## Real Supervisely roles and invite batches
 

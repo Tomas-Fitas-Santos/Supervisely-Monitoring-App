@@ -12,6 +12,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    text,
     UniqueConstraint,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -377,6 +378,29 @@ class MediaDataset(Base):
     completed_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
     last_activity_at: Mapped[int] = mapped_column(Integer, default=epoch)
     error_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    extraction_policy: Mapped[str] = mapped_column(String(24), default="sample_1fps")
+
+
+class MediaVideo(Base):
+    """Immutable source identity and the frame collection's extraction provenance."""
+    __tablename__ = "media_videos"
+    __table_args__ = (UniqueConstraint("dataset_id", "video_group", name="uq_dataset_video_group"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=identifier)
+    event_id: Mapped[str] = mapped_column(ForeignKey("events.id"), index=True)
+    dataset_id: Mapped[str] = mapped_column(ForeignKey("media_datasets.id"), index=True)
+    video_group: Mapped[str] = mapped_column(String(500))
+    source_relative_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    extraction_policy: Mapped[str] = mapped_column(String(24))
+    density: Mapped[str] = mapped_column(String(24), default="unknown")
+    frame_count: Mapped[int] = mapped_column(Integer, default=0)
+    source_frame_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    extracted_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
+    time_base: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    frame_rate: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    identity_status: Mapped[str] = mapped_column(String(24), default="unknown")
+    missing_frame_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    identity_notes: Mapped[list[str]] = mapped_column(JSON, default=list)
 
 
 class DatasetStagedFile(Base):
@@ -394,6 +418,7 @@ class MediaAsset(Base):
     __tablename__ = "media_assets"
     __table_args__ = (
         UniqueConstraint("dataset_id", "relative_path", name="uq_dataset_asset_path"),
+        UniqueConstraint("video_id", "frame_index", name="uq_video_frame_ordinal"),
     )
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=identifier)
     event_id: Mapped[str] = mapped_column(ForeignKey("events.id"), index=True)
@@ -403,6 +428,10 @@ class MediaAsset(Base):
     kind: Mapped[str] = mapped_column(String(20), index=True)
     video_group: Mapped[str | None] = mapped_column(String(500), nullable=True)
     frame_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    video_id: Mapped[str | None] = mapped_column(ForeignKey("media_videos.id"), nullable=True, index=True)
+    presentation_timestamp: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    frame_width: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    frame_height: Mapped[int | None] = mapped_column(Integer, nullable=True)
     size_bytes: Mapped[int] = mapped_column(BigInteger)
     sha256: Mapped[str] = mapped_column(String(64))
     native_image_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
@@ -472,6 +501,9 @@ class LabelingJob(Base):
     __tablename__ = "labeling_jobs"
     __table_args__ = (
         UniqueConstraint("plan_id", "team_id", "sequence", name="uq_job_plan_team_seq"),
+        Index("ix_jobs_event_order", "event_id", "team_id", "sequence", "id"),
+        Index("ix_jobs_media_membership", text("(media_ids::jsonb)"),
+              postgresql_using="gin").ddl_if(dialect="postgresql"),
     )
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=identifier)
     event_id: Mapped[str] = mapped_column(ForeignKey("events.id"), index=True)
@@ -499,6 +531,9 @@ class LabelingJob(Base):
     started_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
     submitted_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
     completed_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    annotation_snapshot_round: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    annotation_snapshot_frames: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    annotation_snapshot_annotated_frames: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class NativeJobBinding(Base):

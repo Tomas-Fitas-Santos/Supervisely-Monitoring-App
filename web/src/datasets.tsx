@@ -25,6 +25,10 @@ export function DatasetScreen({auth}:{auth:Auth}) {
   const [summary,setSummary]=useState<Summary|null>(null);
   const [mode,setMode]=useState<"zip"|"folder">("zip");
   const [name,setName]=useState("");
+  const [extractionPolicy,setExtractionPolicy]=useState<"all_frames"|"sample_1fps">("all_frames");
+  const [videos,setVideos]=useState<{id:string;video_group:string;density:string;
+    extraction_policy:string;frame_count:number;extracted_bytes:number;identity_status:string;identity_notes:string[]}[]>([]);
+  const [projectedFrames,setProjectedFrames]=useState(175500);
   const [files,setFiles]=useState<File[]>([]);
   const [busy,setBusy]=useState(false);
   const [transfer,setTransfer]=useState<DatasetTransferState|null>(getDatasetTransfer);
@@ -49,6 +53,16 @@ export function DatasetScreen({auth}:{auth:Auth}) {
       .catch(e=>setError((e as Error).message));
   },[selected,datasets]);
   const dataset=datasets.find(d=>d.id===selected);
+  useEffect(()=>{
+    let active=true;
+    setVideos([]);
+    if(selected&&dataset?.status==="ready"){
+      void api<{items:typeof videos}>("/datasets/"+selected+"/videos")
+        .then(response=>{if(active)setVideos(response.items);})
+        .catch(e=>{if(active)setError((e as Error).message);});
+    }
+    return()=>{active=false;};
+  },[selected,dataset?.status]);
   const groups=useMemo(()=>summary?.morphologies.reduce<Record<string,{frames:number}>>(
     (acc,m)=>{
       const row=acc[m.name]||(acc[m.name]={frames:0});
@@ -65,7 +79,7 @@ export function DatasetScreen({auth}:{auth:Auth}) {
       validateDatasetSources(files,mode);
       created=await api<Dataset>("/datasets/uploads","POST",{
         name:name.trim()||files[0].name.replace(/\.zip$/i,""),
-        upload_kind:mode
+        upload_kind:mode,extraction_policy:extractionPolicy
       },auth.csrf_token);
       setSelected(created.id);
       beginDatasetTransfer({
@@ -145,10 +159,15 @@ export function DatasetScreen({auth}:{auth:Auth}) {
     <div className="content-grid datasets-layout">
       {admin&&<section className="panel">
         <span className="eyebrow">PRIVATE LOCAL STORAGE</span><h3>Import dataset</h3>
-        <p className="muted small">Video-only structure: <code>dataset-name/bird-species/video.mp4</code> or <code>dataset-name/bird-species/video-title/frame.jpg</code>. Multiple species folders are supported. Do not create separate <code>images</code> or <code>videos</code> folders. You can upload the root folder or a ZIP containing it. Raw videos are sampled at 1 frame per second for Supervisely labeling; already extracted frames retain their original sampling.</p>
+        <p className="muted small">Video-only structure: <code>dataset-name/bird-species/video.mp4</code> or <code>dataset-name/bird-species/video-title/frame.jpg</code>. Multiple species folders are supported. Do not create separate <code>images</code> or <code>videos</code> folders. You can upload the root folder or a ZIP containing it. Full-density import retains every decoded video frame in presentation order. Supplied frame folders retain their source density and need numeric names or a frames.json manifest.</p>
         <form className="form-stack" onSubmit={e=>void ingest(e)}>
           <label>Dataset name<input maxLength={200} value={name} placeholder="BirdGaze 2026"
             onChange={e=>setName(e.target.value)}/></label>
+          <label>Frame extraction<select value={extractionPolicy} disabled={busy}
+            onChange={e=>setExtractionPolicy(e.target.value as typeof extractionPolicy)}>
+            <option value="all_frames">Every source frame</option>
+            <option value="sample_1fps">Sample one frame per second</option>
+          </select></label>
           <label>Upload format<select value={mode} disabled={busy}
             onChange={e=>{setMode(e.target.value as "zip"|"folder");setFiles([]);}}>
             <option value="zip">ZIP of species folders</option>
@@ -193,7 +212,21 @@ export function DatasetScreen({auth}:{auth:Auth}) {
         {dataset&&<div className="dataset-detail"><h4>{dataset.name}</h4>
           <p className="muted small">{dataset.video_count} videos ·
             {dataset.frame_count} frames available for annotation</p>
+          {videos.length>0&&<div className="settings-note">
+            <div><label>Frame-storage projection<input type="number" min={1} max={1000000000}
+              value={projectedFrames} onChange={e=>setProjectedFrames(Math.min(1000000000,Math.max(1,Number(e.target.value)||1)))}/></label>
+              <p>Approximately {formatBytes(videos.reduce((sum,video)=>sum+video.extracted_bytes,0)
+                /Math.max(1,videos.reduce((sum,video)=>sum+video.frame_count,0))*projectedFrames)} for these frame files.
+                Allow additional storage for original videos, staging, annotations, exports and backups.</p></div>
+          </div>}
+          {dataset.status==="ready"&&!videos.length&&<p className="advisory">
+            This collection predates source-frame provenance. Reimport its retained videos to establish full density.</p>}
           <p className="muted small">Local status: {dataset.status} · Native project: {dataset.native_project_id||"Not published"}</p>
+          {videos.map(video=><div key={video.id} className="settings-note">
+            <p><strong>{video.video_group}</strong> · {video.frame_count} frames · {formatBytes(video.extracted_bytes)} frame files
+              <br/>{video.extraction_policy} · Density {video.density} · Frame identity {video.identity_status}
+              {video.identity_notes.map(note=><span key={note}><br/>{note}</span>)}</p>
+          </div>)}
           {transfer?.datasetId===dataset.id&&transfer.error&&
             <p className="alert danger" role="alert">{transfer.error}</p>}
           {admin&&dataset.status!=="ready"&&<div className="dataset-recovery-actions">

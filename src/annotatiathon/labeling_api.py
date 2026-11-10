@@ -23,8 +23,6 @@ from .models import (
     LabelingPlan,
     MediaAsset,
     MonitorAssignment,
-    NativeJobBinding,
-    Person,
     epoch,
 )
 from .pair_members import pair_members
@@ -218,7 +216,7 @@ def create_plan(
             )
     assets = list(db.scalars(select(MediaAsset).where(
         MediaAsset.event_id == event.id, MediaAsset.dataset_id == dataset.id,
-    ).order_by(MediaAsset.relative_path)))
+    ).order_by(MediaAsset.video_group, MediaAsset.frame_index.nulls_last(), MediaAsset.relative_path, MediaAsset.id)))
     if not assets:
         raise HTTPException(status_code=422, detail="Dataset has no media assets.")
     groups, totals = allocate(
@@ -320,54 +318,14 @@ def list_jobs(
     team_id: str | None = None,
     status: str | None = None,
     limit: int = 250,
+    cursor: str | None = None,
     ctx: AuthContext = Depends(requires(*VIEWERS)),
     db: Session = Depends(get_db),
 ):
+    from .job_reads import read_job_page
     event = current_event(db, ctx)
-    if limit < 1 or limit > 2000:
-        raise HTTPException(status_code=422, detail="Limit must be 1-2000.")
-    query = select(LabelingJob).where(LabelingJob.event_id == event.id)
-    if plan_id:
-        query = query.where(LabelingJob.plan_id == plan_id)
-    if team_id:
-        query = query.where(LabelingJob.team_id == team_id)
-    if status:
-        query = query.where(LabelingJob.status == status)
-    items = list(db.scalars(query.order_by(
-        LabelingJob.team_id, LabelingJob.sequence,
-    ).limit(limit)))
-    teams = {t.id: t.name for t in db.scalars(select(CompetitionTeam).where(
-        CompetitionTeam.event_id == event.id,
-    ))}
-    bindings: dict[str, list[dict]] = defaultdict(list)
-    for binding in db.scalars(select(NativeJobBinding).where(
-        NativeJobBinding.event_id == event.id,
-    )):
-        person = db.get(Person, binding.person_id)
-        bindings[binding.job_id].append({
-            "person_id": binding.person_id,
-            "person_name": person.name if person else "Unknown",
-            "native_job_id": binding.native_job_id,
-            "native_status": binding.native_status,
-            "last_synced_at": binding.last_synced_at,
-        })
-    return {"items": [{
-        "id": job.id, "plan_id": job.plan_id, "dataset_id": job.dataset_id,
-        "team_id": job.team_id, "team_name": teams.get(job.team_id, "Unknown"),
-        "assignee_person_id": job.assignee_person_id,
-        "assignee_name": (db.get(Person, job.assignee_person_id).name
-                          if job.assignee_person_id and db.get(Person, job.assignee_person_id)
-                          else None),
-        "release_mode": job.release_mode,
-        "sequence": job.sequence, "frame_count": job.frame_count,
-        "video_count": job.video_count, "morphology_counts": job.morphology_counts,
-        "status": job.status, "review_status": job.review_status,
-        "correction_round": job.correction_round,
-        "native_submissions": bindings.get(job.id, []),
-        "assigned_monitor_id": job.assigned_monitor_id,
-        "started_at": job.started_at, "submitted_at": job.submitted_at,
-        "completed_at": job.completed_at,
-    } for job in items]}
+    return read_job_page(db, ctx, event.id, plan_id=plan_id, team_id=team_id,
+                         status=status, limit=limit, cursor=cursor)
 
 
 @router.get("/jobs/{job_id}/media")
@@ -398,6 +356,9 @@ def job_media(
             "id": assets[mid].id, "relative_path": assets[mid].relative_path,
             "morphology": assets[mid].morphology,
             "video_group": assets[mid].video_group,
+            "frame_index": assets[mid].frame_index,
+            "presentation_timestamp": assets[mid].presentation_timestamp,
+            "frame_width": assets[mid].frame_width, "frame_height": assets[mid].frame_height,
             "native_image_id": assets[mid].native_image_id,
         } for mid in ids if mid in assets],
     }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   CheckCircle2, ClipboardCheck, Image, RefreshCw, RotateCcw, ShieldCheck
 } from "lucide-react";
@@ -29,6 +29,11 @@ export function QualityScreen({auth}:{auth:Auth}) {
   const canReview=auth.staff.roles.some(role=>role==="organiser"||role==="monitor");
   const [tab,setTab]=useState<"dashboard"|"rankings"|"review">("dashboard");
   const [jobs,setJobs]=useState<Job[]>([]);
+  const [jobCursors,setJobCursors]=useState<(string|null)[]>([null]);
+  const [nextJobCursor,setNextJobCursor]=useState<string|null>(null);
+  const jobRequest=useRef(0);
+  const reviewRequest=useRef(0);
+  const jobCursor=jobCursors[jobCursors.length-1];
   const [jobId,setJobId]=useState("");
   const [filter,setFilter]=useState<"review"|"all"|"active"|"completed">("review");
   const [media,setMedia]=useState<MediaPage|null>(null);
@@ -48,28 +53,52 @@ export function QualityScreen({auth}:{auth:Auth}) {
   const [notice,setNotice]=useState("");
   const [busy,setBusy]=useState(false);
   const refresh=useCallback(async()=>{
-    if(!canReview){setJobs([]);setJobId("");return;}
+    if(!canReview||tab!=="review")return;
     try{
-      const response=await api<{items:Job[]}>("/review/assigned-jobs");
-      setJobs(response.items);
+      const request=++jobRequest.current;
+      const parameters=new URLSearchParams({limit:"100"});
+      if(jobCursor)parameters.set("cursor",jobCursor);
+      if(filter!=="all")parameters.set("status",filter==="review"?"on_review":filter);
+      const response=await api<{items:Job[];next_cursor:string|null}>("/review/assigned-jobs?"+parameters);
+      if(request!==jobRequest.current)return;
+      setJobs(previous=>{
+        const old=new Map(previous.map(job=>[job.id,job]));
+        return response.items.map(job=>{
+          const existing=old.get(job.id);
+          return existing&&JSON.stringify(existing)===JSON.stringify(job)?existing:job;
+        });
+      });
+      setNextJobCursor(response.next_cursor);
       setJobId(current=>response.items.some(j=>j.id===current)?current:
         (response.items.find(j=>j.status==="on_review")?.id||""));
       setError("");
     }catch(e){setError((e as Error).message);}
-  },[canReview]);
+  },[canReview,tab,jobCursor,filter]);
   const loadReviews=useCallback(async()=>{
-    if(!jobId){setReviews(null);setMedia(null);return;}
+    const request=++reviewRequest.current;
+    if(!jobId||tab!=="review"){setReviews(null);setMedia(null);return;}
     try{
       const [r,m]=await Promise.all([
         api<Reviews>("/review/jobs/"+jobId),
         api<MediaPage>("/labeling/jobs/"+jobId+"/media?page="+page+"&size=50")
       ]);
+      if(request!==reviewRequest.current)return;
       setReviews(r);setMedia(m);
       setAssetId(old=>m.items.some(x=>x.id===old)?old:(m.items[0]?.id||""));
     }catch(e){setError((e as Error).message);}
-  },[jobId,page]);
-  useEffect(()=>{void refresh();},[refresh]);
-  useEffect(()=>{void loadReviews();},[loadReviews]);
+  },[jobId,page,tab]);
+  useEffect(()=>{
+    void refresh();
+    const reconnect=()=>{if(!document.hidden){setJobCursors([null]);void refresh();}};
+    window.addEventListener("online",reconnect);
+    document.addEventListener("visibilitychange",reconnect);
+    return()=>{
+      ++jobRequest.current;
+      window.removeEventListener("online",reconnect);
+      document.removeEventListener("visibilitychange",reconnect);
+    };
+  },[refresh]);
+  useEffect(()=>{void loadReviews();return()=>{++reviewRequest.current;};},[loadReviews]);
   useEffect(()=>{
     if(!jobId)return;
     const timer=window.setInterval(()=>{
@@ -99,13 +128,13 @@ export function QualityScreen({auth}:{auth:Auth}) {
   useEffect(()=>{
     let valid=true;
     setAnnotation(null);
-    if(jobId&&assetId){
+    if(tab==="review"&&jobId&&assetId){
       void api<AnnotationSnapshot>("/review/jobs/"+jobId+"/annotations/"+assetId)
         .then(result=>{if(valid)setAnnotation(result);})
         .catch(()=>{if(valid)setAnnotation(null);});
     }
     return()=>{valid=false;};
-  },[jobId,assetId,selected?.correction_round,reviews?.annotation_snapshot_ready]);
+  },[tab,jobId,assetId,selected?.correction_round,reviews?.annotation_snapshot_ready]);
   useEffect(()=>{
     setVerdict(stored?.verdict||"good");
     setCorrect(stored?.correct_keypoints||0);
@@ -161,21 +190,27 @@ export function QualityScreen({auth}:{auth:Auth}) {
       <button className={tab==="rankings"?"active":""} onClick={()=>setTab("rankings")}>
         Rankings board</button>
       {canReview&&<button className={tab==="review"?"active":""} onClick={()=>setTab("review")}>
-        Review assigned jobs {reviewJobs.length?("(" + reviewJobs.length + ")"):""}</button>}
+        Review assigned jobs</button>}
     </nav>
     {tab!=="review"?<TeamReviewOverview auth={auth} mode={tab}/> : <>
     {notice&&<div className="alert success" role="status">{notice}</div>}
     <div className="content-grid reviews-layout">
       <section className="panel">
-        <span className="eyebrow">SUBMISSIONS · {reviewJobs.length} AWAITING REVIEW</span>
+        <span className="eyebrow">SUBMISSIONS · {reviewJobs.length} ON THIS PAGE</span>
         <h3>Choose an annotator's video</h3>
         <label className="review-filter">Show jobs<select value={filter}
-          onChange={e=>{setFilter(e.target.value as typeof filter);setPage(1);}}>
-          <option value="review">Ready for review ({reviewJobs.length})</option>
+          onChange={e=>{setFilter(e.target.value as typeof filter);setJobCursors([null]);setPage(1);}}>
+          <option value="review">Ready for review</option>
           <option value="active">Queue and in progress</option>
           <option value="completed">Accepted</option>
           <option value="all">Every job</option>
         </select></label>
+        <div className="settings-action-row">
+          <button className="btn secondary" disabled={jobCursors.length===1}
+            onClick={()=>setJobCursors(current=>current.slice(0,-1))}>Previous jobs</button>
+          <button className="btn secondary" disabled={!nextJobCursor}
+            onClick={()=>{if(nextJobCursor)setJobCursors(current=>[...current,nextJobCursor]);}}>Next jobs</button>
+        </div>
         <div className="review-jobs">{filteredJobs.map(job=><button key={job.id}
           className={"job-list-row "+(job.id===jobId?"selected":"")}
           onClick={()=>{setJobId(job.id);setPage(1);setAssetId("");}}>
