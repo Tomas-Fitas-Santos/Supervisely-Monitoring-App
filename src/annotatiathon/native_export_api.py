@@ -194,7 +194,7 @@ def export_event_zip(db: Session, api, event_id: str) -> dict:
                         NativeJobBinding.event_id == event_id,
                         NativeJobBinding.job_id == job.id,
                     )))
-                    if len(native_bindings) != 2:
+                    if len(native_bindings) != (1 if job.assignee_person_id else 2):
                         raise ValueError("unbound_native_job")
                     review = db.scalar(select(JobReview).where(
                         JobReview.event_id == event_id,
@@ -258,7 +258,7 @@ def export_event_zip(db: Session, api, event_id: str) -> dict:
                 "notes": [
                     "Media bytes remain in the private local dataset directory.",
                     "Overlapping pair jobs have independent native image IDs.",
-                    "Each pair stores two annotator job IDs over the same pair dataset.",
+                    "New jobs have one native annotator; historical pair jobs may have two.",
                     "Historical Supervisely annotation versions are not included.",
                     "Curated rows require an accepted job and no explicitly bad frame verdict.",
                 ],

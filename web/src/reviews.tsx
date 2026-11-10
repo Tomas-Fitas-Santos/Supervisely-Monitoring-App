@@ -5,8 +5,8 @@ import {
 import { api, type Auth } from "./api";
 
 type Job={id:string;team_name:string;sequence:number;status:string;review_status:string;
-  dataset_id:string;frame_count:number;assigned_monitor_id:string|null;
-  correction_round:number;
+  dataset_id:string;frame_count:number;video_count:number;assigned_monitor_id:string|null;
+  correction_round:number;assignee_person_id:string|null;assignee_name:string|null;
   native_submissions:{person_id:string;person_name:string;native_job_id:number;
     native_status:string;last_synced_at:number|null}[];};
 type Media={id:string;relative_path:string;morphology:string;video_group:string|null};
@@ -20,12 +20,14 @@ type AnnotationSnapshot={
   native_dataset_id:number;native_image_id:number;annotation:Record<string,unknown>
 };
 type Reviews={count:number;keypoint_score:number;reviewed_frames:number;
-  total_frames:number;items:Review[];status:string;review_status:string};
+  total_frames:number;items:Review[];status:string;review_status:string;
+  annotation_snapshot_ready:boolean};
 
 export function QualityScreen({auth}:{auth:Auth}) {
   const canReview=auth.staff.roles.some(role=>role==="organiser"||role==="monitor");
   const [jobs,setJobs]=useState<Job[]>([]);
   const [jobId,setJobId]=useState("");
+  const [filter,setFilter]=useState<"review"|"all"|"active"|"completed">("review");
   const [media,setMedia]=useState<MediaPage|null>(null);
   const [reviews,setReviews]=useState<Reviews|null>(null);
   const [page,setPage]=useState(1);
@@ -65,10 +67,22 @@ export function QualityScreen({auth}:{auth:Auth}) {
   useEffect(()=>{void refresh();},[refresh]);
   useEffect(()=>{void loadReviews();},[loadReviews]);
   useEffect(()=>{
+    if(!jobId)return;
+    const timer=window.setInterval(()=>{
+      if(!document.hidden)void loadReviews();
+    },10000);
+    return()=>window.clearInterval(timer);
+  },[jobId,loadReviews]);
+  useEffect(()=>{
     const timer=window.setInterval(()=>{if(!document.hidden)void refresh();},10000);
     return()=>window.clearInterval(timer);
   },[refresh]);
   const selected=jobs.find(j=>j.id===jobId);
+  const reviewJobs=jobs.filter(j=>j.status==="on_review");
+  const filteredJobs=jobs.filter(j=>filter==="all"||
+    (filter==="review"&&j.status==="on_review")||
+    (filter==="active"&&["queued","publishing","in_progress"].includes(j.status))||
+    (filter==="completed"&&j.status==="completed"));
   const asset=media?.items.find(a=>a.id===assetId);
   const stored=reviews?.items.find(r=>r.media_id===assetId);
   useEffect(()=>{
@@ -80,7 +94,7 @@ export function QualityScreen({auth}:{auth:Auth}) {
         .catch(()=>{if(valid)setAnnotation(null);});
     }
     return()=>{valid=false;};
-  },[jobId,assetId,selected?.correction_round]);
+  },[jobId,assetId,selected?.correction_round,reviews?.annotation_snapshot_ready]);
   useEffect(()=>{
     setVerdict(stored?.verdict||"good");
     setCorrect(stored?.correct_keypoints||0);
@@ -110,15 +124,15 @@ export function QualityScreen({auth}:{auth:Auth}) {
   async function decide(choice:"accept"|"return_for_correction"){
     if(!selected)return;
     if(!window.confirm(choice==="accept"?
-      "Accept this pair's annotation job in Nightjar?":"Return this job for correction in Nightjar?"))return;
+      "Accept this annotator's video job in Nightjar?":"Return this video job for correction in Nightjar?"))return;
     setBusy(true);setError("");setNotice("");
     try{
       await api("/review/jobs/"+selected.id+"/decision","POST",{
         decision:choice,notes,
       },auth.csrf_token);
       setNotice(choice==="accept"?
-        "Pair review accepted. The next job may now be released by the worker.":
-        "Pair returned. A native correction task is queued; no next job will release.");
+        "Video review accepted. The next job for this annotator may now be released.":
+        "Video returned. The worker will prepare a correction job for the same annotator.");
       await refresh();await loadReviews();
     }catch(e){setError((e as Error).message);}
     finally{setBusy(false);}
@@ -126,64 +140,81 @@ export function QualityScreen({auth}:{auth:Auth}) {
   return <div className="page-body">
     <div className="page-heading"><div><span className="eyebrow">MONITORING · QUALITY CONTROL</span>
       <h2>Review & Scoring</h2>
-      <p className="muted">Inspect assigned images and video frames, score keypoints and decide whether a pair's work passes review.</p>
-    </div><button className="btn secondary" onClick={()=>void refresh()}>
-      <RefreshCw size={15}/> Refresh</button></div>
+      <p className="muted">Inspect each person's submitted video, synchronized annotations and frame-level quality. One native submission per new job.</p>
+    </div><button className="btn secondary" onClick={()=>{void refresh();void loadReviews();}}>
+      <RefreshCw size={15}/> Refresh jobs & annotations</button></div>
     {error&&<div className="alert danger" role="alert">{error}</div>}
     {notice&&<div className="alert success" role="status">{notice}</div>}
     <div className="content-grid reviews-layout">
       <section className="panel">
-        <span className="eyebrow">PAIR LABELING JOBS</span><h3>Select a job</h3>
-        <div className="review-jobs">{jobs.map(job=><button key={job.id}
+        <span className="eyebrow">SUBMISSIONS · {reviewJobs.length} AWAITING REVIEW</span>
+        <h3>Choose an annotator's video</h3>
+        <label className="review-filter">Show jobs<select value={filter}
+          onChange={e=>setFilter(e.target.value as typeof filter)}>
+          <option value="review">Ready for review ({reviewJobs.length})</option>
+          <option value="active">Queue and in progress</option>
+          <option value="completed">Accepted</option>
+          <option value="all">Every job</option>
+        </select></label>
+        <div className="review-jobs">{filteredJobs.map(job=><button key={job.id}
           className={"job-list-row "+(job.id===jobId?"selected":"")}
           onClick={()=>{setJobId(job.id);setPage(1);setAssetId("");}}>
-          <div><strong>{job.team_name} · Job {job.sequence}</strong>
-            <span>{job.frame_count} frames · {job.review_status}</span></div>
+          <div><strong>{job.team_name} · {job.assignee_name||"Historical pair"}</strong>
+            <span>{job.video_count} video(s) · {job.frame_count} frames · Job {job.sequence}</span>
+          </div>
           <span className={"dataset-status "+job.status}>{job.status.replaceAll("_"," ")}</span>
         </button>)}
-        {!jobs.length&&<p className="muted small">Create a competition plan first.</p>}</div>
+        {!filteredJobs.length&&<p className="muted small">No jobs in this category. Submitted jobs appear here after the worker synchronizes their native status.</p>}</div>
       </section>
       <section className="panel">
-        <span className="eyebrow">JOB QUALITY SUMMARY</span>
-        <h3>{selected?selected.team_name+" · Job "+selected.sequence:"No job selected"}</h3>
+        <span className="eyebrow">SELECTED JOB · LIVE SUPERVISELY STATUS</span>
+        <h3>{selected?selected.team_name+" · "+(selected.assignee_name||"Historical pair job"):"No job selected"}</h3>
         {selected&&<div className="submission-summary">
-          <h4>Pair submission status</h4>
-          <p className="muted small">This pair has one active Nightjar workload.
-            Supervisely exposes a native labeling job for each annotator.
-            Both must submit their assigned frames before monitor review.</p>
+          <div className="review-status-strip">
+            <div><span>Nightjar state</span><strong>{selected.status.replaceAll("_"," ")}</strong></div>
+            <div><span>Annotation JSON</span><strong>{reviews?.annotation_snapshot_ready?
+              "Synced to local storage":"Not received yet"}</strong></div>
+            <div><span>Video frames</span><strong>{selected.frame_count}</strong></div>
+          </div>
           {(selected.native_submissions||[]).map(member=><div className="job-plan-row"
             key={member.native_job_id}>
             <div><strong>{member.person_name}</strong>
-              <span>Native job #{member.native_job_id}</span></div>
+              <span>Supervisely job #{member.native_job_id} · Updated {member.last_synced_at?
+                new Date(member.last_synced_at*1000).toLocaleString():"not yet"}</span></div>
             <span className={"dataset-status "+member.native_status}>
               {member.native_status.replaceAll("_"," ")}</span>
           </div>)}
           {!selected.native_submissions?.length&&
-            <p className="muted small">Waiting for native publishing.</p>}
+            <p className="muted small">The worker has not yet published this job into Supervisely.</p>}
+          {selected.status==="on_review"&&!reviews?.annotation_snapshot_ready&&
+            <p className="advisory">Supervisely submission detected. Waiting for the worker to download the annotation JSON. The page checks again automatically.</p>}
           {selected.status==="needs_correction"&&
-            <p className="muted small">The current job was returned. Native
-              correction is being prepared; the next job remains locked.
-              Correction round: {selected.correction_round}.</p>}
+            <p className="muted small">Returned for correction · Round {selected.correction_round}. The worker will restart only this person's native job.</p>}
         </div>}
         {reviews&&<div className="review-stats">
-          <span><strong>{reviews.reviewed_frames}</strong> frames reviewed</span>
+          <span><strong>{reviews.reviewed_frames} / {reviews.total_frames}</strong> frames reviewed</span>
           <span><strong>{reviews.keypoint_score}</strong> keypoint score</span>
-          <span><strong>{reviews.status}</strong> job status</span>
         </div>}
-        <p className="muted small">Keypoint score: correct +1, missing −1, incorrect 0. Visibility, occlusion and temporal consistency are tracked independently, without invented bonus weights.</p>
+        <p className="muted small">Scoring: +1 correct keypoint, −1 missing keypoint, 0 incorrect. Occlusion and temporal consistency are recorded separately.</p>
         {reviewable&&canReview&&<div className="review-actions">
-          <button className="btn secondary" disabled={busy||!reviews?.count}
+          <button className="btn secondary" disabled={busy||!reviews?.count||!reviews?.annotation_snapshot_ready}
             onClick={()=>void decide("return_for_correction")}><RotateCcw size={14}/> Return for correction</button>
-          <button className="btn primary" disabled={busy||!reviews?.count}
-            onClick={()=>void decide("accept")}><CheckCircle2 size={14}/> Accept job</button>
+          <button className="btn primary" disabled={busy||!reviews?.count||!reviews?.annotation_snapshot_ready||selected?.status!=="on_review"}
+            onClick={()=>void decide("accept")}><CheckCircle2 size={14}/> Accept video</button>
         </div>}
-        {!reviewable&&selected&&<p className="muted small">Quality scoring opens once both native annotators submit all their assigned frames. No synthetic submissions are created.</p>}
+        {!reviewable&&selected&&<p className="muted small">Review opens after the assigned participant submits this job in Supervisely. You do not need the other team member to submit a different video.</p>}
       </section>
     </div>
     {selected&&media&&<section className="panel" style={{marginTop:20}}>
       <div className="review-media-heading"><div><span className="eyebrow">FRAME INSPECTION</span>
-        <h3>Media & annotation assessment</h3>
-      </div><span>{media.total} frames in this job</span></div>
+        <h3>{asset?.video_group||"Frame inspection"}</h3>
+      </div><div className="review-navigation">
+          <span>{media.total} frames</span>
+          <button className="btn secondary" disabled={!assetId||media.items.findIndex(m=>m.id===assetId)<=0}
+            onClick={()=>{const i=media.items.findIndex(m=>m.id===assetId);if(i>0)setAssetId(media.items[i-1].id);}}>Previous frame</button>
+          <button className="btn secondary" disabled={!assetId||media.items.findIndex(m=>m.id===assetId)>=media.items.length-1}
+            onClick={()=>{const i=media.items.findIndex(m=>m.id===assetId);if(i>=0&&i<media.items.length-1)setAssetId(media.items[i+1].id);}}>Next frame</button>
+        </div></div>
       <div className="review-media-layout">
         <div className="review-media-items">
           {media.items.map(m=><button key={m.id} onClick={()=>setAssetId(m.id)}
@@ -206,7 +237,7 @@ export function QualityScreen({auth}:{auth:Auth}) {
             <strong>Supervisely annotation</strong>
             {annotation?
               <>
-                <p className="muted small">Synced to the local dataset · Native image #{annotation.native_image_id}</p>
+                <p className="muted small">Downloaded from Supervisely · Native image #{annotation.native_image_id} · {Array.isArray(annotation.annotation.labels)?annotation.annotation.labels.length:0} label(s)</p>
                 <details><summary>Inspect annotation JSON for this frame</summary>
                   <pre>{JSON.stringify(annotation.annotation,null,2)}</pre>
                 </details>
@@ -214,7 +245,7 @@ export function QualityScreen({auth}:{auth:Auth}) {
               <p className="muted small">Awaiting annotation synchronization from the returned labeling job.
                 The original local frame remains available for review.</p>}
           </div>
-          {canReview&&reviewable&&<div className="review-entry">
+          {canReview&&reviewable&&reviews?.annotation_snapshot_ready&&<div className="review-entry">
             <label>Verdict<select value={verdict} onChange={e=>setVerdict(
               e.target.value as "good"|"bad"|"incomplete")}>
               <option value="good">Good</option><option value="bad">Incorrect</option>

@@ -467,3 +467,48 @@ def test_read_only_native_export_preserves_source_and_curated_manifest(configure
     assert again.status_code == 202
     assert again.json()["status"] == "done"
     assert len(sdk.jobs) == 2
+
+
+def test_manual_assignments_publish_independent_videos(configured):
+    http, maker, csrf, _plan, sdk = configured
+    with maker.begin() as db:
+        ds = db.get(MediaDataset, "dataset01")
+        people = list(db.scalars(select(Person).order_by(Person.id)))
+        assignments = []
+        for index, person in enumerate(people):
+            group = f"videos/owls/video-{index}"
+            relative = group + "/0001.jpg"
+            file = Path(ds.root_path) / "media" / relative
+            file.parent.mkdir(parents=True, exist_ok=True)
+            file.write_bytes(b"bird")
+            db.add(MediaAsset(
+                event_id=DEFAULT_EVENT_ID, dataset_id=ds.id,
+                relative_path=relative, morphology="owls",
+                kind="video_frame", video_group=group, frame_index=1,
+                size_bytes=4, sha256="a"*64,
+            ))
+            assignments.append({
+                "team_id": person.team_id,
+                "assignee_person_id": person.id, "video_group": group,
+            })
+    result = call(http, csrf, "/labeling/manual/jobs", {
+        "dataset_id": "dataset01", "dispatch": "publish",
+        "assignments": assignments,
+    })
+    assert result.status_code == 201, result.text
+    ids = result.json()["job_ids"]
+    assert len(ids) == 2
+    with maker() as db:
+        conf = db.get(SuperviselyConfig, 1)
+        assert process_once(db, sdk, conf)["native_jobs"] == 1
+        assert process_once(db, sdk, conf)["native_jobs"] == 1
+        assert len(sdk.jobs) == 2
+        assert len({j.dataset_id for j in sdk.jobs}) == 2
+        for native in sdk.jobs:
+            native.status = "on_review"
+            native.finished_images_count = 0
+        assert sync_all(db, sdk, conf)["changed_jobs"] == 2
+    for jobid in ids:
+        r = http.get("/api/v1/review/jobs/" + jobid)
+        assert r.status_code == 200
+        assert r.json()["annotation_snapshot_ready"]

@@ -93,14 +93,20 @@ def queue_publish(db: Session, job: LabelingJob) -> NativeOperation:
 
 
 def can_queue_next(db: Session, job: LabelingJob) -> bool:
-    """The previous pair job must have passed monitor review before release."""
+    """Release automatic jobs sequentially per annotator, not per team."""
+    if job.release_mode == "manual_released":
+        return True
+    if job.release_mode == "manual_hold":
+        return False
     earlier = list(db.scalars(select(LabelingJob).where(
         LabelingJob.event_id == job.event_id,
         LabelingJob.plan_id == job.plan_id,
         LabelingJob.team_id == job.team_id,
+        LabelingJob.assignee_person_id == job.assignee_person_id,
+        LabelingJob.release_mode == "automatic",
         LabelingJob.sequence < job.sequence,
     )))
-    return bool(earlier) and all(
+    return all(
         x.status == "completed" and x.review_status == "accepted"
         for x in earlier
     )
@@ -111,15 +117,11 @@ def next_eligible(db: Session, plan: LabelingPlan) -> list[LabelingJob]:
         LabelingJob.event_id == plan.event_id,
         LabelingJob.plan_id == plan.id,
     ).order_by(LabelingJob.team_id, LabelingJob.sequence)))
-    output: list[LabelingJob] = []
-    first_queued: dict[str, LabelingJob] = {}
+    first_queued: dict[tuple[str, str | None], LabelingJob] = {}
     for job in jobs:
-        if job.status == "queued":
-            first_queued.setdefault(job.team_id, job)
-    for job in first_queued.values():
-        if job.sequence == 1 or can_queue_next(db, job):
-            output.append(job)
-    return output
+        if job.status == "queued" and job.release_mode == "automatic":
+            first_queued.setdefault((job.team_id, job.assignee_person_id), job)
+    return [job for job in first_queued.values() if can_queue_next(db, job)]
 
 
 class LaunchInput(BaseModel):
@@ -148,9 +150,9 @@ def launch_event(
     ).order_by(LabelingJob.team_id, LabelingJob.sequence)))
     if not jobs:
         raise HTTPException(status_code=409, detail="Plan contains no jobs.")
-    first = [job for job in jobs if job.sequence == 1]
+    first = next_eligible(db, plan)
     if not first:
-        raise HTTPException(status_code=409, detail="First team jobs are missing.")
+        raise HTTPException(status_code=409, detail="No eligible first jobs are available.")
     for job in first:
         team = db.scalar(select(CompetitionTeam).where(
             CompetitionTeam.id == job.team_id,

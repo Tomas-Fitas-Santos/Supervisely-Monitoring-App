@@ -131,18 +131,37 @@ def allocate(
                 videos[team] += 1
     result: dict[str, list[JobGroup]] = {}
     for team in teams:
-        buckets = [JobGroup() for _ in range(jobs_per_team)]
-        # Largest group first, distribute by frame count, never split a video.
-        for unit in sorted(selected[team], key=lambda x: (-x.weight, x.id)):
-            bucket = min(
-                buckets, key=lambda g: (g.frame_count, len(g.video_groups), len(g.media_ids))
+        videos_for_team = [
+            unit for unit in selected[team] if unit.video_group is not None
+        ]
+        images_for_team = [
+            unit for unit in selected[team] if unit.video_group is None
+        ]
+        # Each job owns one complete video, never a partial video or two videos.
+        # Standalone images, when present, go into separate image-only jobs.
+        if len(videos_for_team) + (1 if images_for_team else 0) > jobs_per_team:
+            raise HTTPException(
+                status_code=422,
+                detail="Jobs per team is too small for one complete video per job. "
+                       "Increase it or lower cross-team redundancy.",
             )
-            bucket.media_ids.extend(unit.media_ids)
-            bucket.frame_count += unit.weight
-            bucket.morph_counts[unit.morphology] += unit.weight
-            if unit.video_group is not None:
-                bucket.video_groups.add(unit.video_group)
-        result[team] = [b for b in buckets if b.media_ids]
+        assigned_jobs: list[JobGroup] = []
+        for unit in sorted(videos_for_team, key=lambda u: u.id):
+            assigned_jobs.append(JobGroup(
+                media_ids=list(unit.media_ids), frame_count=unit.weight,
+                video_groups={unit.video_group},
+                morph_counts=Counter({unit.morphology: unit.weight}),
+            ))
+        if images_for_team:
+            remaining = jobs_per_team - len(assigned_jobs)
+            image_buckets = [JobGroup() for _ in range(remaining)]
+            for unit in sorted(images_for_team, key=lambda u: (-u.weight, u.id)):
+                bucket = min(image_buckets, key=lambda g: g.frame_count)
+                bucket.media_ids.extend(unit.media_ids)
+                bucket.frame_count += unit.weight
+                bucket.morph_counts[unit.morphology] += unit.weight
+            assigned_jobs.extend(b for b in image_buckets if b.media_ids)
+        result[team] = assigned_jobs
     totals = {
         "assets": sum(u.weight for units_by_morph in units.values() for u in units_by_morph),
         "assignment_copies": sum(loads.values()),
@@ -209,10 +228,13 @@ def create_plan(
     db.add(plan)
     db.flush()
     for team in teams:
+        members, _ = pair_members(db, event.id, team.id)
+        members = sorted(members, key=lambda p: p.id)
         for seq, group in enumerate(groups[team.id], start=1):
             db.add(LabelingJob(
                 event_id=event.id, dataset_id=dataset.id, plan_id=plan.id,
                 team_id=team.id, sequence=seq,
+                assignee_person_id=members[(seq - 1) % 2].id,
                 media_ids=group.media_ids, frame_count=group.frame_count,
                 video_count=len(group.video_groups),
                 morphology_counts=dict(group.morph_counts),
@@ -322,6 +344,11 @@ def list_jobs(
     return {"items": [{
         "id": job.id, "plan_id": job.plan_id, "dataset_id": job.dataset_id,
         "team_id": job.team_id, "team_name": teams.get(job.team_id, "Unknown"),
+        "assignee_person_id": job.assignee_person_id,
+        "assignee_name": (db.get(Person, job.assignee_person_id).name
+                          if job.assignee_person_id and db.get(Person, job.assignee_person_id)
+                          else None),
+        "release_mode": job.release_mode,
         "sequence": job.sequence, "frame_count": job.frame_count,
         "video_count": job.video_count, "morphology_counts": job.morphology_counts,
         "status": job.status, "review_status": job.review_status,

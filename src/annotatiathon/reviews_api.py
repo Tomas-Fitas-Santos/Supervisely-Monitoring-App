@@ -148,7 +148,13 @@ def list_reviews(
         JobReview.event_id == event.id, JobReview.job_id == job.id
     ).order_by(JobReview.reviewed_at.desc())).all()
     verdicts = Counter(x.verdict for x in items)
+    dataset = db.get(MediaDataset, job.dataset_id)
+    snapshot_ready = bool(dataset and (
+        Path(dataset.root_path) / "annotations" / job.id /
+        ("round-" + str(job.correction_round)) / "manifest.json"
+    ).is_file())
     return {
+        "annotation_snapshot_ready": snapshot_ready,
         "job_id": job.id, "status": job.status,
         "review_status": job.review_status, "count": len(items),
         "reviewed_frames": len(items), "total_frames": job.frame_count,
@@ -226,7 +232,7 @@ def decide_review(
     if job.status != "on_review":
         raise HTTPException(
             status_code=409,
-            detail="Wait for both native annotator submissions before deciding a review.",
+            detail="Wait for the assigned annotator to submit in Supervisely before deciding a review.",
         )
     reviewed = list(db.scalars(select(JobReview).where(
         JobReview.job_id == job.id, JobReview.event_id == event.id,
@@ -253,7 +259,7 @@ def decide_review(
             NativeJobBinding.event_id == event.id,
             NativeJobBinding.job_id == job.id,
         )))
-        if len(bindings) == 2:
+        if len(bindings) == (1 if job.assignee_person_id else 2):
             previous = db.scalar(select(NativeOperation).where(
                 NativeOperation.kind == "restart_job",
                 NativeOperation.target_id == job.id,

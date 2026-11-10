@@ -10,9 +10,9 @@ The official SDK calls used here are:
   image.get_list/upload_paths, labeling_job.get_list/create/get_info_by_id.
 No project/job deletion, role mutation or forced job completion is performed.
 
-A pair receives two native LabelingJob records over a single job-specific
-dataset. Its media is isolated from every *other pair job*. The SDK does not
-promise simultaneous collaborative editing; that behavior requires live proof.
+Each new video job belongs to exactly one verified annotator. Two members
+of a team receive separate videos and separate native jobs. Historical pair
+jobs with two native bindings remain readable and can finish normally.
 """
 import argparse
 import json
@@ -48,6 +48,7 @@ from .native_operations_api import (
     queue_publish,
     team_members,
 )
+from .pair_members import pair_members
 from .supervisely_client import NativeAPIError, require_connection
 
 logger = logging.getLogger(__name__)
@@ -194,17 +195,36 @@ def upload_media(db: Session, api, job: LabelingJob, ds: MediaDataset,
     return [all_instances[mid] for mid in job.media_ids]
 
 
+def assigned_people(db: Session, job: LabelingJob):
+    """Respect historical pair jobs; new jobs name one verified person."""
+    if job.assignee_person_id is None:
+        return team_members(db, job)
+    members, _ = pair_members(db, job.event_id, job.team_id)
+    if len(members) != 2:
+        raise NativeWorkerError("pair_membership_changed")
+    person = next((p for p in members if p.id == job.assignee_person_id), None)
+    if person is None:
+        raise NativeWorkerError("assigned_member_not_in_team")
+    permitted = ({"annotator"} if person.kind == "participant"
+                 else {"admin", "manager", "developer"})
+    if (not person.supervisely_user_id or person.membership_status != "joined"
+            or not person.native_verified_at
+            or (person.supervisely_role or "").lower() not in permitted):
+        raise NativeWorkerError("assigned_member_unverified")
+    return [person]
+
+
 def publish_job(db: Session, job: LabelingJob, api, config: SuperviselyConfig) -> dict:
     """Idempotent by deterministic project/dataset names and native user IDs."""
     if job.status not in {"queued", "publishing", "in_progress"}:
         raise NativeWorkerError("invalid_job_status")
-    if job.sequence > 1 and not can_queue_next(db, job):
-        raise NativeWorkerError("previous_pair_job_not_accepted")
+    if not can_queue_next(db, job):
+        raise NativeWorkerError("previous_annotator_job_not_accepted")
     plan = db.get(LabelingPlan, job.plan_id)
     event = db.get(Event, job.event_id)
     if event is None or event.status != "active" or plan is None or plan.status != "running":
         raise NativeWorkerError("plan_not_running")
-    people = team_members(db, job)
+    people = assigned_people(db, job)
     dataset = db.get(MediaDataset, job.dataset_id)
     if dataset is None or dataset.status != "ready":
         raise NativeWorkerError("local_dataset_not_ready")
@@ -219,7 +239,7 @@ def publish_job(db: Session, job: LabelingJob, api, config: SuperviselyConfig) -
         db.commit()
     native_media = upload_media(db, api, job, dataset, remote_ds_id)
     roster_ids = {p.supervisely_user_id: p for p in people}
-    # Same project and job-specific dataset, two independent Supervisely job rows.
+    # One immutable dataset and one native job per assigned annotator.
     current = api.labeling_job.get_list(
         config.team_id, dataset_id=remote_ds_id, show_disabled=True,
     )
@@ -233,7 +253,7 @@ def publish_job(db: Session, job: LabelingJob, api, config: SuperviselyConfig) -
     missing = [uid for uid in roster_ids if uid not in by_user]
     if missing:
         api.labeling_job.create(
-            name="Nightjar pair " + job.id,
+            name="Nightjar video " + job.id if job.assignee_person_id else "Nightjar pair " + job.id,
             dataset_id=remote_ds_id,
             user_ids=missing,
             images_ids=native_media,
@@ -296,8 +316,9 @@ def sync_one(db: Session, api, job: LabelingJob) -> str:
         NativeJobBinding.job_id == job.id,
         NativeJobBinding.event_id == job.event_id,
     )))
-    if len(bindings) != 2:
-        return job.status
+    expected_count = 1 if job.assignee_person_id else 2
+    if len(bindings) != expected_count:
+        raise NativeWorkerError("native_binding_count_mismatch")
     statuses = []
     for binding in bindings:
         native = api.labeling_job.get_info_by_id(binding.native_job_id)
@@ -314,10 +335,14 @@ def sync_one(db: Session, api, job: LabelingJob) -> str:
         job.review_status = "returned"
     elif all(
         info.status in {"on_review", "completed", "review_completed"}
-        and info.images_count > 0
-        and info.finished_images_count >= info.images_count
+        and (job.assignee_person_id is not None or (
+            info.images_count > 0
+            and info.finished_images_count >= info.images_count
+        ))
         for info in statuses
     ):
+        # New single-annotator jobs trust Supervisely's submitted status.
+        # Preserve the historical completion rule for old two-annotator jobs.
         job.status = "on_review"
         job.submitted_at = job.submitted_at or epoch()
     db.commit()
@@ -427,9 +452,10 @@ def sync_all(db: Session, api, config: SuperviselyConfig) -> dict:
             before = job.status
             try:
                 after = sync_one(db, api, job)
-            except Exception:  # noqa: BLE001 - isolation of remote status errors
+            except Exception as exc:  # noqa: BLE001 - isolate failures by native job
                 db.rollback()
-                logger.warning("Native status reconciliation requires inspection for job %s", job.id)
+                code = exc.code if isinstance(exc, (NativeWorkerError, NativeAPIError)) else type(exc).__name__
+                logger.warning("Native status reconciliation failed for job %s (%s)", job.id, code)
                 continue
             if before != after:
                 changed += 1
@@ -457,9 +483,10 @@ def sync_all(db: Session, api, config: SuperviselyConfig) -> dict:
             try:
                 if capture_job_annotations(db, api, candidate):
                     snapshots += 1
-            except Exception:  # noqa: BLE001 - next poll retries read-only annotation fetch
+            except Exception as exc:  # noqa: BLE001 - retried next worker poll
                 failures += 1
-                logger.warning("Annotation snapshot pending retry for job %s", candidate.id)
+                code = exc.code if isinstance(exc, (NativeWorkerError, NativeAPIError)) else type(exc).__name__
+                logger.warning("Annotation snapshot pending retry for job %s (%s)", candidate.id, code)
     return {
         "changed_jobs": changed, "pending_operations": queued,
         "annotation_snapshots": snapshots, "annotation_sync_errors": failures,
@@ -482,8 +509,7 @@ def process_once(db: Session, api, config: SuperviselyConfig) -> dict | None:
     ))
     op = next((
         row for row in operations
-        if (db.get(LabelingJob, row.target_id).sequence == 1
-            or can_queue_next(db, db.get(LabelingJob, row.target_id)))
+        if can_queue_next(db, db.get(LabelingJob, row.target_id))
     ), None)
     if op is None:
         db.rollback()
@@ -558,13 +584,13 @@ def process_correction_once(db: Session, api, config: SuperviselyConfig) -> dict
     opid, jobid = op.id, job.id
     db.commit()
     try:
-        people = team_members(db, job)
+        people = assigned_people(db, job)
         by_person = {p.id: p for p in people}
         bindings = list(db.scalars(select(NativeJobBinding).where(
             NativeJobBinding.event_id == job.event_id,
             NativeJobBinding.job_id == job.id,
         )))
-        if len(bindings) != 2 or {b.person_id for b in bindings} != set(by_person):
+        if len(bindings) != len(people) or {b.person_id for b in bindings} != set(by_person):
             raise NativeWorkerError("correction_binding_mismatch")
         # Reconcile independently named restart jobs before any remote write,
         # including if the first remote restart succeeded but its response was lost.
