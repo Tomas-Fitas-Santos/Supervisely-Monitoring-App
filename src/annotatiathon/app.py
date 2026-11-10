@@ -5,6 +5,7 @@ from .activities_api import router as activities_router
 from .attendance_api import router as attendance_router
 from .auth import router as auth_router
 from .closeout_api import router as closeout_router
+from .coverage_api import router as coverage_router
 from .database import database_is_ready
 from .datasets_api import router as datasets_router
 from .events_api import router as events_router
@@ -30,6 +31,7 @@ app = FastAPI(
 app.include_router(auth_router)
 app.include_router(registration_router)
 app.include_router(people_router)
+app.include_router(coverage_router)
 app.include_router(teams_router)
 app.include_router(settings_router)
 app.include_router(personal_settings_router)
