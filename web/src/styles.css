@@ -280,3 +280,16 @@ input,select{border:1px solid #dfe5ed;border-radius:9px;background:white;padding
 .activities-subtab-layout>.panel{width:100%}
 .activity-results-selector{display:block;max-width:520px;margin-bottom:20px;font-size:12px;color:#52677b;font-weight:700}
 .activity-results-selector select{display:block;width:100%;margin-top:7px}
+
+
+/* Coordinate-faithful Supervisely annotation overlay for bird frame review */
+.review-annotation-visual{display:flex;flex-direction:column;gap:10px;margin:13px 0}
+.annotation-view-toolbar{display:flex;gap:12px;align-items:center;justify-content:space-between}
+.annotation-view-toolbar span{font-size:11px;font-weight:750;color:#526775}
+.annotation-view-toolbar .btn{font-size:11px;padding:7px 10px}
+.annotation-image-stage{position:relative;width:100%;line-height:0}
+.annotation-image-stage .review-preview{display:block;width:100%;height:auto;max-height:490px;object-fit:contain;margin:0;line-height:normal}
+.annotation-image-overlay{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible}
+.annotation-legend{display:flex;flex-wrap:wrap;gap:7px;padding:9px;border-radius:9px;background:#f7f9fa;border:1px solid #e5ebec}
+.annotation-legend span{display:flex;align-items:center;gap:5px;white-space:nowrap;font-size:10px;color:#586a77}
+.annotation-legend i{width:11px;height:11px;display:inline-block;border:1px solid #273746;border-radius:50%;flex-shrink:0}
