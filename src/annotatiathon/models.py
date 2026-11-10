@@ -406,6 +406,51 @@ class MediaAsset(Base):
     native_dataset_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
+
+
+class DatasetFolderClassification(Base):
+    """Curated mapping from a dataset source folder to an ecomorphology and species."""
+
+    __tablename__ = "dataset_folder_classifications"
+    __table_args__ = (
+        UniqueConstraint("dataset_id", "source_folder",
+                         name="uq_dataset_source_folder_classification"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=identifier)
+    event_id: Mapped[str] = mapped_column(ForeignKey("events.id"), index=True)
+    dataset_id: Mapped[str] = mapped_column(ForeignKey("media_datasets.id"), index=True)
+    source_folder: Mapped[str] = mapped_column(String(200))
+    ecomorphology: Mapped[str] = mapped_column(String(200))
+    species_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    updated_by: Mapped[str] = mapped_column(ForeignKey("staff_accounts.id"))
+    updated_at: Mapped[int] = mapped_column(Integer, default=epoch, onupdate=epoch)
+
+
+class DatasetMovementSegment(Base):
+    """Observed primary movement for a disjoint range of frames in one video.
+
+    Frame indexes are 1-based within the lexicographically ordered filenames of
+    that video group. This labels actual frames, not presumed species behavior.
+    """
+
+    __tablename__ = "dataset_movement_segments"
+    __table_args__ = (
+        CheckConstraint("start_frame >= 1 AND end_frame >= start_frame",
+                        name="ck_movement_segment_range"),
+        Index("ix_movement_dataset_video", "dataset_id", "video_group"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=identifier)
+    event_id: Mapped[str] = mapped_column(ForeignKey("events.id"), index=True)
+    dataset_id: Mapped[str] = mapped_column(ForeignKey("media_datasets.id"), index=True)
+    video_group: Mapped[str] = mapped_column(String(500))
+    start_frame: Mapped[int] = mapped_column(Integer)
+    end_frame: Mapped[int] = mapped_column(Integer)
+    movement_type: Mapped[str] = mapped_column(String(60))
+    notes: Mapped[str] = mapped_column(Text, default="")
+    labeled_by: Mapped[str] = mapped_column(ForeignKey("staff_accounts.id"))
+    labeled_at: Mapped[int] = mapped_column(Integer, default=epoch)
+
+
 class LabelingPlan(Base):
     __tablename__ = "labeling_plans"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=identifier)
