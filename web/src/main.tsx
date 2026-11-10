@@ -204,7 +204,7 @@ function App() {
           {tab===item.id&&<ArrowRight size={15} className="nav-end"/>}</button>)}
       </nav>
       <div className="sidebar-spacer"/>
-      <div className="sidebar-info"><Database size={17}/><div><strong>Local database</strong>
+      <div className="sidebar-info"><Database size={17}/><div><strong>Shared database</strong>
         <span>PostgreSQL · Shared state</span></div></div>
       <div className="account-pane">
         <div className="avatar">{auth.staff.name.slice(0,1).toUpperCase()}</div>
@@ -217,7 +217,7 @@ function App() {
     <div className="main-area">
       <header className="topbar"><div className="breadcrumb">Nightjar <span>/</span> <strong>{
         navigation.find(n=>n.id===tab)?.label}</strong></div>
-        <div className="topbar-right"><EventSelector auth={auth}/><span className="status-dot"/> Local development
+        <div className="topbar-right"><EventSelector auth={auth}/><span className="status-dot"/> Event operations
           <span className="topbar-avatar">{auth.staff.name.slice(0,1).toUpperCase()}</span></div>
       </header>
       {tab==="overview"&&<Overview auth={auth}/>}
