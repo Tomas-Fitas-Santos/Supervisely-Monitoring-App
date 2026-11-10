@@ -110,3 +110,10 @@ input,select{border:1px solid #dfe5ed;border-radius:9px;background:white;padding
 @media(max-width:1200px){.coverage-kpis{grid-template-columns:repeat(3,minmax(0,1fr))}.coverage-panels{grid-template-columns:1fr}}
 @media(max-width:760px){.coverage-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.coverage-frames{grid-template-columns:repeat(2,minmax(0,1fr))}.coverage-dataset-select{align-items:stretch}}
 @media(max-width:440px){.coverage-kpis{grid-template-columns:1fr}.coverage-frames{grid-template-columns:1fr}.coverage-inspector{padding:10px}}
+
+.coverage-matrix-scroll{max-width:100%;overflow-x:auto}
+.coverage-matrix{min-width:1350px}
+.coverage-matrix th:first-child,.coverage-matrix td:first-child{min-width:215px;position:sticky;left:0;background:#fff;z-index:1}
+.coverage-matrix th:first-child{background:#f3f6f8;z-index:2}
+.coverage-matrix th:not(:first-child){white-space:normal;min-width:86px;max-width:142px}
+.coverage-matrix td:not(:first-child){text-align:right;font-variant-numeric:tabular-nums}
