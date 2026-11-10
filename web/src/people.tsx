@@ -104,6 +104,8 @@ export function PeopleScreen({auth}:{auth:Auth}) {
   const [showImporter,setShowImporter]=useState(false);
   const [editing,setEditing]=useState<Person|null|undefined>(undefined);
   const [personForm,setPersonForm]=useState<PersonForm>(emptyForm);
+  const [modalError,setModalError]=useState("");
+  const [modalStatus,setModalStatus]=useState("");
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState("");
   const [message,setMessage]=useState("");
@@ -149,18 +151,26 @@ export function PeopleScreen({auth}:{auth:Auth}) {
     setEditing(person||null);
     setPersonForm(person?{name:person.name,email:person.email,kind:person.kind,
       team_name:person.team_name||""}:emptyForm);
-    setError("");setMessage("");
+    setError("");setMessage("");setModalError("");setModalStatus("");
   }
   async function savePerson(e:React.FormEvent) {
-    e.preventDefault();setBusy(true);setError("");
+    e.preventDefault();setBusy(true);setError("");setModalError("");
+    const isNativeChange=Boolean(editing?.supervisely_login && editing.kind!==personForm.kind);
+    setModalStatus(isNativeChange?"Updating and verifying the Supervisely team role…":
+      "Saving the person to Nightjar…");
     try {
-      await api(editing?"/people/"+editing.id:"/people",editing?"PATCH":"POST",personForm,auth.csrf_token);
+      // Saving a joined person's role waits for the verified Supervisely update.
+      // On failure, the dialog stays open AND shows the actual API error here.
+      await api(editing?"/people/"+editing.id:"/people",editing?"PATCH":"POST",
+        personForm,auth.csrf_token);
       setEditing(undefined);
-      setMessage("Person saved. Joined members' roles are verified in Supervisely; unjoined members get the role when invited.");
+      setMessage("Person saved. Any joined member's role was verified in Supervisely.");
       setInviteVersion(v=>v+1);
       await refresh();
-    }catch(exc){setError((exc as Error).message);}
-    finally{setBusy(false);}
+    }catch(exc){
+      setModalError((exc as Error).message+
+        (isNativeChange?" Refresh from Supervisely if the remote role may have changed.":""));
+    }finally{setModalStatus("");setBusy(false);}
   }
   async function deactivate(person:Person) {
     if(!window.confirm("Deactivate "+person.name+"? Historical records will remain available."))return;
@@ -173,18 +183,18 @@ export function PeopleScreen({auth}:{auth:Auth}) {
     finally{setBusy(false);}
   }
   async function synchronizeRole(person:Person) {
-    setBusy(true);setError("");
+    setBusy(true);setModalError("");setModalStatus("Verifying Supervisely team membership…");
     try {
       const updated=await api<Person>("/people/"+person.id+"/supervisely-role",
         "POST",undefined,auth.csrf_token);
       setEditing({...person,...updated});
       setMessage("Supervisely role verified: "+(updated.supervisely_role||"not yet joined")+".");
       await refresh();
-    }catch(exc){setError((exc as Error).message);}
-    finally{setBusy(false);}
+    }catch(exc){setModalError((exc as Error).message);}
+    finally{setModalStatus("");setBusy(false);}
   }
   async function setMonitorApproval(person:Person,approved:boolean){
-    setBusy(true);setError("");
+    setBusy(true);setModalError("");setModalStatus("Updating monitor registration approval…");
     try{
       const changed=await api<Person>("/people/"+person.id+"/monitor-registration",
         "PUT",{approved},auth.csrf_token);
@@ -192,8 +202,8 @@ export function PeopleScreen({auth}:{auth:Auth}) {
       setMessage(approved?"Monitor may now create a Nightjar account with email verification.":
         "New Nightjar registration disabled for this monitor.");
       await refresh();
-    }catch(exc){setError((exc as Error).message);}
-    finally{setBusy(false);}
+    }catch(exc){setModalError((exc as Error).message);}
+    finally{setModalStatus("");setBusy(false);}
   }
   async function copyEmails() {
     if(selectedPeople.length===0)return;
@@ -351,6 +361,8 @@ export function PeopleScreen({auth}:{auth:Auth}) {
                 "Disable new registrations":"Approve for Nightjar registration"}
             </button></div>
           </div>}
+          {modalError&&<div role="alert" className="alert danger">{modalError}</div>}
+          {busy&&modalStatus&&<div role="status" className="alert" aria-live="polite">{modalStatus}</div>}
           <div className="modal-actions">{editing&&<button type="button" disabled={busy}
             className="btn danger-outline" onClick={()=>void deactivate(editing)}>Deactivate</button>}
             <button className="btn secondary" type="button" onClick={()=>setEditing(undefined)}>Cancel</button>
