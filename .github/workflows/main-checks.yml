@@ -48,3 +48,35 @@ jobs:
       - name: Compile frontend
         working-directory: web
         run: npm run build
+
+      - name: Prepare disposable live-test container credentials
+        run: |
+          python - <<'PY'
+          import base64
+          import secrets
+          from pathlib import Path
+          source = Path(".env.live.example").read_text()
+          source = source.replace("POSTGRES_PASSWORD=GENERATE_WITH_SCRIPT",
+                                  "POSTGRES_PASSWORD=" + secrets.token_hex(24))
+          source = source.replace("NIGHTJAR_ENCRYPTION_KEY=GENERATE_WITH_SCRIPT",
+                                  "NIGHTJAR_ENCRYPTION_KEY=" +
+                                  base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())
+          Path(".env.live").write_text(source)
+          Path(".nightjar-live-data").mkdir(exist_ok=True)
+          PY
+      - name: Validate live-test Compose configuration
+        run: docker compose --env-file .env.live -f compose.live.yaml config --quiet
+      - name: Build and start live-test web, API, migration, and database
+        run: docker compose --env-file .env.live -f compose.live.yaml up -d --build web
+      - name: Verify live-test reverse proxy, frontend, and database readiness
+        run: |
+          curl --fail --silent --show-error --retry 15 --retry-delay 3 http://127.0.0.1:8080/health/ready
+          curl --fail --silent --show-error http://127.0.0.1:8080/ | grep -qi '<html'
+      - name: Build real Supervisely SDK worker image
+        run: docker compose --env-file .env.live -f compose.live.yaml --profile native build worker
+      - name: Print container logs when live-test checks fail
+        if: failure()
+        run: docker compose --env-file .env.live -f compose.live.yaml --profile native logs --tail=80 || true
+      - name: Stop disposable live-test containers without deleting volumes
+        if: always()
+        run: docker compose --env-file .env.live -f compose.live.yaml --profile native down || true
