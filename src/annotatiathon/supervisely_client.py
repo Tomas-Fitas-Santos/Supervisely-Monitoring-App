@@ -1,7 +1,7 @@
-"""Small read-only Supervisely REST adapter following the published SDK endpoints.
+"""Scoped Supervisely REST adapter following published SDK endpoint contracts.
 
-Uses official POST users.me, teams.info, workspaces.info and members.list.
-No remote mutation methods exist in this module. Credentials never leave the server.
+Uses official POST APIs for verified reads and explicit admin-only native
+role edits. Credentials never leave the server.
 """
 import hashlib
 import json
@@ -295,8 +295,11 @@ def change_member_role(
     if type(user_id) is not int or user_id <= 0:
         raise NativeAPIError("invalid_user", "A verified Supervisely member ID is required.")
     base, token = require_connection(config)
+    # Six short native requests are needed (actor, target, role list,
+    # mutation and readback). Bound each request so a stalled upstream does
+    # not strand the browser behind a long-lived Cloudflare tunnel request.
     with httpx.Client(
-        timeout=httpx.Timeout(12.0, connect=5.0),
+        timeout=httpx.Timeout(4.0, connect=2.0),
         follow_redirects=False, trust_env=False,
     ) as client:
         account = _request_json(client, base, token, "users.me", {})
