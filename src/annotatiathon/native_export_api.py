@@ -205,7 +205,7 @@ def export_event_zip(db: Session, api, event_id: str) -> dict:
                         mapping.native_image_id
                     )
                     if not isinstance(annotation, dict):
-                        raise ValueError("invalid_native_annotation")
+                        raise TypeError("invalid_native_annotation")
                     record = {
                         "event_id": event_id, "team_id": job.team_id,
                         "job_id": job.id, "job_sequence": job.sequence,
@@ -264,7 +264,7 @@ def export_event_zip(db: Session, api, event_id: str) -> dict:
                 ],
             }, indent=2))
         os.replace(temporary, path)
-    except BaseException:  # noqa: BLE001 - cleanup even for interrupted exports
+    except BaseException:
         temporary.unlink(missing_ok=True)
         raise
     finally:
