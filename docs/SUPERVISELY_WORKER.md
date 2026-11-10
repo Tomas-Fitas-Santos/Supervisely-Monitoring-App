@@ -24,7 +24,7 @@ Do not claim this has been proven by CI.
 
 ## Local configuration
 
-Keep the existing `.env` private. Add `SUPERVISELY_API_TOKEN` for the
+Keep the existing `.env` private. Set a stable `NIGHTJAR_ENCRYPTION_KEY` and save the shared Supervisely admin/manager token through organiser Settings for the
 organiser account. In Settings, configure both the Supervisely team and its
 source workspace and use **Verify connection**. Refresh the native membership
 and explicitly match each pair member to distinct, verified `annotator` IDs.
