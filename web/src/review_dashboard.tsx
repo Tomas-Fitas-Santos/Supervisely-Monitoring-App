@@ -105,7 +105,7 @@ export function TeamReviewOverview({auth,mode}:{auth:Auth;mode:"dashboard"|"rank
           <p>{metrics.winner_policy}. Unscored teams are not ranked yet.</p></div></div>
         <div className="table-scroll"><table className="data-table leaderboard-table">
           <thead><tr><th>Rank</th><th>Team</th><th>Keypoint accuracy</th><th>Reviewed points</th>
-            <th>Completed jobs</th><th>Frames reviewed</th><th>Frames submitted</th><th>Avg. s/frame</th></tr></thead>
+            <th>Completed jobs</th><th>Frames reviewed</th><th>Frames submitted</th><th>Elapsed per frame</th></tr></thead>
           <tbody>{metrics.teams.map(row=><tr key={row.team_id}>
             <td><strong>{row.rank===null?"—":row.rank===1?"🥇 1":row.rank===2?"🥈 2":row.rank===3?"🥉 3":"#"+row.rank}</strong></td>
             <td><strong>{row.team_name}</strong></td>
