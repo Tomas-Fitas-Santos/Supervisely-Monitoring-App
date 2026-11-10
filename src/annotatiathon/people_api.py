@@ -153,9 +153,16 @@ def update_private_fields(person: Person, payload: PersonInput | PersonUpdate) -
 
 def person_record(p: Person, team: str | None = None,
                   table_number: int | None = None, *,
-                  include_private: bool = False) -> dict:
+                  include_private: bool = False,
+                  include_food_allergies: bool = False) -> dict:
+    private = private_person_fields(p) if (
+        include_private or include_food_allergies
+    ) else {}
+    if not include_private:
+        private = {key: value for key, value in private.items()
+                   if key == "food_allergies"}
     return {
-        **(private_person_fields(p) if include_private else {}),
+        **private,
         "id": p.id, "name": p.name, "email": p.email, "kind": p.kind,
         "team_id": p.team_id, "team_name": team, "active": p.active,
         "membership_status": p.membership_status,
@@ -223,6 +230,7 @@ def list_people(
             include_private=bool(
                 {"organiser", "reception"} & set(_ctx.staff.roles)
             ),
+            include_food_allergies="distribution" in _ctx.staff.roles,
         ) for p in people],
         "total": total, "page": page, "size": size,
     }
