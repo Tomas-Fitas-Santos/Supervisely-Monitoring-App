@@ -594,3 +594,113 @@ def test_confirmed_reset_archives_only_event_projects_and_keeps_members(configur
     categories = http.get("/api/v1/tickets/categories")
     assert categories.status_code == 200
     assert len(categories.json().get("items", [])) >= 3
+
+
+def test_team_dashboard_rankings_and_monitor_scoped_review(configured):
+    from annotatiathon.models import JobReview, MonitorAssignment
+
+    http, maker, _csrf, _plan, _sdk = configured
+    with maker.begin() as db:
+        original_team = db.scalar(select(CompetitionTeam).where(
+            CompetitionTeam.event_id == DEFAULT_EVENT_ID))
+        other_team = CompetitionTeam(
+            event_id=DEFAULT_EVENT_ID, name="Second Pair")
+        db.add(other_team)
+        db.flush()
+        admin = db.scalar(select(StaffAccount).where(
+            StaffAccount.email == "organiser@example.org"
+        ))
+        monitor = Person(
+            event_id=DEFAULT_EVENT_ID, name="Review Monitor",
+            email="review-monitor@example.org", kind="monitor",
+        )
+        db.add(monitor)
+        staff = StaffAccount(
+            email=monitor.email, name=monitor.name,
+            roles=["monitor"], password_hash=password_hash("MonitorPassword123!"),
+        )
+        db.add(staff)
+        db.flush()
+        db.add(MonitorAssignment(
+            event_id=DEFAULT_EVENT_ID, team_id=original_team.id,
+            monitor_person_id=monitor.id, assigned_by=admin.id,
+        ))
+        jobs = list(db.scalars(select(LabelingJob).order_by(LabelingJob.sequence)))
+        job = jobs[0]
+        job.started_at = 1000
+        job.submitted_at = 1100
+        job.status = "completed"
+        job.review_status = "accepted"
+        job.completed_at = 1200
+        db.add(JobReview(
+            event_id=DEFAULT_EVENT_ID, job_id=job.id, media_id=job.media_ids[0],
+            verdict="good", correct_keypoints=3, missing_keypoints=1,
+            incorrect_keypoints=1, visible_keypoints=3, occluded_keypoints=0,
+            reviewer_id=admin.id,
+        ))
+        outside = LabelingJob(
+            event_id=DEFAULT_EVENT_ID, plan_id=job.plan_id,
+            dataset_id=job.dataset_id, team_id=other_team.id, sequence=1,
+            media_ids=[job.media_ids[0]], frame_count=1, video_count=0,
+            morphology_counts={"sparrows": 1},
+        )
+        db.add(outside)
+        db.flush()
+        outside_id = outside.id
+        own_id = job.id
+        team_id = original_team.id
+
+    summary = http.get("/api/v1/review/team-metrics")
+    assert summary.status_code == 200
+    ranked = summary.json()["teams"]
+    assert len(ranked) == 2
+    assert ranked[0]["team_id"] == team_id
+    assert ranked[0]["keypoint_accuracy_pct"] == 60.0
+    assert ranked[0]["average_seconds_per_frame"] == 50.0
+    assert ranked[0]["jobs_completed"] == 1
+    assert ranked[1]["rank"] is None
+
+    with TestClient(app) as monitor_client:
+        login = monitor_client.post("/api/v1/auth/login", json={
+            "email": "review-monitor@example.org",
+            "password": "MonitorPassword123!",
+        })
+        assert login.status_code == 200, login.text
+        allowed = monitor_client.get("/api/v1/review/assigned-jobs")
+        assert allowed.status_code == 200
+        assert {j["team_id"] for j in allowed.json()["items"]} == {team_id}
+        assert monitor_client.get("/api/v1/review/team-metrics").status_code == 200
+        assert monitor_client.get("/api/v1/review/jobs/" + outside_id).status_code == 403
+        assert monitor_client.get("/api/v1/labeling/jobs/" + outside_id + "/media").status_code == 403
+        assert monitor_client.get("/api/v1/review/jobs/" + own_id).status_code == 200
+
+
+def test_private_roster_csv_fields_are_restricted_and_editable(configured):
+    from annotatiathon.people_api import private_person_fields
+
+    http, maker, csrf, _plan, _sdk = configured
+    with maker.begin() as db:
+        person = db.scalar(select(Person).where(Person.kind == "participant"))
+        person.source_fields = {
+            "Data de nascimento": "2008-02-01",
+            "Telefone": "900000000",
+            "Menores de 18 anos": "Sim",
+            "Autorização de cedência de   imagem": "Sim",
+            "Autorização de tratamento de   dados": "Não",
+            "Alergias/Intolerâncias   alimentares": "Lactose",
+        }
+        pid = person.id
+    with maker() as db:
+        values = private_person_fields(db.get(Person, pid))
+        assert values["date_of_birth"] == "2008-02-01"
+        assert values["image_consent"] == "Sim"
+        assert values["data_consent"] == "Não"
+        assert values["food_allergies"] == "Lactose"
+    roster = http.get("/api/v1/people")
+    assert roster.status_code == 200
+    assert any(p["phone"] == "900000000" for p in roster.json()["items"])
+    patch = http.patch("/api/v1/people/" + pid, json={
+        "food_allergies": "None reported",
+    }, headers={"X-CSRF-Token": csrf})
+    assert patch.status_code == 200, patch.text
+    assert patch.json()["food_allergies"] == "None reported"
