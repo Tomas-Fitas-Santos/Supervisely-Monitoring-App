@@ -23,6 +23,28 @@
 - Organiser: save the shared Supervisely Team ID, Workspace ID, and encrypted admin/manager integration token in Settings.
 - Distinguish a verified native team member appearing in the roster from an authorised Nightjar monitor login. Only an approved organiser/CSV roster monitor can register.
 
+## Free, real-user live testing (Cloudflare Tunnel)
+
+To share the full Nightjar app with real monitors without paying for hosting,
+use the isolated Docker stack and email-protected Cloudflare Quick Tunnel.
+It runs FastAPI, PostgreSQL, the built React website and an optional real
+Supervisely worker on your own Windows computer. The stack is completely
+separate from the existing local development database.
+
+**[Step-by-step Windows live-testing guide](docs/LIVE_TESTING.md)**
+
+```powershell
+git pull --ff-only origin main
+.\scripts\init-live-test.ps1
+docker compose --env-file .env.live -f compose.live.yaml up -d --build web
+curl.exe -f http://127.0.0.1:8080/health/ready
+```
+
+When ready to share the app, install `cloudflared` and run a Quick Tunnel
+restricted to your testers' specific email addresses. Sign in using the HTTPS
+tunnel URL; production-mode session cookies are deliberately secure-only.
+Do not use this temporary tunnel for the official event.
+
 ## Start locally on Windows
 
 Requires Python 3.12+, Docker Desktop with Compose, Node.js 22+ and npm.
@@ -79,7 +101,7 @@ alembic upgrade head
 alembic current
 ```
 
-The new revision is `0010_pair_queue (head)`. Restart the backend and the Vite development server to see the new Check-in, Tickets & Rewards and Staff Access tabs.
+Run `alembic current` to confirm the latest available migration revision. Restart the backend and the Vite development server to see the new Check-in, Tickets & Rewards and Staff Access tabs.
 
 **Windows note:** if your machine's Application Control blocks SQLAlchemy compiled wheels, retain your working pure-Python SQLAlchemy installation; upgrading the app does not require reinstalling SQLAlchemy. Use `npm.cmd` instead of `npm` when PowerShell blocks npm scripts.
 
