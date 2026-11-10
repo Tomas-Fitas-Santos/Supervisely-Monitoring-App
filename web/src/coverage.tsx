@@ -202,7 +202,6 @@ export function CoverageScreen({auth}:{auth:Auth}) {
       <div className="coverage-kpis">
         {([
           ["Unique video frames",coverage.totals.frames,Film],
-          ["Standalone images",coverage.totals.images,FolderTree],
           ["Source videos",coverage.totals.videos,Eye],
           ["Movement-labeled frames",coverage.totals.tagged_frames,Tags],
           ["Unlabeled video frames",coverage.totals.unlabeled_frames,BarChart3],
