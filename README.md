@@ -17,8 +17,8 @@
 ## Secure self-registration and configuration
 
 - Import the official CSV with monitors marked as `monitor` before inviting monitors to create Nightjar accounts.
-- Configure an SMTP server for email verification and a stable `NIGHTJAR_ENCRYPTION_KEY`. Do not put a Supervisely token in `.env`.
-- Monitor: choose **Create monitor account** on the Nightjar login page, verify the emailed 8-digit code, set a password, and log in.
+- Keep a stable `NIGHTJAR_ENCRYPTION_KEY` for encrypted shared Supervisely settings. No SMTP or personal Supervisely token is required for Nightjar signup.
+- Monitor: choose **Create monitor account**, enter an active approved roster email, set an app-only password and log in; link Supervisely later in Settings.
 - Monitor: under **Settings**, optionally verify their personal Supervisely account by pasting a token. That token is discarded after verification.
 - Organiser: save the shared Supervisely Team ID, Workspace ID, and encrypted admin/manager integration token in Settings.
 - Distinguish a verified native team member appearing in the roster from an authorised Nightjar monitor login. Only an approved organiser/CSV roster monitor can register.
@@ -74,6 +74,12 @@ even if they have not joined yet. A fresh batch is then available.
 
 See **[Role and invitation contract](docs/ROLES_AND_INVITATIONS.md)**.
 
+**First-claim security caution:** SQL roster matching alone does **not** prove
+email ownership. A person knowing another approved monitor's unclaimed email
+could register first. Use this simplified flow only for trusted live tests,
+and require an organiser-issued one-time invite code or identity proof before
+the public event.
+
 ## Free, real-user live testing (Cloudflare Tunnel)
 
 Run the normal FastAPI, PostgreSQL and React app on a Windows machine
@@ -98,7 +104,7 @@ cloudflared tunnel --url http://127.0.0.1:8080
 
 **Existing staff** sign in with their Nightjar accounts. **Approved monitors**
 can create their own accounts using the **Create monitor account** button,
-email verification and the current active event's monitor roster. No
+the current active SQL event's monitor roster (without email verification). No
 participant gets a monitor account. The app enforces roles and session
 authentication on the API.
 
@@ -130,7 +136,7 @@ Create the first organiser (no account/password is baked into the code or reposi
 python -m annotatiathon.manage create-staff --email "organiser@your-domain.pt" --name "Event Organiser" --roles organiser
 ```
 
-A password is prompted securely; it is not passed on the command line. Organisers are provisioned by this command. **Monitors can instead self-register** from the login page if their email appears as an active `monitor` in the official event roster. They receive an eight-digit code by email and choose their own 12+-character password. An email imported automatically from Supervisely does not qualify for self-registration until explicitly approved in the roster. For other staff roles, use the same command with roles such as `reception` or `activity,distribution`.
+A password is prompted securely; it is not passed on the command line. Organisers are provisioned by this command. **Monitors can instead self-register** from the login page if their email appears as an active `monitor` in the official event roster. They choose their own 12+-character app password immediately, without an email code. An email imported automatically from Supervisely does not qualify for self-registration until explicitly approved in the roster. For other staff roles, use the same command with roles such as `reception` or `activity,distribution`.
 
 Start the backend in **Terminal 1**:
 
@@ -177,7 +183,7 @@ Run `alembic current` to confirm the latest available migration revision. Restar
 
 ## Native Supervisely verification and read-only membership reconciliation
 
-The organiser now configures **Team ID, Workspace ID and the shared Supervisely API token directly in Settings**. The token is verified against the live team, encrypted with `NIGHTJAR_ENCRYPTION_KEY`, and stored in PostgreSQL. The encryption key is a stable application secret supplied by the deployment environment (or an untracked local `.env`) and must be backed up separately from PostgreSQL. The token is never returned to the frontend after submission. Generate a Fernet key with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`. `SUPERVISELY_API_TOKEN` is no longer used or required in `.env`. Configure `SMTP_HOST`, `SMTP_PORT`, `SMTP_SENDER` and any needed `SMTP_USERNAME`/`SMTP_PASSWORD` for monitor email verification. The default allowlisted Supervisely host is `app.supervisely.com`.
+The organiser now configures **Team ID, Workspace ID and the shared Supervisely API token directly in Settings**. The token is verified against the live team, encrypted with `NIGHTJAR_ENCRYPTION_KEY`, and stored in PostgreSQL. The encryption key is a stable application secret supplied by the deployment environment (or an untracked local `.env`) and must be backed up separately from PostgreSQL. The token is never returned to the frontend after submission. Generate a Fernet key with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`. `SUPERVISELY_API_TOKEN` is no longer used or required in `.env`. The default allowlisted Supervisely host is `app.supervisely.com`.
 
 1. Organiser: in **Settings → Team & Workspace**, save team and workspace IDs; paste a personal admin/manager Supervisely token under **Organiser integration token** and click **Verify and save token**. This uses read requests to `users.me`, `teams.info`, `workspaces.info` and `members.list`. All monitors see the shared IDs but only the organiser can change them.
 2. In **People & Teams**, click **Refresh from Supervisely** to update local joined members and add new participants/monitors with a unique native email. Opening the app and relevant pages also triggers a rate-limited sync. To resolve unlinked accounts, use **Verify & reconcile the team** and click **Refresh from Supervisely** there. Review matched identities, role warnings, unlinked native accounts and unmatched roster entries. Email matching is exact; native username and ID are used when already verified. When an email is missing, explicitly associate that account with its roster entry.
