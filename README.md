@@ -56,6 +56,24 @@ The existing ingestion structure remains unchanged:
 `images/<species-or-morphology>/<image>` and
 `videos/<species-or-morphology>/<video-title>/<frame>`.
 
+## Real Supervisely roles and invite batches
+
+Event role → Supervisely team role: **Monitor → Manager**, **Participant → Annotator**,
+while the existing Nightjar organiser/monitor remains Supervisely **Admin**.
+Editing a joined member's role in People & Teams updates the verified native
+team role first; failed remote changes do not change the local role. Reclassifying
+a monitor as a participant disables their Nightjar monitor login and
+invalidates their sessions.
+
+The People & Teams screen also offers two separate **Copy next 50 uninvited**
+queues, one for Monitors/Manager and another for Participants/Annotator,
+across all pages of the current event roster. Copying emails does not
+pretend to send a native invitation. After sending the invitations on
+Supervisely, click **Mark batch invited**; those people remain excluded
+even if they have not joined yet. A fresh batch is then available.
+
+See **[Role and invitation contract](docs/ROLES_AND_INVITATIONS.md)**.
+
 ## Free, real-user live testing (Cloudflare Tunnel)
 
 Run the normal FastAPI, PostgreSQL and React app on a Windows machine
@@ -164,7 +182,7 @@ The organiser now configures **Team ID, Workspace ID and the shared Supervisely 
 1. Organiser: in **Settings → Team & Workspace**, save team and workspace IDs; paste a personal admin/manager Supervisely token under **Organiser integration token** and click **Verify and save token**. This uses read requests to `users.me`, `teams.info`, `workspaces.info` and `members.list`. All monitors see the shared IDs but only the organiser can change them.
 2. In **People & Teams**, click **Refresh from Supervisely** to update local joined members and add new participants/monitors with a unique native email. Opening the app and relevant pages also triggers a rate-limited sync. To resolve unlinked accounts, use **Verify & reconcile the team** and click **Refresh from Supervisely** there. Review matched identities, role warnings, unlinked native accounts and unmatched roster entries. Email matching is exact; native username and ID are used when already verified. When an email is missing, explicitly associate that account with its roster entry.
 3. Confirm **local reconciliation**. The server rechecks the same team, the roster and the remote membership fingerprint and refuses to apply a stale preview. Matched active roster members are marked `joined` and their native login, ID and role are saved in the selected event. Unmatched roster members are left unchanged: absence from `members.list` is not proof of an unsent invitation.
-4. The team integration is shared by the event, and all monitor logins can use **Settings → My Supervisely connection** to paste and verify their own token. Personal tokens are **not stored**; the verified account ID, login, and role are linked to the Nightjar staff account. Team ID and workspace ID remain organiser-only. Connection verification and membership reconciliation are read-only; native publishing occurs only after explicit organiser launch and starting the optional SDK worker. Native invitation/role mutations are still not automatic. There is no in-app demo workflow. The SDK semantics are grounded in the official UserApi member list and Supervisely REST endpoints. An actual live token acceptance check on the user's Pro team remains required.
+4. The team integration is shared by the event, and all monitor logins can use **Settings → My Supervisely connection** to paste and verify their own token. Personal tokens are **not stored**; the verified account ID, login, and role are linked to the Nightjar staff account. Team ID and workspace ID remain organiser-only. Connection verification and membership reconciliation are read-only; native publishing occurs only after explicit organiser launch and starting the optional SDK worker. Native invitations remain manual: role changes to already-joined members ARE synchronized through verified Supervisely `members.editInfo` when the organiser edits them in People & Teams. There is no in-app demo workflow. The SDK semantics are grounded in the official UserApi member list and Supervisely REST endpoints. An actual live token acceptance check on the user's Pro team remains required.
 
 ## Event-local monitor responsibilities
 
