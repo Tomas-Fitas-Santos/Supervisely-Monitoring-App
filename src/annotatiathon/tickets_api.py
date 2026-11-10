@@ -10,8 +10,13 @@ from sqlalchemy.orm import Session
 from .auth import AuthContext, requires
 from .db import get_db
 from .models import (
-    AuditEvent, CompetitionTeam, Person, TicketCategory, TicketDistribution,
-    TicketLedgerEntry, epoch,
+    AuditEvent,
+    CompetitionTeam,
+    Person,
+    TicketCategory,
+    TicketDistribution,
+    TicketLedgerEntry,
+    epoch,
 )
 
 router = APIRouter(prefix="/api/v1/tickets", tags=["tickets"])

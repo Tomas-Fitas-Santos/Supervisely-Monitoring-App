@@ -10,7 +10,13 @@ from sqlalchemy.pool import StaticPool
 
 from annotatiathon.app import app
 from annotatiathon.db import get_db
-from annotatiathon.models import AuditEvent, Base, StaffAccount, TicketDistribution, TicketLedgerEntry
+from annotatiathon.models import (
+    AuditEvent,
+    Base,
+    StaffAccount,
+    TicketDistribution,
+    TicketLedgerEntry,
+)
 from annotatiathon.security import password_hash
 
 

@@ -1,8 +1,8 @@
 """FastAPI application and versioned endpoints. No credentials or demo data embedded."""
 from fastapi import FastAPI, Response
 
-from .auth import router as auth_router
 from .attendance_api import router as attendance_router
+from .auth import router as auth_router
 from .database import database_is_ready
 from .people_api import router as people_router
 from .settings_api import router as settings_router

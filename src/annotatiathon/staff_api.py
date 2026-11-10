@@ -4,7 +4,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .auth import AuthContext, ROLES, requires, staff_view
+from .auth import ROLES, AuthContext, requires, staff_view
 from .db import get_db
 from .models import AuditEvent, StaffAccount
 
