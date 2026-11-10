@@ -28,6 +28,7 @@ from sqlalchemy.orm import Session
 
 from .annotation_schema import AnnotationSchemaError, ensure_project_annotation_classes
 from .db import session_factory
+from .full_reset_api import clear_event_data, safe_dataset_paths
 from .models import (
     AuditEvent,
     Event,
@@ -42,7 +43,6 @@ from .models import (
     SuperviselyConfig,
     epoch,
 )
-from .full_reset_api import clear_event_data, safe_dataset_paths
 from .native_export_api import export_event_zip
 from .native_operations_api import (
     can_queue_next,
