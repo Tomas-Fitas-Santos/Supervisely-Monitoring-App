@@ -106,7 +106,7 @@ class PreviewRequest(BaseModel):
 
 def proposed_role(person: Person, member: NativeMember) -> bool:
     return (person.kind == "participant" and member.role != "annotator") or (
-        person.kind == "monitor" and member.role not in {"admin", "manager"}
+        person.kind == "monitor" and member.role not in {"admin", "manager", "developer"}
     )
 
 
