@@ -244,6 +244,7 @@ export function PeopleScreen({auth}:{auth:Auth}) {
     finally{setBusy(false);}
   }
   const showSensitive=auth.staff.roles.some(r=>r==="organiser"||r==="reception");
+  const showAllergies=showSensitive||auth.staff.roles.includes("distribution");
   function personal(value:string|undefined){
     return showSensitive?(value?.trim()||"—"):"Restricted";
   }
@@ -268,7 +269,7 @@ export function PeopleScreen({auth}:{auth:Auth}) {
           <td>{personal(showSensitive?consentLabel(p.under_18):"")}</td>
           <td>{personal(showSensitive?consentLabel(p.image_consent):"")}</td>
           <td>{personal(showSensitive?consentLabel(p.data_consent):"")}</td>
-          <td>{personal(p.food_allergies)}</td>
+          <td>{showAllergies?(p.food_allergies?.trim()||"—"):"Restricted"}</td>
         </>}
         <td><span className="soft-pill">{p.kind==="monitor"?"Monitor":"Participant"}</span></td>
         <td>{p.team_name||"—"}</td>
@@ -281,7 +282,7 @@ export function PeopleScreen({auth}:{auth:Auth}) {
   }
   return <div className="page-body">
     <div className="page-heading"><div><span className="eyebrow">EVENT SETUP · PEOPLE</span>
-      <h2>People & Teams</h2><p className="muted">Roster, teams, check-in and invitations have separate workspaces. Sensitive registration details are restricted to organisers and reception staff.</p>
+      <h2>People & Teams</h2><p className="muted">Roster, teams, check-in and invitations have separate workspaces. Birthdates and consent details are restricted to organisers and reception. Food distribution staff can see dietary allergies.</p>
     </div><div className="heading-actions">
       <span className="last-refresh">{updated?"Updated "+updated.toLocaleTimeString():"Loading…"}</span>
       <button className="btn secondary" onClick={()=>void syncNative()}><RefreshCw size={16}/> Refresh from Supervisely</button>
