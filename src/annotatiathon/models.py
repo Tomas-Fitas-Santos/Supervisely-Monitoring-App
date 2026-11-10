@@ -74,6 +74,12 @@ class StaffAccount(Base):
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     login_failures: Mapped[int] = mapped_column(Integer, default=0)
     locked_until: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # A verified native identity link only. Personal API tokens are never stored.
+    supervisely_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    supervisely_login: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    supervisely_role: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    supervisely_verified_team_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    supervisely_verified_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[int] = mapped_column(Integer, default=epoch)
 
 
