@@ -72,6 +72,7 @@ jobs:
         run: |
           curl --fail --silent --show-error --retry 15 --retry-delay 3 http://127.0.0.1:8080/health/ready
           curl --fail --silent --show-error http://127.0.0.1:8080/ | grep -qi '<html'
+          docker compose --env-file .env.live -f compose.live.yaml exec -T api python -c "from pathlib import Path; p=Path('/data/.test-writable'); p.write_text('ok'); p.unlink()"
       - name: Build real Supervisely SDK worker image
         run: docker compose --env-file .env.live -f compose.live.yaml --profile native build worker
       - name: Print container logs when live-test checks fail
