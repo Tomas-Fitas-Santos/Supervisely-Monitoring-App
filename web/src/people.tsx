@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 import { api, refreshSuperviselyRoster, type Auth, type PeopleResponse, type Person, type Team, type TeamResponse } from "./api";
 import { NativeMembershipPanel } from "./native";
+import { InvitationBatches } from "./invitation_batches";
 import { MonitorAssignmentsPanel } from "./monitoring";
 import { MonitorPairPanel } from "./monitor_pairs";
 
@@ -36,9 +37,9 @@ function RosterImporter({auth,onComplete}:{auth:Auth;onComplete:()=>void}) {
       .split(",").map(v=>v.trim().replace(/^"|"$/g,""));
     setText(next);setHeaders(names);setFilename(file.name);
     function choose(words:string[]) {return names.find(h=>words.includes(h.trim().toLowerCase()))||"";}
-    setMapping({name:choose(["name","full name","nome","participant name","display_name"]),
-      email:choose(["email","e-mail","mail","email address"]),
-      kind:choose(["role","type","kind","group"]),team:choose(["team","team_name","team name","equipa"])});
+    setMapping({name:choose(["monitor_name","name","full name","nome","participant name","display_name"]),
+      email:choose(["monitor_email","email","e-mail","mail","email address"]),
+      kind:choose(["event_role","role","type","kind","group"]),team:choose(["team","team_name","team name","equipa"])});
   }
   function payload() {
     return {csv_text:text,mapping:{name:mapping.name,email:mapping.email,
@@ -106,6 +107,7 @@ export function PeopleScreen({auth}:{auth:Auth}) {
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState("");
   const [message,setMessage]=useState("");
+  const [inviteVersion,setInviteVersion]=useState(0);
   const [updated,setUpdated]=useState<Date|null>(null);
   const refresh=useCallback(async()=>{
     try {
@@ -152,7 +154,10 @@ export function PeopleScreen({auth}:{auth:Auth}) {
     e.preventDefault();setBusy(true);setError("");
     try {
       await api(editing?"/people/"+editing.id:"/people",editing?"PATCH":"POST",personForm,auth.csrf_token);
-      setEditing(undefined);setMessage("Person saved.");await refresh();
+      setEditing(undefined);
+      setMessage("Person saved. Joined members' roles are verified in Supervisely; unjoined members get the role when invited.");
+      setInviteVersion(v=>v+1);
+      await refresh();
     }catch(exc){setError((exc as Error).message);}
     finally{setBusy(false);}
   }
@@ -161,7 +166,19 @@ export function PeopleScreen({auth}:{auth:Auth}) {
     setBusy(true);
     try {
       await api("/people/"+person.id,"PATCH",{active:false},auth.csrf_token);
-      setEditing(undefined);await refresh();setMessage("Person deactivated.");
+      setEditing(undefined);setInviteVersion(v=>v+1);
+      await refresh();setMessage("Person deactivated.");
+    }catch(exc){setError((exc as Error).message);}
+    finally{setBusy(false);}
+  }
+  async function synchronizeRole(person:Person) {
+    setBusy(true);setError("");
+    try {
+      const updated=await api<Person>("/people/"+person.id+"/supervisely-role",
+        "POST",undefined,auth.csrf_token);
+      setEditing({...person,...updated});
+      setMessage("Supervisely role verified: "+(updated.supervisely_role||"not yet joined")+".");
+      await refresh();
     }catch(exc){setError((exc as Error).message);}
     finally{setBusy(false);}
   }
@@ -234,8 +251,10 @@ export function PeopleScreen({auth}:{auth:Auth}) {
         {showImporter?"Close roster import":"Import CSV roster"}</button>
       <span className="muted small">Refresh from Supervisely updates joined participants and monitors, and adds new members with verified native email. Unmatched identities require review below.</span>
     </div>}
-    {showImporter&&admin&&<RosterImporter auth={auth} onComplete={()=>{setShowImporter(false);void refresh();}}/>}
-    {admin&&<NativeMembershipPanel auth={auth} onApplied={()=>void refresh()}/>}
+    {showImporter&&admin&&<RosterImporter auth={auth} onComplete={()=>{setShowImporter(false);setInviteVersion(v=>v+1);void refresh();}}/>}
+    {admin&&<InvitationBatches auth={auth} version={inviteVersion}
+      onComplete={()=>{setInviteVersion(v=>v+1);void refresh();}}/>}
+    {admin&&<NativeMembershipPanel auth={auth} onApplied={()=>{setInviteVersion(v=>v+1);void refresh();}}/>}
     {admin&&<MonitorAssignmentsPanel auth={auth} onApplied={()=>void refresh()}/>}
     {admin&&<MonitorPairPanel auth={auth} onChanged={()=>void refresh()}/>}
     <section className="panel table-panel">
@@ -303,6 +322,17 @@ export function PeopleScreen({auth}:{auth:Auth}) {
           <label>Role<select value={personForm.kind} onChange={e=>setPersonForm({...personForm,
             kind:e.target.value as PersonForm["kind"]})}>
             <option value="participant">Participant</option><option value="monitor">Monitor</option></select></label>
+          <p className="muted small">Supervisely role: Monitor → Manager, Participant → Annotator.
+            The organiser keeps Admin. Joined members are updated remotely when you save.</p>
+          {editing?.supervisely_login&&<div className="settings-note">
+            <ShieldCheck size={18}/>
+            <div><p className="muted small">Currently joined as {editing.supervisely_login} ({editing.supervisely_role}).
+              If the Supervisely role differs from the desired event role, use Sync role below.</p>
+            {editing.supervisely_role!=="admin"&&
+              <button type="button" className="btn secondary" disabled={busy}
+                onClick={()=>void synchronizeRole(editing)}>Sync Supervisely role now</button>}
+            </div>
+          </div>}
           {personForm.kind==="participant"&&<label>Competition team name<input value={personForm.team_name}
             onChange={e=>setPersonForm({...personForm,team_name:e.target.value})}
             placeholder="e.g. Team 014"/></label>}
