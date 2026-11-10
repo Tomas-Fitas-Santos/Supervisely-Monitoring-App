@@ -28,6 +28,8 @@ from sqlalchemy.orm import Session
 
 from .annotation_schema import AnnotationSchemaError, ensure_project_annotation_classes
 from .db import session_factory
+from .events_api import seed_categories
+from .full_reset_api import clear_event_data, safe_dataset_paths
 from .models import (
     AuditEvent,
     Event,
@@ -753,6 +755,116 @@ def process_export_once(db: Session, api) -> dict | None:
     return {"operation_id": tid, "status": "done", **result}
 
 
+def process_event_reset(db: Session, api, config: SuperviselyConfig) -> dict | None:
+    """Archive only event-prefixed Nightjar projects, then clear the local event.
+
+    Remote archiving is idempotent and retried explicitly after failures.
+    It cannot remove the Supervisely team, workspace or membership records.
+    """
+    op = db.scalar(select(NativeOperation).where(
+        NativeOperation.kind == "reset_event",
+        NativeOperation.status == "pending",
+    ).order_by(NativeOperation.created_at).with_for_update(skip_locked=True))
+    if op is None:
+        db.rollback()
+        return None
+    event = db.get(Event, op.event_id)
+    if event is None or event.status != "resetting":
+        op.status = "attention"
+        op.error_code = "event_reset_state_changed"
+        db.commit()
+        return {"status": "attention", "operation_id": op.id}
+    op.status = "running"
+    op.claimed_at = epoch()
+    op.attempts += 1
+    opid, event_id = op.id, event.id
+    db.commit()
+    try:
+        # Do not touch workspace assets not created under the exact event prefix.
+        scope = "Nightjar-" + event_id + "-"
+        workspace = api.workspace.get_info_by_id(config.workspace_id)
+        if workspace is None or workspace.team_id != config.team_id:
+            raise NativeWorkerError("reset_workspace_team_mismatch")
+        projects = list(api.project.get_list(config.workspace_id))
+        matched = sorted((p for p in projects if p.name.startswith(scope)),
+                         key=lambda p: p.id)
+        linked = {
+            ds.native_project_id: scope + ds.id
+            for ds in db.scalars(select(MediaDataset).where(
+                MediaDataset.event_id == event_id,
+            )) if ds.native_project_id is not None
+        }
+        if linked.keys() - {p.id for p in matched}:
+            # Already archived projects can be absent from normal listings.
+            # Some SDK deployments still resolve archived projects by ID.
+            for pid in linked.keys() - {p.id for p in matched}:
+                remote = api.project.get_info_by_id(pid)
+                if remote is not None and (
+                    remote.name != linked[pid] or
+                    remote.workspace_id != config.workspace_id
+                ):
+                    # Never silently leave a moved/renamed project behind.
+                    raise NativeWorkerError("reset_linked_project_outside_scope")
+        # Check local file deletion targets before any remote change.
+        paths = safe_dataset_paths(db, event_id)
+        for project in matched:
+            api.project.remove(project.id)
+        remaining = [
+            p.name for p in api.project.get_list(config.workspace_id)
+            if p.name.startswith(scope)
+        ]
+        if remaining:
+            raise NativeWorkerError("reset_remote_projects_still_visible")
+        for path in paths:
+            if path.exists():
+                if not path.is_dir() or path.is_symlink():
+                    raise NativeWorkerError("unsafe_dataset_storage")
+                shutil.rmtree(path)
+        # The export ZIP belongs to this event only and may be removed too.
+        from .native_export_api import archive_path
+        export = archive_path(event_id)
+        export.unlink(missing_ok=True)
+        locked = db.scalar(select(Event).where(
+            Event.id == event_id,
+        ).with_for_update())
+        if locked is None or locked.status != "resetting":
+            raise NativeWorkerError("reset_event_identity_changed")
+        clear_event_data(db, event_id)
+        # Keep the restored event usable immediately for the ticket desk.
+        seed_categories(db, event_id)
+        # Other operations are now obsolete and must not resume.
+        db.query(NativeOperation).filter(
+            NativeOperation.event_id == event_id,
+            NativeOperation.id != opid,
+        ).delete(synchronize_session=False)
+        reset = db.get(NativeOperation, opid)
+        reset.status = "done"
+        reset.completed_at = epoch()
+        reset.error_code = None
+        locked.status = "active"
+        db.add(AuditEvent(
+            event_id=event_id, action="event.reset.complete",
+            target_type="event", target_id=event_id,
+            details={"archived_projects": len(matched),
+                     "removed_dataset_directories": len(paths)},
+        ))
+        db.commit()
+        return {"status": "done", "operation_id": opid,
+                "archived_projects": len(matched)}
+    except Exception as exc:  # noqa: BLE001 - preserve safe retry state
+        db.rollback()
+        failed = db.get(NativeOperation, opid)
+        failed.status = "attention"
+        failed.error_code = (
+            exc.code if isinstance(exc, (NativeWorkerError, NativeAPIError))
+            else str(exc) if isinstance(exc, ValueError) else "reset_remote_or_local_error"
+        )[:70]
+        db.commit()
+        logger.warning("Event reset %s requires retry (type %s)",
+                       opid, type(exc).__name__)
+        return {"status": "attention", "operation_id": opid}
+
+
 def run_worker(*, once: bool, poll_seconds: int) -> None:
     if not once and not 3 <= poll_seconds <= 300:
         raise ValueError("Polling interval must be 3-300 seconds.")
@@ -770,6 +882,20 @@ def run_worker(*, once: bool, poll_seconds: int) -> None:
                 api = connect_native(config)
                 config_isolation = identifier
             try:
+                # A resetting event may still have queued publishing tasks;
+                # execute the reset exclusively until it has finished.
+                active_reset = db.scalar(select(NativeOperation.id).where(
+                    NativeOperation.kind == "reset_event",
+                    NativeOperation.status.in_(["pending", "running", "attention"]),
+                ))
+                if active_reset is not None:
+                    reset_result = process_event_reset(db, api, config)
+                    if reset_result:
+                        logger.info("Nightjar reset worker: %s", reset_result)
+                    if once:
+                        return
+                    time.sleep(poll_seconds)
+                    continue
                 correction = process_correction_once(db, api, config)
                 operation = process_once(db, api, config)
                 export = process_export_once(db, api)

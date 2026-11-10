@@ -9,6 +9,7 @@ from .coverage_api import router as coverage_router
 from .database import database_is_ready
 from .datasets_api import router as datasets_router
 from .events_api import router as events_router
+from .full_reset_api import router as full_reset_router
 from .labeling_api import router as labeling_router
 from .manual_jobs_api import router as manual_jobs_router
 from .monitoring_api import router as monitoring_router
@@ -40,6 +41,7 @@ app.include_router(attendance_router)
 app.include_router(staff_router)
 app.include_router(tickets_router)
 app.include_router(events_router)
+app.include_router(full_reset_router)
 app.include_router(activities_router)
 app.include_router(native_router)
 app.include_router(native_operations_router)

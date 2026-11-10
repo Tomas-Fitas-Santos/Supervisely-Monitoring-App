@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type React from "react";
-import { CheckCircle2, Cloud, LockKeyhole, Save, ShieldCheck } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Cloud, LockKeyhole, RefreshCw, Save, ShieldCheck, Trash2 } from "lucide-react";
 import { api, type Auth, type Integration } from "./api";
 import { EventManagement } from "./events";
 
@@ -8,6 +8,14 @@ type Shared={server_url:string;team_id:number|null;workspace_id:number|null;
   verified:boolean;last_verified_at:number|null;editable:boolean};
 type Personal={linked:boolean;user_id:number|null;login:string|null;role:string|null;
   verified_team_id:number|null;verified_at:number|null;matches_current_team:boolean};
+type ResetPreview={
+  event_name:string;event_status:string;preserved_teams:number;
+  preserved_people:number;datasets:number;jobs:number;known_native_projects:number[];
+  workspace_id:number|null;team_id:number|null;remote_scope:string;
+  remote_action:string;preserved:string[];cleared:string[];
+  confirmation_phrase:string;
+  operation:{status:string;error_code:string|null;attempts:number}|null;
+};
 
 export function SettingsScreen({auth}:{auth:Auth}) {
   const organiser=auth.staff.roles.includes("organiser");
@@ -22,6 +30,9 @@ export function SettingsScreen({auth}:{auth:Auth}) {
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState("");
   const [message,setMessage]=useState("");
+  const [resetPreview,setResetPreview]=useState<ResetPreview|null>(null);
+  const [resetPhrase,setResetPhrase]=useState("");
+  const [resetBusy,setResetBusy]=useState(false);
 
   async function reload(){
     const [teamSettings,link]=await Promise.all([
@@ -72,6 +83,38 @@ export function SettingsScreen({auth}:{auth:Auth}) {
       setMyToken("");
       setMessage("Your Supervisely account was verified and linked. Personal token not stored.");
     });
+  }
+  async function loadResetPreview(){
+    setResetBusy(true);setError("");
+    try{
+      setResetPreview(await api<ResetPreview>("/settings/reset/preview"));
+    }catch(e){setError((e as Error).message);}
+    finally{setResetBusy(false);}
+  }
+  async function requestFullReset(){
+    if(!resetPreview||resetPhrase!==resetPreview.confirmation_phrase)return;
+    if(!window.confirm(
+      "Archive this event's Nightjar projects in Supervisely and clear its " +
+      "local event data? This cannot be undone in Nightjar. Team memberships " +
+      "and monitor accounts will be preserved."))return;
+    setResetBusy(true);setError("");setMessage("");
+    try{
+      await api("/settings/reset/request","POST",
+        {confirmation:resetPhrase},auth.csrf_token);
+      setResetPhrase("");
+      setMessage("Full event reset queued. The Supervisely worker must finish remote archival before local deletion.");
+      await loadResetPreview();
+    }catch(e){setError((e as Error).message);}
+    finally{setResetBusy(false);}
+  }
+  async function retryFullReset(){
+    setResetBusy(true);setError("");setMessage("");
+    try{
+      await api("/settings/reset/retry","POST",undefined,auth.csrf_token);
+      setMessage("Reset retry queued for the Supervisely worker.");
+      await loadResetPreview();
+    }catch(e){setError((e as Error).message);}
+    finally{setResetBusy(false);}
   }
   return <div className="page-body">
     <div className="page-heading"><div><span className="eyebrow">ACCOUNT & INTEGRATION</span>
@@ -176,6 +219,49 @@ export function SettingsScreen({auth}:{auth:Auth}) {
         </section>
       </aside>
     </div>
+    {organiser&&<section className="panel full-reset-panel">
+      <div className="panel-heading"><div>
+        <span className="eyebrow">DANGER ZONE · ORGANISER ONLY</span>
+        <h3>Reset event operations — preserve people and teams</h3>
+        <p className="muted">Start this event from a clean operational state without deleting Supervisely team members or Nightjar accounts. This resets only the selected event and only its Nightjar-owned Supervisely projects, not unrelated projects.</p>
+      </div><AlertTriangle size={24} color="#a64634"/></div>
+      <button className="btn secondary" disabled={resetBusy}
+        onClick={()=>void loadResetPreview()}><RefreshCw size={15}/>
+        {resetPreview?"Refresh reset status":"Preview full reset"}</button>
+      {resetPreview&&<div className="full-reset-preview">
+        <div className="full-reset-counts">
+          <div><span>Current event</span><strong>{resetPreview.event_name}</strong></div>
+          <div><span>Local datasets to clear</span><strong>{resetPreview.datasets}</strong></div>
+          <div><span>Jobs to clear</span><strong>{resetPreview.jobs}</strong></div>
+          <div><span>Preserved teams</span><strong>{resetPreview.preserved_teams}</strong></div>
+          <div><span>Preserved roster members</span><strong>{resetPreview.preserved_people}</strong></div>
+        </div>
+        <div className="full-reset-scopes">
+          <div><h4>Will be cleared</h4><ul>{resetPreview.cleared.map(x=><li key={x}>{x}</li>)}</ul></div>
+          <div><h4>Will be preserved</h4><ul>{resetPreview.preserved.map(x=><li key={x}>{x}</li>)}</ul></div>
+        </div>
+        <p className="muted small">Remote operation: archive Nightjar project(s) for this event in workspace #{resetPreview.workspace_id??"—"} of team #{resetPreview.team_id??"—"}. Supervisely project archival is recoverable; local event data and files are deleted.</p>
+        {resetPreview.operation&&<div className="job-plan-row">
+          <div><strong>Reset: {resetPreview.operation.status}</strong>
+            <span>{resetPreview.operation.error_code||"No reported error"} · {resetPreview.operation.attempts} worker attempts</span></div>
+          {resetPreview.operation.status==="attention"&&
+            <button className="btn secondary" disabled={resetBusy}
+              onClick={()=>void retryFullReset()}>Retry cleanup</button>}
+        </div>}
+        {resetPreview.event_status==="active"&&
+          <div className="full-reset-confirm">
+            <label>Type <strong>{resetPreview.confirmation_phrase}</strong> to enable reset
+              <input value={resetPhrase} autoComplete="off"
+                onChange={e=>setResetPhrase(e.target.value)} />
+            </label>
+            <button className="btn danger-outline" disabled={resetBusy||
+              resetPhrase!==resetPreview.confirmation_phrase}
+              onClick={()=>void requestFullReset()}><Trash2 size={16}/> Reset this event</button>
+          </div>}
+        {resetPreview.event_status==="resetting"&&
+          <p className="advisory">The event is locked while its remote projects are archived and local data is cleared. Keep the Supervisely worker running; refresh for status.</p>}
+      </div>}
+    </section>}
     {organiser&&<EventManagement auth={auth}/>}
   </div>;
 }

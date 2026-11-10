@@ -33,6 +33,7 @@ from annotatiathon.models import (
 )
 from annotatiathon.native_worker import (
     process_correction_once,
+    process_event_reset,
     process_export_once,
     process_once,
     sync_all,
@@ -47,6 +48,7 @@ class MockSDK:
         self.projects = []
         self.project_metas = {}
         self.meta_updates = []
+        self.removed_projects = []
         self.datasets = []
         self.images = {}
         self.jobs = []
@@ -55,6 +57,7 @@ class MockSDK:
         self.project = Obj(
             get_list=self.projects_list,
             create=self.project_create,
+            remove=self.project_remove,
             get_meta=self.projects_get_meta,
             update_meta=self.projects_update_meta,
             get_info_by_id=lambda ident: next(
@@ -86,6 +89,10 @@ class MockSDK:
 
     def projects_list(self, workspace_id):
         return [p for p in self.projects if p.workspace_id == workspace_id]
+
+    def project_remove(self, project_id):
+        self.removed_projects.append(project_id)
+        self.projects = [p for p in self.projects if p.id != project_id]
 
     def projects_get_meta(self, project_id):
         return json.loads(json.dumps(self.project_metas[project_id]))
@@ -238,6 +245,10 @@ def configured(monkeypatch, tmp_path):
         plan_id = plan.id
     monkeypatch.setattr(
         "annotatiathon.native_export_api.get_settings",
+        lambda: type("Settings", (), {"local_data_dir": str(tmp_path)})(),
+    )
+    monkeypatch.setattr(
+        "annotatiathon.full_reset_api.get_settings",
         lambda: type("Settings", (), {"local_data_dir": str(tmp_path)})(),
     )
     monkeypatch.setattr(
@@ -536,3 +547,50 @@ def test_manual_assignments_publish_independent_videos(configured):
         r = http.get("/api/v1/review/jobs/" + jobid)
         assert r.status_code == 200
         assert r.json()["annotation_snapshot_ready"]
+
+
+def test_confirmed_reset_archives_only_event_projects_and_keeps_members(configured):
+    http, maker, csrf, plan_id, sdk = configured
+    launch(http, csrf, plan_id)
+    with maker() as db:
+        conf = db.get(SuperviselyConfig, 1)
+        assert process_once(db, sdk, conf)["status"] == "done"
+        owned_project = sdk.projects[0].id
+        other = sdk.project.create(2001, "Other research", change_name_if_conflict=False)
+        assert len(sdk.jobs) == 2
+
+    preview = http.get("/api/v1/settings/reset/preview")
+    assert preview.status_code == 200, preview.text
+    state = preview.json()
+    assert state["jobs"] == 2
+    assert state["preserved_people"] == 2
+    assert state["preserved_teams"] == 1
+    wrong = call(http, csrf, "/settings/reset/request", {"confirmation": "WRONG"})
+    assert wrong.status_code == 422
+    requested = call(http, csrf, "/settings/reset/request", {
+        "confirmation": state["confirmation_phrase"],
+    })
+    assert requested.status_code == 202, requested.text
+    with maker() as db:
+        assert db.get(Event, DEFAULT_EVENT_ID).status == "resetting"
+        conf = db.get(SuperviselyConfig, 1)
+        result = process_event_reset(db, sdk, conf)
+        assert result["status"] == "done", result
+        assert db.get(Event, DEFAULT_EVENT_ID).status == "active"
+        assert not list(db.scalars(select(MediaDataset)))
+        assert not list(db.scalars(select(LabelingJob)))
+        assert len(list(db.scalars(select(Person)))) == 2
+        assert len(list(db.scalars(select(CompetitionTeam)))) == 1
+        assert db.get(SuperviselyConfig, 1).team_id == 125980
+    assert owned_project in sdk.removed_projects
+    assert other.id not in sdk.removed_projects
+    assert len(sdk.projects) == 1
+    assert sdk.projects[0].id == other.id
+    final = http.get("/api/v1/settings/reset/preview")
+    assert final.status_code == 200
+    assert final.json()["datasets"] == 0
+    assert final.json()["jobs"] == 0
+    assert final.json()["operation"]["status"] == "done"
+    categories = http.get("/api/v1/tickets/categories")
+    assert categories.status_code == 200
+    assert len(categories.json().get("items", [])) >= 3
