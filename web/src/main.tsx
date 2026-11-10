@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import {
   Activity, Award, ArrowRight, Bird, CalendarDays, CheckCircle2, ChevronDown,
   CircleHelp, ClipboardCheck, Cloud, Database, LayoutDashboard, LogOut,
-  RefreshCw, Settings2, ShieldCheck, Ticket, UsersRound
+  RefreshCw, Settings2, ShieldCheck, Ticket, UsersRound, BarChart3
 } from "lucide-react";
 import { api, refreshSuperviselyRoster, type Auth } from "./api";
 import { PeopleScreen } from "./people";
@@ -16,10 +16,11 @@ import { ActivitiesScreen } from "./activities";
 import { DatasetScreen } from "./datasets";
 import { CompetitionScreen } from "./competition";
 import { QualityScreen } from "./reviews";
+import { CoverageScreen } from "./coverage";
 import { CloseoutScreen } from "./closeout";
 import "./styles.css";
 
-type Tab = "overview" | "people" | "attendance" | "tickets" | "activities" | "datasets" | "competition" | "quality" | "closeout" | "staff" | "settings";
+type Tab = "overview" | "people" | "attendance" | "tickets" | "activities" | "datasets" | "competition" | "quality" | "coverage" | "closeout" | "staff" | "settings";
 
 function Login({ onLogin }: { onLogin: (auth: Auth) => void }) {
   const [mode, setMode] = useState<"login" | "register" | "complete">("login");
@@ -189,6 +190,8 @@ function App() {
     {id:"datasets",label:"Dataset",icon:Database},
     {id:"competition",label:"Competition & Jobs",icon:UsersRound},
     {id:"quality",label:"Monitoring & Review",icon:ClipboardCheck},
+    ...(auth.staff.roles.some(role=>["organiser","monitor","observer"].includes(role)) ?
+      [{id:"coverage" as Tab,label:"Dataset Coverage",icon:BarChart3}] : []),
     {id:"closeout",label:"Results & Exports",icon:CalendarDays},
     ...(organiser ? [{id:"staff" as Tab,label:"Staff Access",icon:ShieldCheck}] : []),
     {id:"settings",label:"Settings",icon:Settings2},
@@ -228,6 +231,7 @@ function App() {
       {tab==="datasets"&&<DatasetScreen auth={auth}/>}
       {tab==="competition"&&<CompetitionScreen auth={auth}/>}
       {tab==="quality"&&<QualityScreen auth={auth}/>}
+      {tab==="coverage"&&<CoverageScreen auth={auth}/>}
       {tab==="closeout"&&<CloseoutScreen auth={auth}/>}
       {tab==="staff"&&organiser&&<div className="page-body"><div className="page-heading"><div><span className="eyebrow">ORGANISER · PERMISSIONS</span><h2>Staff Access</h2><p className="muted">Manage staff roles independently of the attendee roster.</p></div></div><StaffScreen auth={auth}/></div>}
       {tab==="settings"&&<SettingsScreen auth={auth}/>}
