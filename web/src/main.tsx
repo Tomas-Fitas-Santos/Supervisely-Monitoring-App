@@ -208,7 +208,7 @@ function App() {
   if (loading) return <div className="loading-screen"><Bird size={33}/> Loading Nightjar…</div>;
   if (!auth) return <Login onLogin={a=>{setAuth(a);setTab("overview");}}/>;
   const organiser = auth.staff.roles.includes("organiser");
-  const has=(...roles:string[])=>roles.some(role=>auth.staff.roles.includes(role as typeof auth.staff.roles[number]));
+  const has=(...roles:string[])=>auth.staff.roles.some(role=>roles.includes(role));
   const navigation: {id:Tab;label:string;icon:typeof LayoutDashboard}[] = [
     {id:"overview",label:"Overview",icon:LayoutDashboard},
     {id:"people",label:"People & Teams",icon:UsersRound},
