@@ -70,11 +70,11 @@ def same_origin(request: Request) -> None:
 
 
 def monitor_roster_access(db: Session, staff: StaffAccount, event_id: str | None) -> bool:
-    """Require monitor-eligible roster status when a roster identity exists.
+    """Require an active, approved SQL monitor roster record when present.
 
-    Organisers retain admin privileges. Manually provisioned staff without a
-    matching roster record remain supported for legacy operational roles;
-    self-registered monitors always have an approved roster entry.
+    Nightjar access depends on its own roster, not on Supervisely team
+    membership. Linking Supervisely is a separate authenticated action.
+    Organisers retain protected access.
     """
     if "organiser" in staff.roles or "monitor" not in staff.roles:
         return True
@@ -90,7 +90,7 @@ def monitor_roster_access(db: Session, staff: StaffAccount, event_id: str | None
             "monitor_registration_approved",
             (p.source_fields or {}).get("source") != "supervisely_member_sync",
         ) is True
-        and (p.membership_status != "joined" or p.supervisely_role == "manager")
+
         for p in rows
     )
 
