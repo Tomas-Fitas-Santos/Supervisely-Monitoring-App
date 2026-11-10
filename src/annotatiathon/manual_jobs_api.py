@@ -17,7 +17,7 @@ from .db import get_db
 from .events_api import current_event
 from .models import (
     AuditEvent, CompetitionTeam, LabelingJob, LabelingPlan, MediaAsset,
-    Person, SuperviselyConfig,
+    Event, Person,
 )
 from .native_operations_api import native_ready, queue_publish
 from .pair_members import pair_members
@@ -118,6 +118,8 @@ def create_manual_jobs(
     db: Session = Depends(get_db),
 ):
     event = current_event(db, ctx, writable=True)
+    # Serialize manual writes so simultaneous requests cannot double-assign a video.
+    db.scalar(select(Event).where(Event.id == event.id).with_for_update())
     dataset = get_dataset(db, event.id, payload.dataset_id)
     if dataset.status != "ready":
         raise HTTPException(status_code=409, detail="Dataset must be finalized.")
