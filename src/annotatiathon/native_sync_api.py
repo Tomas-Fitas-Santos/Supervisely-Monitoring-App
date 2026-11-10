@@ -190,16 +190,17 @@ def refresh_native_membership(
     )),
     db: Session = Depends(get_db),
 ):
-    """Refresh only existing, unambiguously matched roster people from the live team.
+    """Reconcile current native team members into this event's roster.
 
-    Navigation and manual Refresh buttons can call this safely. It never creates
-    attendees, changes team assignments, alters Supervisely, or guesses missing
-    native emails. The review/confirmation flow remains for manual identity links.
+    Existing registrations are matched by verified ID/login or exact email.
+    Native members without a roster record are added only when Supervisely
+    provides a unique email and a recognisable member role. No app-login
+    privileges, native invitations, remote roles, or teams are changed.
     """
     event = current_event(db, ctx)
     if event.status != "active":
         return {"status": "archived", "matched": 0, "updated": 0,
-                "unmatched_native": 0, "unmatched_roster": 0,
+                "created": 0, "unmatched_native": 0, "unmatched_roster": 0,
                 "role_warnings": 0, "conflicts": 0, "native_mutations": False}
 
     config = config_for_sync(db)
@@ -208,56 +209,104 @@ def refresh_native_membership(
     matched, unmatched, remaining, conflicts = association_proposal(
         source.members, people, []
     )
-    # A duplicate login/email/native ID must never be silently resolved based
-    # on whichever remote account happened to arrive first.
+    # Do not partly apply a snapshot containing incompatible identity links.
     if conflicts:
-        db.commit()  # Persist connection health only; roster remains unchanged.
+        db.commit()
         return {"status": "needs_review", "matched": len(matched), "updated": 0,
-                "unmatched_native": len(unmatched),
+                "created": 0, "unmatched_native": len(unmatched),
                 "unmatched_roster": len(remaining),
                 "role_warnings": sum(bool(m["role_warning"]) for m in matched),
                 "conflicts": len(conflicts), "native_mutations": False}
 
-    ids = sorted({item["person_id"] for item in matched})
-    locked = {
-        p.id: p for p in db.scalars(
-            select(Person).where(
-                Person.event_id == event.id, Person.id.in_(ids),
-            ).order_by(Person.id).with_for_update()
-        )
+    # Lock all event identities including inactive accounts; never silently
+    # reactivate an intentionally deactivated registration.
+    all_records = list(db.scalars(select(Person).where(
+        Person.event_id == event.id,
+    ).order_by(Person.id).with_for_update()))
+    by_person_id = {p.id: p for p in all_records}
+    used_emails = {p.email.casefold() for p in all_records}
+    used_native_ids = {
+        p.supervisely_user_id for p in all_records
+        if p.supervisely_user_id is not None
     }
-    if len(locked) != len(ids) or any(not p.active for p in locked.values()):
-        raise HTTPException(status_code=409, detail="Roster changed; refresh again.")
     now = epoch()
-    updated = 0
+    updated = created = 0
     for item in matched:
-        person = locked[item["person_id"]]
+        person = by_person_id.get(item["person_id"])
+        if person is None or not person.active:
+            raise HTTPException(status_code=409, detail="Roster changed; refresh again.")
         desired = (item["native_user_id"], item["native_login"],
                    item["native_role"], "joined")
-        existing = (person.supervisely_user_id, person.supervisely_login,
-                    person.supervisely_role, person.membership_status)
-        if existing != desired:
+        current = (person.supervisely_user_id, person.supervisely_login,
+                   person.supervisely_role, person.membership_status)
+        if current != desired:
             person.supervisely_user_id = item["native_user_id"]
             person.supervisely_login = item["native_login"]
             person.supervisely_role = item["native_role"]
             person.membership_status = "joined"
-            person.native_verified_at = now
             updated += 1
-        elif person.native_verified_at is None or person.native_verified_at < now - 300:
-            person.native_verified_at = now
+        person.native_verified_at = now
 
-    if updated:
+    # No automatic role guessing from a username. A native account with no
+    # email can be linked in the existing organiser review panel.
+    valid_unmatched = []
+    for member in unmatched:
+        email = member.get("email")
+        role = member.get("role")
+        native_id = member["id"]
+        if not email or "@" not in email or len(email) > 320:
+            continue
+        if native_id in used_native_ids or email.casefold() in used_emails:
+            continue
+        if role == "annotator":
+            kind = "participant"
+        elif role in {"admin", "manager", "developer"}:
+            kind = "monitor"
+        else:
+            continue
+        valid_unmatched.append((member, kind))
+
+    # Emails or remote IDs occurring twice must not create arbitrary records.
+    email_counts = {}
+    for member, _ in valid_unmatched:
+        key = member["email"].casefold()
+        email_counts[key] = email_counts.get(key, 0) + 1
+    created_emails = set()
+    for member, kind in valid_unmatched:
+        email = member["email"].casefold()
+        if email_counts[email] != 1 or email in created_emails:
+            continue
+        # Keep unknown native-team members visible as unassigned; a participant
+        # must still be placed into a two-person competition team explicitly.
+        db.add(Person(
+            event_id=event.id,
+            email=email,
+            name=member["login"],
+            kind=kind,
+            team_id=None,
+            membership_status="joined",
+            supervisely_user_id=member["id"],
+            supervisely_login=member["login"],
+            supervisely_role=member["role"],
+            native_verified_at=now,
+            source_fields={"source": "supervisely_member_sync"},
+        ))
+        created += 1
+        created_emails.add(email)
+
+    if updated or created:
         db.add(AuditEvent(
             staff_id=ctx.staff.id, event_id=event.id,
             action="supervisely.membership.auto_refresh", target_type="team",
             target_id=str(source.team_id),
-            details={"updated": updated, "matched": len(matched),
+            details={"updated": updated, "created": created,
+                     "matched": len(matched),
                      "role_warnings": sum(bool(m["role_warning"]) for m in matched),
                      "native_mutations": False},
         ))
     db.commit()
     return {"status": "ok", "matched": len(matched), "updated": updated,
-            "unmatched_native": len(unmatched),
+            "created": created, "unmatched_native": len(unmatched) - created,
             "unmatched_roster": len(remaining),
             "role_warnings": sum(bool(m["role_warning"]) for m in matched),
             "conflicts": 0, "native_mutations": False}
