@@ -23,6 +23,39 @@
 - Organiser: save the shared Supervisely Team ID, Workspace ID, and encrypted admin/manager integration token in Settings.
 - Distinguish a verified native team member appearing in the roster from an authorised Nightjar monitor login. Only an approved organiser/CSV roster monitor can register.
 
+## Dataset Coverage & Movement Review
+
+The sidebar now contains a dedicated **Dataset Coverage** page separate from
+**Monitoring & Review** (job/keypoint scoring). It is available to organisers,
+monitors and observers and uses the selected event's imported dataset.
+
+- Counts **unique imported video frames**, separate still images, video groups,
+  species/source folders and frames across the **16 ecomorphologies** from the
+  supplied Annotatiathon Bird Morphology & Head Motion workbook.
+- Recognises the **72 scientific-name source folders** recorded in the
+  workbook's Source Folder Inventory; unknown folders remain **Unclassified**
+  until an organiser explicitly classifies them.
+- Shows source-folder species and ecomorphology labels; only organisers can
+  correct labels, with an audit trail and no changes to source files.
+- Shows movement counts only from **reviewed, non-overlapping video frame
+  ranges**. Unlabeled frames are tracked explicitly; suggested species
+  behaviors from the workbook are **not** interpreted as observed movements.
+- Provides per-video paginated source-frame thumbnails, movement-tag editing
+  and a CSV export. Frame indexes are **1-based in lexicographic filename
+  order within each video group**, so zero-padded file names are recommended.
+- The planning target of 120,000 unique video frames is displayed as **7,500
+  frames per group**; progress is not inflated by labeling-job redundancy.
+- Source movement segments are *primary observed movement* labels. The
+  movement categories are mutually exclusive over each frame range; if
+  multiple head motions occur simultaneously, record the predominant
+  observable type. This is a curation convention, not measured angular
+  velocity or an automatic classifier.
+
+Apply database migration `0013_dataset_coverage` before using the new page.
+The existing ingestion structure remains unchanged:
+`images/<species-or-morphology>/<image>` and
+`videos/<species-or-morphology>/<video-title>/<frame>`.
+
 ## Free, real-user live testing (Cloudflare Tunnel)
 
 To share the full Nightjar app with real monitors without paying for hosting,
