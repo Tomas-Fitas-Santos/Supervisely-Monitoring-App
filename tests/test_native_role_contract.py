@@ -48,7 +48,11 @@ def test_role_change_queries_instance_role_id_and_verifies_members(monkeypatch):
         )
 
     monkeypatch.setattr(native, "_request_json", fake_request)
-    monkeypatch.setattr(native, "_read_members", fake_members)
+    monkeypatch.setattr(native, "_read_member_by_id",
+        lambda client, base, token, team_id, user_id: next(
+            (m for m in fake_members(client, base, token, team_id) if m.id == user_id),
+            None,
+        ))
     changed = change_member_role(
         config, user_id=55111, target_role="manager", expected_role="annotator",
     )
@@ -71,10 +75,10 @@ def test_role_change_protects_owner_before_any_mutation(monkeypatch):
         return {"id": 123550}
 
     monkeypatch.setattr(native, "_request_json", fake_request)
-    monkeypatch.setattr(native, "_read_members",
-        lambda *_args: (NativeMember(
+    monkeypatch.setattr(native, "_read_member_by_id",
+        lambda *_args: NativeMember(
             id=123550, login="owner", email=None, role="admin",
-        ),))
+        ))
     with pytest.raises(NativeAPIError, match="admin accounts cannot be demoted"):
         change_member_role(
             config, user_id=123550, target_role="annotator",
@@ -96,10 +100,11 @@ def test_role_change_rejects_stale_identity_before_write(monkeypatch):
         return {"id": 123550}
 
     monkeypatch.setattr(native, "_request_json", fake_request)
-    monkeypatch.setattr(native, "_read_members",
-        lambda *_args: (
-            NativeMember(id=123550, login="owner", email=None, role="admin"),
-            NativeMember(id=555, login="alice", email=None, role="viewer"),
+    monkeypatch.setattr(native, "_read_member_by_id",
+        lambda _client, _base, _token, _team_id, user_id: (
+            NativeMember(id=123550, login="owner", email=None, role="admin")
+            if user_id == 123550 else
+            NativeMember(id=555, login="alice", email=None, role="viewer")
         ))
     with pytest.raises(NativeAPIError, match="role changed since"):
         change_member_role(
@@ -107,3 +112,21 @@ def test_role_change_rejects_stale_identity_before_write(monkeypatch):
             expected_role="annotator",
         )
     assert methods == ["users.me"]
+
+
+def test_targeted_member_lookup_uses_documented_id_filter(monkeypatch):
+    from annotatiathon import supervisely_client as native
+
+    def fake_request(_client, _base, _token, method, payload):
+        assert method == "members.list"
+        assert payload["teamId"] == 125980
+        assert payload["filter"] == [{"field": "id", "operator": "=", "value": 555}]
+        return {"entities": [{"id": 555, "login": "alice",
+                              "role": "manager", "email": "ALICE@example.org"}]}
+
+    monkeypatch.setattr(native, "_request_json", fake_request)
+    found = native._read_member_by_id(None, "https://app.supervisely.com",
+                                      "TOKEN", 125980, 555)
+    assert found.id == 555
+    assert found.role == "manager"
+    assert found.email == "alice@example.org"
