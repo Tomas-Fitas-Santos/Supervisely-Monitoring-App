@@ -247,12 +247,14 @@ export function PeopleScreen({auth}:{auth:Auth}) {
   function personal(value:string|undefined){
     return showSensitive?(value?.trim()||"—"):"Restricted";
   }
-  function peopleTable(items:Person[],selectable=true) {
+  function peopleTable(items:Person[],selectable=true,full=true) {
     return <div className="table-scroll"><table className="data-table">
       <thead><tr>{selectable&&admin&&<th className="check-cell">Select</th>}
-        <th>Name</th><th>Date of birth</th><th>Email</th><th>Phone</th>
-        <th>Under 18</th><th>Image consent</th><th>Data processing consent</th>
-        <th>Food allergies / intolerances</th>
+        <th>Name</th>{full&&<>
+          <th>Date of birth</th><th>Email</th><th>Phone</th>
+          <th>Under 18</th><th>Image consent</th><th>Data processing consent</th>
+          <th>Food allergies / intolerances</th>
+        </>}
         <th>Role</th><th>Team</th><th>Supervisely</th><th>Check-in</th>
         {admin&&<th>Manage</th>}</tr></thead>
       <tbody>{items.map(p=><tr key={p.id}>
@@ -260,12 +262,14 @@ export function PeopleScreen({auth}:{auth:Auth}) {
           checked={selected.includes(p.id)} onChange={e=>setSelected(prev=>
             e.target.checked?prev.length<50?[...prev,p.id]:prev:prev.filter(id=>id!==p.id))}/></td>}
         <td><div className="person-name"><div className="mini-avatar">{p.name.slice(0,1).toUpperCase()}</div>
-          <div><strong>{p.name}</strong><span>{p.email}</span></div></div></td>
-        <td>{personal(p.date_of_birth)}</td><td>{p.email}</td><td>{personal(p.phone)}</td>
-        <td>{personal(showSensitive?consentLabel(p.under_18):"")}</td>
-        <td>{personal(showSensitive?consentLabel(p.image_consent):"")}</td>
-        <td>{personal(showSensitive?consentLabel(p.data_consent):"")}</td>
-        <td>{personal(p.food_allergies)}</td>
+          <div><strong>{p.name}</strong>{!full&&<span>{p.email}</span>}</div></div></td>
+        {full&&<>
+          <td>{personal(p.date_of_birth)}</td><td>{p.email}</td><td>{personal(p.phone)}</td>
+          <td>{personal(showSensitive?consentLabel(p.under_18):"")}</td>
+          <td>{personal(showSensitive?consentLabel(p.image_consent):"")}</td>
+          <td>{personal(showSensitive?consentLabel(p.data_consent):"")}</td>
+          <td>{personal(p.food_allergies)}</td>
+        </>}
         <td><span className="soft-pill">{p.kind==="monitor"?"Monitor":"Participant"}</span></td>
         <td>{p.team_name||"—"}</td>
         <td><span className={"membership "+(p.membership_status==="joined"?"joined":"")}>
@@ -332,7 +336,7 @@ export function PeopleScreen({auth}:{auth:Auth}) {
           <div className="team-detail-header"><h3>{activeTeam.name}</h3>
             {activeTeam.type==="competition"&&<span className="soft-pill">Responsible monitor: {activeTeam.monitor_name||"Unassigned"}</span>}
             <span className="soft-pill">{activeTeam.members.length} member(s)</span></div>
-          {peopleTable(activeTeam.members,false)}
+          {peopleTable(activeTeam.members,false,false)}
         </div>:
         <div className="team-list">{shownTeams.map(team=><button className={"team-row "+(team.type==="monitoring"?"pinned":"")}
           key={team.id} onClick={()=>setSelectedTeam(team.id)}>
