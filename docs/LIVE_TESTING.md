@@ -211,6 +211,26 @@ email administrators may disable basic SMTP authentication.
 Never commit or share `.env.live`. Passwords are read by the **backend
 only**; monitors will never see these settings.
 
+For a small, no-cost monitor live test, an existing **personal Gmail** account
+can be used as the sender **if** Gmail App Passwords are available for it.
+Google requires 2-Step Verification and may block App Passwords for managed
+work/school or Advanced Protection accounts. Use a **dedicated Gmail sender**
+rather than your personal account when possible. Example (replace addresses
+and do NOT copy any password from this guide):
+
+```dotenv
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USERNAME=your.authorised.sender@gmail.com
+SMTP_PASSWORD=YOUR_GOOGLE_APP_PASSWORD_NOT_NORMAL_LOGIN_PASSWORD
+SMTP_SENDER=your.authorised.sender@gmail.com
+SMTP_USE_SSL=false
+```
+
+Google's documentation:
+https://support.google.com/accounts/answer/185833
+and https://support.google.com/mail/answer/7104828
+
 Apply the SMTP settings without deleting any existing data:
 
 ```powershell
