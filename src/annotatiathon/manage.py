@@ -2,12 +2,20 @@
 import argparse
 import getpass
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from .auth import ROLES, normalized_email
 from .db import session_factory
-from .models import StaffAccount
+from .models import AuditEvent, StaffAccount, StaffSession
 from .security import password_hash
+
+
+def prompted_password() -> str:
+    password = getpass.getpass("New staff password (12+ characters): ")
+    confirmation = getpass.getpass("Confirm password: ")
+    if password != confirmation:
+        raise ValueError("Passwords did not match.")
+    return password_hash(password)
 
 
 def main() -> None:
@@ -17,20 +25,45 @@ def main() -> None:
     new.add_argument("--email", required=True)
     new.add_argument("--name", required=True)
     new.add_argument("--roles", required=True, help="Comma-separated app roles")
+    reset = cmd.add_parser(
+        "reset-password",
+        help="Securely reset an existing staff password and revoke sessions",
+    )
+    reset.add_argument("--email", required=True)
     args = parser.parse_args()
-    roles = sorted({r.strip().lower() for r in args.roles.split(",") if r.strip()})
-    if not roles or not set(roles).issubset(ROLES):
-        parser.error("Roles must be a comma-separated subset of: " + ", ".join(sorted(ROLES)))
     try:
         email = normalized_email(args.email)
     except ValueError as exc:
         parser.error(str(exc))
-    password = getpass.getpass("New staff password (12+ characters): ")
-    confirmation = getpass.getpass("Confirm password: ")
-    if password != confirmation:
-        parser.error("Passwords did not match.")
+
+    if args.action == "reset-password":
+        with session_factory().begin() as db:
+            staff = db.scalar(
+                select(StaffAccount).where(StaffAccount.email == email).with_for_update()
+            )
+            if staff is None:
+                parser.error("No staff account exists for this email.")
+            try:
+                hashed = prompted_password()
+            except ValueError as exc:
+                parser.error(str(exc))
+            staff.password_hash = hashed
+            staff.login_failures = 0
+            staff.locked_until = None
+            db.execute(delete(StaffSession).where(StaffSession.staff_id == staff.id))
+            db.add(AuditEvent(
+                action="staff.password.reset_cli",
+                target_type="staff", target_id=staff.id,
+                details={"method": "local_operator_cli", "sessions_revoked": True},
+            ))
+        print("Staff password updated and existing sessions revoked.")
+        return
+
+    roles = sorted({r.strip().lower() for r in args.roles.split(",") if r.strip()})
+    if not roles or not set(roles).issubset(ROLES):
+        parser.error("Roles must be a comma-separated subset of: " + ", ".join(sorted(ROLES)))
     try:
-        hashed = password_hash(password)
+        hashed = prompted_password()
     except ValueError as exc:
         parser.error(str(exc))
     with session_factory().begin() as db:
