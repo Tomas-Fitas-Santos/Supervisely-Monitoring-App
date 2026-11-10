@@ -387,6 +387,7 @@ def update_person(
         )):
             raise HTTPException(status_code=409, detail="This email already exists.")
     native_changed = enforce_native_role(db, person, desired_kind)
+    verified_native = (person.supervisely_role, person.supervisely_login)
     # Only lock the row after the remote request completes. Detect concurrent
     # local edits rather than silently overwriting someone else's changes.
     db.refresh(person, with_for_update=True)
@@ -396,6 +397,8 @@ def update_person(
             detail="This person was changed by another session. Refresh the roster "
                    "and reconcile the current Supervisely role before retrying.",
         )
+    if native_changed:
+        person.supervisely_role, person.supervisely_login = verified_native
     if "email" in fields and payload.email is not None:
         person.email = payload.email
     if "name" in fields and payload.name is not None:
@@ -437,12 +440,15 @@ def sync_person_supervisely_role(
     if staff is not None and "organiser" in staff.roles:
         return person_record(person)
     native_changed = enforce_native_role(db, person, person.kind, reconcile=True)
+    verified_native = (person.supervisely_role, person.supervisely_login)
     db.refresh(person, with_for_update=True)
     if (person.kind, person.email, person.supervisely_user_id) != prior:
         raise HTTPException(
             status_code=409,
             detail="Roster changed concurrently. Refresh from Supervisely before retrying.",
         )
+    if native_changed:
+        person.supervisely_role, person.supervisely_login = verified_native
     audit(db, ctx.staff.id, event.id, "person.supervisely.role.sync", person.id, {
         "kind": person.kind, "supervisely_role_updated": native_changed,
         "native_user_id": person.supervisely_user_id,
