@@ -15,7 +15,12 @@ from sqlalchemy.pool import StaticPool
 from annotatiathon.app import app
 from annotatiathon.db import get_db
 from annotatiathon.models import (
-    DEFAULT_EVENT_ID, Base, Event, Person, StaffAccount, SuperviselyConfig,
+    DEFAULT_EVENT_ID,
+    Base,
+    Event,
+    Person,
+    StaffAccount,
+    SuperviselyConfig,
 )
 from annotatiathon.security import password_hash
 from annotatiathon.supervisely_client import NativeMember, NativeTeamSnapshot
