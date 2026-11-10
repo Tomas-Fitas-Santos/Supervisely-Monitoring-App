@@ -13,12 +13,12 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .auth import AuthContext, get_context, requires
+from .auth import AuthContext, requires
 from .db import get_db
 from .models import (
+    DEFAULT_EVENT_ID,
     AuditEvent,
     CompetitionTeam,
-    DEFAULT_EVENT_ID,
     Event,
     EventSnapshot,
     Person,
@@ -266,13 +266,14 @@ def preview_reset(
     if payload.mode == "fresh" and payload.areas:
         raise HTTPException(status_code=422, detail="Fresh start includes all event areas.")
     state = state_data(db, event.id)
-    if payload.mode == "selected" and "roster" in payload.areas and "tickets" not in payload.areas:
-        if any(b["status"] == "confirmed" for b in state["batches"]):
-            raise HTTPException(
-                status_code=409,
-                detail="Roster reset requires ticket reset in the same operation. "
-                       "Previous ticket batches must remain traceable.",
-            )
+    if (payload.mode == "selected" and "roster" in payload.areas
+            and "tickets" not in payload.areas
+            and any(b["status"] == "confirmed" for b in state["batches"])):
+        raise HTTPException(
+            status_code=409,
+            detail="Roster reset requires ticket reset in the same operation. "
+                   "Previous ticket batches must remain traceable.",
+        )
     selected = list(AREAS) if payload.mode == "fresh" else payload.areas
     plan = ResetPlan(
         event_id=event.id, staff_id=ctx.staff.id, mode=payload.mode,
@@ -314,7 +315,7 @@ def reset_ticket_balances(db: Session, event_id: str, staff_id: str) -> None:
     )):
         totals[(item.category_id, item.person_id, item.kind)] += item.quantity
     # One compensating batch per category with net balances. This is append only.
-    categories = sorted(set(cid for cid, _, _ in totals))
+    categories = sorted({cid for cid, _, _ in totals})
     for category_id in categories:
         recipients = sorted({
             pid for cid, pid, kind in totals
