@@ -108,6 +108,11 @@ def _request_json(client: httpx.Client, base: str, token: str,
         raise NativeAPIError("not_found", "Supervisely resource was not found.")
     if response.status_code == 429:
         raise NativeAPIError("rate_limited", "Supervisely rate limit reached.")
+    # Supervisely's official UserApi.change_team_role ignores the response
+    # body of members.editInfo. Accept success with an empty body, then rely
+    # on the mandatory read-back to confirm the actual member role.
+    if method == "members.editInfo" and response.status_code in {200, 204}:
+        return {}
     if response.status_code != 200:
         raise NativeAPIError(
             "remote_error", "Supervisely API returned an unsuccessful response."
