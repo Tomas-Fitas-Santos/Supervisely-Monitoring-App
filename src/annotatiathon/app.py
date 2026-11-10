@@ -18,14 +18,16 @@ from .reviews_api import router as reviews_router
 from .settings_api import router as settings_router
 from .staff_api import router as staff_router
 from .tickets_api import router as tickets_router
+from .teams_api import router as teams_router
 
 app = FastAPI(
     title="Nightjar Annotatiathon Operations",
-    version="0.10.0",
+    version="0.11.0",
     description="Local-first staff API; competition operations will follow verified contracts.",
 )
 app.include_router(auth_router)
 app.include_router(people_router)
+app.include_router(teams_router)
 app.include_router(settings_router)
 app.include_router(attendance_router)
 app.include_router(staff_router)

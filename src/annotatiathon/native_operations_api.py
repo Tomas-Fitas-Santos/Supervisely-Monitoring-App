@@ -24,6 +24,7 @@ from .models import (
     Person,
     SuperviselyConfig,
 )
+from .pair_members import pair_members
 
 router = APIRouter(prefix="/api/v1/native", tags=["Supervisely dispatch"])
 
@@ -46,20 +47,23 @@ def native_ready(db: Session) -> SuperviselyConfig:
 
 
 def team_members(db: Session, job: LabelingJob) -> list[Person]:
-    people = list(db.scalars(select(Person).where(
-        Person.event_id == job.event_id, Person.team_id == job.team_id,
-        Person.active.is_(True), Person.kind == "participant",
-    ).order_by(Person.id)))
-    if len(people) != 2 or any(
-        p.supervisely_user_id is None or p.membership_status != "joined"
-        or p.supervisely_role != "annotator" or p.native_verified_at is None
-        for p in people
-    ):
+    people, kind = pair_members(db, job.event_id, job.team_id)
+    if len(people) != 2:
         raise HTTPException(
             status_code=409,
-            detail="Every team needs two verified native annotator accounts "
-                   "with correct roles. Refresh membership first.",
+            detail="Each team must contain exactly two active roster members.",
         )
+    for person in people:
+        role = (person.supervisely_role or "").lower()
+        allowed = (role == "annotator" if kind == "participants"
+                   else role in {"admin", "manager", "developer"})
+        if (not person.supervisely_user_id or person.membership_status != "joined"
+                or person.native_verified_at is None or not allowed):
+            raise HTTPException(
+                status_code=409,
+                detail="Both people must have verified native memberships with "
+                       "roles appropriate to their pair type.",
+            )
     ids = [p.supervisely_user_id for p in people]
     if len(set(ids)) != 2:
         raise HTTPException(status_code=409, detail="Native user IDs must be distinct.")
@@ -83,7 +87,7 @@ def queue_publish(db: Session, job: LabelingJob) -> NativeOperation:
 
 
 def can_queue_next(db: Session, job: LabelingJob) -> bool:
-    """Queued work may follow a completely submitted native pair job."""
+    """The previous pair job must have passed monitor review before release."""
     earlier = list(db.scalars(select(LabelingJob).where(
         LabelingJob.event_id == job.event_id,
         LabelingJob.plan_id == job.plan_id,
@@ -91,7 +95,8 @@ def can_queue_next(db: Session, job: LabelingJob) -> bool:
         LabelingJob.sequence < job.sequence,
     )))
     return bool(earlier) and all(
-        x.status in {"on_review", "completed"} for x in earlier
+        x.status == "completed" and x.review_status == "accepted"
+        for x in earlier
     )
 
 
@@ -280,8 +285,15 @@ def retry_operation(
     plan = db.scalar(select(LabelingPlan).where(
         LabelingPlan.id == job.plan_id, LabelingPlan.event_id == event.id
     ))
-    if plan is None or plan.status != "running":
-        raise HTTPException(status_code=409, detail="Resume the event plan first.")
+    if (plan is None or
+            (plan.status not in {"running", "paused"} if op.kind == "restart_job"
+             else plan.status != "running")):
+        raise HTTPException(
+            status_code=409,
+            detail="Job operation cannot be retried in the current plan state.",
+        )
+    if op.kind not in {"publish_job", "restart_job"}:
+        raise HTTPException(status_code=409, detail="Unsupported job operation.")
     op.status = "pending"
     op.error_code = None
     op.claimed_at = None

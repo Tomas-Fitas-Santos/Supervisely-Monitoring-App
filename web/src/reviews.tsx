@@ -5,7 +5,10 @@ import {
 import { api, type Auth } from "./api";
 
 type Job={id:string;team_name:string;sequence:number;status:string;review_status:string;
-  dataset_id:string;frame_count:number;assigned_monitor_id:string|null};
+  dataset_id:string;frame_count:number;assigned_monitor_id:string|null;
+  correction_round:number;
+  native_submissions:{person_id:string;person_name:string;native_job_id:number;
+    native_status:string;last_synced_at:number|null}[];};
 type Media={id:string;relative_path:string;morphology:string;video_group:string|null};
 type MediaPage={items:Media[];total:number;page:number;size:number};
 type Review={id:string;media_id:string;verdict:"good"|"bad"|"incomplete";
@@ -98,7 +101,9 @@ export function QualityScreen({auth}:{auth:Auth}) {
       await api("/review/jobs/"+selected.id+"/decision","POST",{
         decision:choice,notes,
       },auth.csrf_token);
-      setNotice("Local review decision recorded. Supervisely's native job status is unchanged.");
+      setNotice(choice==="accept"?
+        "Pair review accepted. The next job may now be released by the worker.":
+        "Pair returned. A native correction task is queued; no next job will release.");
       await refresh();await loadReviews();
     }catch(e){setError((e as Error).message);}
     finally{setBusy(false);}
@@ -126,6 +131,25 @@ export function QualityScreen({auth}:{auth:Auth}) {
       <section className="panel">
         <span className="eyebrow">JOB QUALITY SUMMARY</span>
         <h3>{selected?selected.team_name+" · Job "+selected.sequence:"No job selected"}</h3>
+        {selected&&<div className="submission-summary">
+          <h4>Pair submission status</h4>
+          <p className="muted small">This pair has one active Nightjar workload.
+            Supervisely exposes a native labeling job for each annotator.
+            Both must submit their assigned frames before monitor review.</p>
+          {(selected.native_submissions||[]).map(member=><div className="job-plan-row"
+            key={member.native_job_id}>
+            <div><strong>{member.person_name}</strong>
+              <span>Native job #{member.native_job_id}</span></div>
+            <span className={"dataset-status "+member.native_status}>
+              {member.native_status.replaceAll("_"," ")}</span>
+          </div>)}
+          {!selected.native_submissions?.length&&
+            <p className="muted small">Waiting for native publishing.</p>}
+          {selected.status==="needs_correction"&&
+            <p className="muted small">The current job was returned. Native
+              correction is being prepared; the next job remains locked.
+              Correction round: {selected.correction_round}.</p>}
+        </div>}
         {reviews&&<div className="review-stats">
           <span><strong>{reviews.reviewed_frames}</strong> frames reviewed</span>
           <span><strong>{reviews.keypoint_score}</strong> keypoint score</span>
@@ -138,7 +162,7 @@ export function QualityScreen({auth}:{auth:Auth}) {
           <button className="btn primary" disabled={busy||!reviews?.count}
             onClick={()=>void decide("accept")}><CheckCircle2 size={14}/> Accept job</button>
         </div>}
-        {!reviewable&&selected&&<p className="muted small">Quality scoring opens after a real labeling job is submitted for review. No synthetic submissions are created.</p>}
+        {!reviewable&&selected&&<p className="muted small">Quality scoring opens once both native annotators submit all their assigned frames. No synthetic submissions are created.</p>}
       </section>
     </div>
     {selected&&media&&<section className="panel" style={{marginTop:20}}>

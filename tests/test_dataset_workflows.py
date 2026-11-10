@@ -218,3 +218,55 @@ def test_dataset_upload_rejects_unsafe_path(ctx):
         params={"relative_path": "../outside.jpg", "offset": 0, "total": 1},
         data=b"x", headers={"X-CSRF-Token": csrf})
     assert invalid.status_code == 422
+
+
+
+def test_monitor_pair_creation_disband_and_plan_provenance(ctx):
+    client, maker, csrf = ctx
+    for index in range(3):
+        response = act(client, csrf, "/people", {
+            "name": f"Monitor {index}",
+            "email": f"monitor{index}@example.org",
+            "kind": "monitor",
+        })
+        assert response.status_code == 201, response.text
+    roster = client.get("/api/v1/people?kind=monitor&size=10").json()["items"]
+    selected = [p["id"] for p in roster[:2]]
+    made = act(client, csrf, "/teams/monitor-pairs", {
+        "name": "Monitor Pair One", "monitor_person_ids": selected,
+    })
+    assert made.status_code == 201, made.text
+    tid = made.json()["id"]
+    teams = client.get("/api/v1/teams").json()["teams"]
+    team = next(t for t in teams if t["id"] == tid)
+    assert team["member_source"] == "monitor_pair"
+    assert len(team["members"]) == 2
+    assert all(p["kind"] == "monitor" for p in team["members"])
+    duplicate = act(client, csrf, "/teams/monitor-pairs", {
+        "name": "Monitor Pair Two", "monitor_person_ids": selected,
+    })
+    assert duplicate.status_code == 409
+    disband = act(client, csrf, "/teams/monitor-pairs/"+tid+"/disband")
+    assert disband.status_code == 200
+    assert disband.json()["status"] == "disbanded"
+    assert all(t["id"] != tid for t in client.get("/api/v1/teams").json()["teams"])
+    reused = act(client, csrf, "/teams/monitor-pairs", {
+        "name": "Monitor Pair Two", "monitor_person_ids": selected,
+    })
+    assert reused.status_code == 201, reused.text
+    dataset_id = ingest(client, csrf)
+    planned = act(client, csrf, "/labeling/plans", {
+        "dataset_id": dataset_id, "jobs_per_team": 2, "redundancy": 1,
+    })
+    assert planned.status_code == 201, planned.text
+    blocked = act(
+        client, csrf,
+        "/teams/monitor-pairs/"+reused.json()["id"]+"/disband",
+    )
+    assert blocked.status_code == 409
+    with maker() as db:
+        from annotatiathon.models import MonitorPairMember
+        active = list(db.scalars(select(MonitorPairMember).where(
+            MonitorPairMember.active.is_(True)
+        )))
+        assert len(active) == 2

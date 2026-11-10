@@ -8,13 +8,14 @@ from dataclasses import dataclass, field
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .auth import AuthContext, requires
 from .datasets_api import get_dataset
 from .db import get_db
 from .events_api import current_event
+from .pair_members import pair_members
 from .models import (
     AuditEvent,
     CompetitionTeam,
@@ -22,6 +23,7 @@ from .models import (
     LabelingPlan,
     MediaAsset,
     MonitorAssignment,
+    NativeJobBinding,
     Person,
     epoch,
 )
@@ -177,17 +179,14 @@ def create_plan(
     ).order_by(CompetitionTeam.name, CompetitionTeam.id)))
     if not teams:
         raise HTTPException(status_code=422, detail="Import competition teams first.")
-    counts = dict(db.execute(select(
-        Person.team_id, func.count(Person.id),
-    ).where(
-        Person.event_id == event.id, Person.active.is_(True),
-        Person.kind == "participant", Person.team_id.is_not(None),
-    ).group_by(Person.team_id)).all())
-    if any(counts.get(team.id) != 2 for team in teams):
-        raise HTTPException(
-            status_code=422,
-            detail="Every competition team must contain exactly two active participants.",
-        )
+    for team in teams:
+        people, group = pair_members(db, event.id, team.id)
+        if len(people) != 2 or group == "invalid":
+            raise HTTPException(
+                status_code=422,
+                detail="Every team needs exactly two active participants or two active "
+                       "monitor-pair members before planning.",
+            )
     assets = list(db.scalars(select(MediaAsset).where(
         MediaAsset.event_id == event.id, MediaAsset.dataset_id == dataset.id,
     ).order_by(MediaAsset.relative_path)))
@@ -308,12 +307,27 @@ def list_jobs(
     teams = {t.id: t.name for t in db.scalars(select(CompetitionTeam).where(
         CompetitionTeam.event_id == event.id,
     ))}
+    bindings: dict[str, list[dict]] = defaultdict(list)
+    for binding in db.scalars(select(NativeJobBinding).where(
+        NativeJobBinding.event_id == event.id,
+    )):
+        person = db.get(Person, binding.person_id)
+        bindings[binding.job_id].append({
+            "person_id": binding.person_id,
+            "person_name": person.name if person else "Unknown",
+            "native_job_id": binding.native_job_id,
+            "native_status": binding.native_status,
+            "last_synced_at": binding.last_synced_at,
+        })
     return {"items": [{
         "id": job.id, "plan_id": job.plan_id, "dataset_id": job.dataset_id,
         "team_id": job.team_id, "team_name": teams.get(job.team_id, "Unknown"),
         "sequence": job.sequence, "frame_count": job.frame_count,
         "video_count": job.video_count, "morphology_counts": job.morphology_counts,
         "status": job.status, "review_status": job.review_status,
+        "correction_round": job.correction_round,
+        "native_submissions": bindings.get(job.id, []),
+        "correction_round": job.correction_round,
         "assigned_monitor_id": job.assigned_monitor_id,
         "started_at": job.started_at, "submitted_at": job.submitted_at,
         "completed_at": job.completed_at,

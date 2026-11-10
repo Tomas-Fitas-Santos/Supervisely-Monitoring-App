@@ -10,6 +10,7 @@ export type Person = {
   check_in_at: number | null; table_number: number | null;
 };
 export type Team = { id: string; name: string; type: string;
+  member_source?: "monitor_pair" | "participants";
   monitor_person_id?: string | null; monitor_name?: string | null;
   table_number?: number | null; checked_in: number;
   first_check_in: number | null; members: Person[] };

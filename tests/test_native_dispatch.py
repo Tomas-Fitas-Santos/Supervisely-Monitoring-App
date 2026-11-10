@@ -24,6 +24,7 @@ from annotatiathon.models import (
     MediaAsset,
     MediaDataset,
     NativeJobBinding,
+    NativeJobRevision,
     NativeMediaInstance,
     NativeOperation,
     Person,
@@ -31,7 +32,9 @@ from annotatiathon.models import (
     SuperviselyConfig,
     epoch,
 )
-from annotatiathon.native_worker import process_export_once, process_once, sync_all
+from annotatiathon.native_worker import (
+    process_correction_once, process_export_once, process_once, sync_all,
+)
 from annotatiathon.security import password_hash
 
 
@@ -67,6 +70,7 @@ class MockSDK:
         self.labeling_job = Obj(
             get_list=self.jobs_list,
             create=self.jobs_create,
+            restart=self.jobs_restart,
             get_info_by_id=lambda ident: next((j for j in self.jobs if j.id == ident), None),
         )
 
@@ -125,6 +129,20 @@ class MockSDK:
             self.fail_job_create_once = False
             raise ConnectionError("Simulated uncertain write after creating remote jobs")
         return new_jobs
+
+    def jobs_restart(self, job_id, assignee_ids, title, complete_existing,
+                     only_rejected_entities):
+        assert complete_existing is True and only_rejected_entities is False
+        old = next(j for j in self.jobs if j.id == job_id)
+        assert assignee_ids == [old.assigned_to_id]
+        new = Obj(
+            id=self.new_id(), name=title, dataset_id=old.dataset_id,
+            assigned_to_id=assignee_ids[0], status="pending",
+            images_count=old.images_count, finished_images_count=0,
+        )
+        self.jobs.append(new)
+        old.status = "completed"
+        return [{"id": new.id, "userId": new.assigned_to_id}]
 
 
 @pytest.fixture
@@ -267,6 +285,25 @@ def test_initial_release_and_next_after_both_submit(configured):
         sdk.jobs[1].finished_images_count = 2
         result = sync_all(db, sdk, config)
         assert result["changed_jobs"] == 1
+        assert len(db.scalars(select(NativeOperation)).all()) == 1
+        # The second job must NOT be published before monitor acceptance.
+        assert process_once(db, sdk, config) is None
+        first_job = db.scalar(select(LabelingJob).where(
+            LabelingJob.sequence == 1
+        ))
+        media_id = first_job.media_ids[0]
+        first_id = first_job.id
+    review = http.put("/api/v1/review/jobs/"+first_id+"/frames", json={
+        "media_id": media_id, "verdict": "good", "correct_keypoints": 1,
+    }, headers={"X-CSRF-Token": csrf})
+    assert review.status_code == 200, review.text
+    approved = call(http, csrf, "/review/jobs/"+first_id+"/decision", {
+        "decision": "accept",
+    })
+    assert approved.status_code == 200, approved.text
+    with maker() as db:
+        config = db.get(SuperviselyConfig, 1)
+        sync_all(db, sdk, config)
         assert len(db.scalars(select(NativeOperation)).all()) == 2
         next_run = process_once(db, sdk, config)
         assert next_run["status"] == "done"
@@ -277,6 +314,66 @@ def test_initial_release_and_next_after_both_submit(configured):
     overview = http.get("/api/v1/native/overview").json()
     assert overview["native_bindings"] == 4
     assert len(overview["operations"]) == 2
+
+
+def test_returned_pair_job_restarts_and_blocks_next_release(configured):
+    http, maker, csrf, plan_id, sdk = configured
+    launch(http, csrf, plan_id)
+    with maker() as db:
+        config = db.get(SuperviselyConfig, 1)
+        assert process_once(db, sdk, config)["status"] == "done"
+        job = db.scalar(select(LabelingJob).where(LabelingJob.sequence == 1))
+        jid, mid = job.id, job.media_ids[0]
+        for native in sdk.jobs:
+            native.status = "on_review"
+            native.finished_images_count = native.images_count
+        assert sync_all(db, sdk, config)["changed_jobs"] == 1
+        assert process_once(db, sdk, config) is None
+    review = http.put("/api/v1/review/jobs/"+jid+"/frames", json={
+        "media_id": mid, "verdict": "bad", "missing_keypoints": 2,
+    }, headers={"X-CSRF-Token": csrf})
+    assert review.status_code == 200
+    returned = call(http, csrf, "/review/jobs/"+jid+"/decision", {
+        "decision": "return_for_correction", "notes": "Incomplete head keypoints",
+    })
+    assert returned.status_code == 200, returned.text
+    assert returned.json()["native_correction_queued"] is True
+    with maker() as db:
+        config = db.get(SuperviselyConfig, 1)
+        assert sync_all(db, sdk, config)["pending_operations"] == 0
+        assert process_once(db, sdk, config) is None
+        corrected = process_correction_once(db, sdk, config)
+        assert corrected["status"] == "done", corrected
+        assert len(db.scalars(select(NativeJobRevision)).all()) == 2
+        assert len(sdk.jobs) == 4
+        first_job = db.get(LabelingJob, jid)
+        assert first_job.status == "in_progress"
+        assert first_job.correction_round == 1
+        active_ids = [
+            x.native_job_id for x in db.scalars(select(NativeJobBinding).where(
+                NativeJobBinding.job_id == jid
+            ))
+        ]
+        for native in sdk.jobs:
+            if native.id in active_ids:
+                native.status = "on_review"
+                native.finished_images_count = native.images_count
+        assert sync_all(db, sdk, config)["changed_jobs"] == 1
+    fixed = http.put("/api/v1/review/jobs/"+jid+"/frames", json={
+        "media_id": mid, "verdict": "good", "correct_keypoints": 3,
+    }, headers={"X-CSRF-Token": csrf})
+    assert fixed.status_code == 200
+    approved = call(http, csrf, "/review/jobs/"+jid+"/decision", {
+        "decision": "accept",
+    })
+    assert approved.status_code == 200, approved.text
+    with maker() as db:
+        config = db.get(SuperviselyConfig, 1)
+        sync_all(db, sdk, config)
+        assert len(db.scalars(select(NativeOperation)).all()) == 3
+        assert process_once(db, sdk, config)["status"] == "done"
+
+
 
 
 def test_uncertain_native_create_is_reconciled_without_duplicates(configured):

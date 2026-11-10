@@ -420,6 +420,7 @@ class LabelingJob(Base):
     status: Mapped[str] = mapped_column(String(24), default="queued")
     native_dataset_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     review_status: Mapped[str] = mapped_column(String(24), default="unreviewed")
+    correction_round: Mapped[int] = mapped_column(Integer, default=0)
     assigned_monitor_id: Mapped[str | None] = mapped_column(
         ForeignKey("people.id"), nullable=True
     )
@@ -510,3 +511,38 @@ class NativeOperation(Base):
     created_at: Mapped[int] = mapped_column(Integer, default=epoch)
     claimed_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
     completed_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
+class MonitorPairMember(Base):
+    """Event-local monitor membership of a two-person competition team.
+
+    The source monitor role remains unchanged. Disbanding only deactivates
+    this relationship and keeps all historical audit records intact.
+    """
+
+    __tablename__ = "monitor_pair_members"
+    __table_args__ = (
+        UniqueConstraint("team_id", "person_id", name="uq_monitor_pair_team_person"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=identifier)
+    event_id: Mapped[str] = mapped_column(ForeignKey("events.id"), index=True)
+    team_id: Mapped[str] = mapped_column(ForeignKey("competition_teams.id"), index=True)
+    person_id: Mapped[str] = mapped_column(ForeignKey("people.id"), index=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[int] = mapped_column(Integer, default=epoch)
+
+
+class NativeJobRevision(Base):
+    """Historical native IDs after a correction restart, never overwritten."""
+
+    __tablename__ = "native_job_revisions"
+    __table_args__ = (
+        UniqueConstraint("native_job_id", name="uq_native_historical_job_id"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=identifier)
+    event_id: Mapped[str] = mapped_column(ForeignKey("events.id"), index=True)
+    job_id: Mapped[str] = mapped_column(ForeignKey("labeling_jobs.id"), index=True)
+    person_id: Mapped[str] = mapped_column(ForeignKey("people.id"), index=True)
+    native_job_id: Mapped[int] = mapped_column(Integer)
+    correction_round: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[int] = mapped_column(Integer, default=epoch)

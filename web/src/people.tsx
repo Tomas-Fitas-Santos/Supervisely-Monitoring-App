@@ -7,6 +7,7 @@ import {
 import { api, type Auth, type PeopleResponse, type Person, type Team, type TeamResponse } from "./api";
 import { NativeMembershipPanel } from "./native";
 import { MonitorAssignmentsPanel } from "./monitoring";
+import { MonitorPairPanel } from "./monitor_pairs";
 
 type PersonForm = {name:string;email:string;kind:"participant"|"monitor";team_name:string};
 const emptyForm: PersonForm = {name:"",email:"",kind:"participant",team_name:""};
@@ -209,6 +210,7 @@ export function PeopleScreen({auth}:{auth:Auth}) {
     {showImporter&&admin&&<RosterImporter auth={auth} onComplete={()=>{setShowImporter(false);void refresh();}}/>}
     {admin&&<NativeMembershipPanel auth={auth} onApplied={()=>void refresh()}/>}
     {admin&&<MonitorAssignmentsPanel auth={auth} onApplied={()=>void refresh()}/>}
+    {admin&&<MonitorPairPanel auth={auth} onChanged={()=>void refresh()}/>}
     <section className="panel table-panel">
       <div className="panel-header-line">
         <div className="segmented"><button className={mode==="teams"?"selected":""}
@@ -243,7 +245,7 @@ export function PeopleScreen({auth}:{auth:Auth}) {
           key={team.id} onClick={()=>setSelectedTeam(team.id)}>
           <div className={"team-symbol "+(team.type==="monitoring"?"monitoring":"")}><UsersRound size={19}/></div>
           <div className="team-main"><strong>{team.name}</strong>
-            <span>{team.type==="monitoring"?"Pinned · Event staff":team.members.map(p=>p.name).join(" · ")||"No participants assigned"}</span></div>
+            <span>{team.type==="monitoring"?"Pinned · Event staff":team.members.map(p=>p.name).join(" · ")||"No members assigned"}</span></div>
           <span className="team-count">{team.members.length} members</span>
           {team.type==="competition"&&<span className="team-monitor-name">{team.monitor_name||"Monitor unassigned"}</span>}
           <span className="team-attendance">{team.checked_in} checked in</span>

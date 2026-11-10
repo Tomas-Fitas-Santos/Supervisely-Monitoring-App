@@ -20,6 +20,8 @@ from .models import (
     LabelingJob,
     MediaAsset,
     MonitorAssignment,
+    NativeJobBinding,
+    NativeOperation,
     Person,
     epoch,
 )
@@ -151,7 +153,7 @@ def review_frame(
             reviewer_id=ctx.staff.id,
         )
         db.add(item)
-    for key in payload.model_fields:
+    for key in type(payload).model_fields:
         if key != "media_id":
             setattr(item, key, getattr(payload, key))
     item.reviewer_id = ctx.staff.id
@@ -185,8 +187,11 @@ def decide_review(
     event = current_event(db, ctx, writable=True)
     job = get_job(db, event.id, job_id, lock=True)
     verify_monitor(db, ctx, job)
-    if job.status not in ("on_review", "submitted", "needs_correction"):
-        raise HTTPException(status_code=409, detail="Job is not awaiting review.")
+    if job.status != "on_review":
+        raise HTTPException(
+            status_code=409,
+            detail="Wait for both native annotator submissions before deciding a review.",
+        )
     reviewed = list(db.scalars(select(JobReview).where(
         JobReview.job_id == job.id, JobReview.event_id == event.id,
     )))
@@ -203,8 +208,35 @@ def decide_review(
                   else "needs_correction")
     job.review_status = ("accepted" if payload.decision == "accept"
                          else "returned")
+    native_correction_queued = False
     if payload.decision == "accept":
         job.completed_at = epoch()
+    else:
+        job.correction_round += 1
+        bindings = list(db.scalars(select(NativeJobBinding).where(
+            NativeJobBinding.event_id == event.id,
+            NativeJobBinding.job_id == job.id,
+        )))
+        if len(bindings) == 2:
+            previous = db.scalar(select(NativeOperation).where(
+                NativeOperation.kind == "restart_job",
+                NativeOperation.target_id == job.id,
+            ).with_for_update())
+            if previous is not None:
+                if previous.status not in {"done", "attention", "blocked"}:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="An earlier correction operation is still in progress.",
+                    )
+                previous.status = "pending"
+                previous.error_code = None
+                previous.claimed_at = None
+            else:
+                db.add(NativeOperation(
+                    event_id=event.id, kind="restart_job",
+                    target_id=job.id, status="pending",
+                ))
+            native_correction_queued = True
     db.add(AuditEvent(
         staff_id=ctx.staff.id, event_id=event.id,
         action="job.review.accept" if payload.decision == "accept"
@@ -212,6 +244,8 @@ def decide_review(
         target_id=job.id, details={
             "reviewed_frames": len(reviewed), "notes": payload.notes,
             "remote_status_not_changed": True,
+            "correction_round": job.correction_round,
+            "native_correction_queued": native_correction_queued,
         },
     ))
     db.commit()
@@ -219,6 +253,8 @@ def decide_review(
         "id": job.id, "status": job.status, "review_status": job.review_status,
         "reviewed_frames": len(reviewed),
         "native_mutations": False,
+        "native_correction_queued": native_correction_queued,
+        "correction_round": job.correction_round,
     }
 
 

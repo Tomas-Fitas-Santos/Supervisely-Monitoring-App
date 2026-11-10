@@ -32,13 +32,16 @@ from .models import (
     MediaAsset,
     MediaDataset,
     NativeJobBinding,
+    NativeJobRevision,
     NativeMediaInstance,
     NativeOperation,
     SuperviselyConfig,
     epoch,
 )
 from .native_export_api import export_event_zip
-from .native_operations_api import next_eligible, queue_publish, team_members
+from .native_operations_api import (
+    can_queue_next, next_eligible, queue_publish, team_members,
+)
 from .supervisely_client import NativeAPIError, require_connection
 
 logger = logging.getLogger(__name__)
@@ -189,6 +192,8 @@ def publish_job(db: Session, job: LabelingJob, api, config: SuperviselyConfig) -
     """Idempotent by deterministic project/dataset names and native user IDs."""
     if job.status not in {"queued", "publishing", "in_progress"}:
         raise NativeWorkerError("invalid_job_status")
+    if job.sequence > 1 and not can_queue_next(db, job):
+        raise NativeWorkerError("previous_pair_job_not_accepted")
     plan = db.get(LabelingPlan, job.plan_id)
     event = db.get(Event, job.event_id)
     if event is None or event.status != "active" or plan is None or plan.status != "running":
@@ -269,10 +274,13 @@ def publish_job(db: Session, job: LabelingJob, api, config: SuperviselyConfig) -
 
 
 def sync_one(db: Session, api, job: LabelingJob) -> str:
-    if job.status in {"queued", "publishing", "completed"}:
+    # A returned job is managed by the explicit native correction operation.
+    # Do not treat two old 'on_review' records as a new submission.
+    if job.status in {"queued", "publishing", "completed", "needs_correction"}:
         return job.status
     bindings = list(db.scalars(select(NativeJobBinding).where(
-        NativeJobBinding.job_id == job.id, NativeJobBinding.event_id == job.event_id
+        NativeJobBinding.job_id == job.id,
+        NativeJobBinding.event_id == job.event_id,
     )))
     if len(bindings) != 2:
         return job.status
@@ -292,17 +300,12 @@ def sync_one(db: Session, api, job: LabelingJob) -> str:
         job.review_status = "returned"
     elif all(
         info.status in {"on_review", "completed", "review_completed"}
+        and info.images_count > 0
+        and info.finished_images_count >= info.images_count
         for info in statuses
     ):
-        if any(
-            info.images_count < 1 or info.finished_images_count < info.images_count
-            for info in statuses
-        ):
-            job.status = "needs_correction"
-            job.review_status = "returned"
-        elif job.status != "needs_correction" and job.review_status != "returned":
-            job.status = "on_review"
-            job.submitted_at = job.submitted_at or epoch()
+        job.status = "on_review"
+        job.submitted_at = job.submitted_at or epoch()
     db.commit()
     return job.status
 
@@ -353,12 +356,16 @@ def process_once(db: Session, api, config: SuperviselyConfig) -> dict | None:
             NativeOperation.kind == "publish_job",
             LabelingPlan.status == "running",
             Event.status == "active",
-        ).order_by(NativeOperation.created_at).with_for_update(skip_locked=True).limit(1)
+        ).order_by(NativeOperation.created_at).with_for_update(skip_locked=True).limit(200)
     ))
-    if not operations:
+    op = next((
+        row for row in operations
+        if (db.get(LabelingJob, row.target_id).sequence == 1
+            or can_queue_next(db, db.get(LabelingJob, row.target_id)))
+    ), None)
+    if op is None:
         db.rollback()
         return None
-    op = operations[0]
     event = db.get(Event, op.event_id)
     job = db.get(LabelingJob, op.target_id)
     plan = db.get(LabelingPlan, job.plan_id) if job else None
@@ -396,6 +403,144 @@ def process_once(db: Session, api, config: SuperviselyConfig) -> dict | None:
     finished.error_code = None
     db.commit()
     return {"operation_id": opid, "status": "done", **details}
+
+
+def process_correction_once(db: Session, api, config: SuperviselyConfig) -> dict | None:
+    """Restart the current pair job for corrections, without advancing its queue."""
+    operations = list(db.scalars(
+        select(NativeOperation)
+        .join(LabelingJob, LabelingJob.id == NativeOperation.target_id)
+        .join(LabelingPlan, LabelingPlan.id == LabelingJob.plan_id)
+        .join(Event, Event.id == NativeOperation.event_id)
+        .where(
+            NativeOperation.status == "pending",
+            NativeOperation.kind == "restart_job",
+            LabelingPlan.status.in_(["running", "paused"]),
+            Event.status == "active",
+        ).order_by(NativeOperation.created_at)
+        .with_for_update(skip_locked=True).limit(1)
+    ))
+    if not operations:
+        db.rollback()
+        return None
+    op = operations[0]
+    job = db.get(LabelingJob, op.target_id)
+    if job is None or job.status != "needs_correction" or job.correction_round < 1:
+        op.status = "attention"
+        op.error_code = "correction_state_changed"
+        db.commit()
+        return {"operation_id": op.id, "status": "attention"}
+    op.status = "running"
+    op.claimed_at = epoch()
+    op.attempts += 1
+    opid, jobid = op.id, job.id
+    db.commit()
+    try:
+        people = team_members(db, job)
+        by_person = {p.id: p for p in people}
+        bindings = list(db.scalars(select(NativeJobBinding).where(
+            NativeJobBinding.event_id == job.event_id,
+            NativeJobBinding.job_id == job.id,
+        )))
+        if len(bindings) != 2 or set(b.person_id for b in bindings) != set(by_person):
+            raise NativeWorkerError("correction_binding_mismatch")
+        # Reconcile independently named restart jobs before any remote write,
+        # including if the first remote restart succeeded but its response was lost.
+        remote = api.labeling_job.get_list(
+            config.team_id, dataset_id=job.native_dataset_id, show_disabled=True,
+        )
+        updated = []
+        for binding in bindings:
+            person = by_person[binding.person_id]
+            title = (
+                f"Nightjar correction {job.id} round {job.correction_round} "
+                f"member {binding.person_id}"
+            )
+            matches = [
+                row for row in remote
+                if row.name == title and row.assigned_to_id == person.supervisely_user_id
+                and row.dataset_id == job.native_dataset_id
+            ]
+            if len(matches) > 1:
+                raise NativeWorkerError("duplicate_correction_job")
+            if not matches:
+                api.labeling_job.restart(
+                    binding.native_job_id,
+                    assignee_ids=[person.supervisely_user_id],
+                    title=title,
+                    complete_existing=True,
+                    only_rejected_entities=False,
+                )
+                remote = api.labeling_job.get_list(
+                    config.team_id, dataset_id=job.native_dataset_id,
+                    show_disabled=True,
+                )
+                matches = [
+                    row for row in remote
+                    if row.name == title
+                    and row.assigned_to_id == person.supervisely_user_id
+                    and row.dataset_id == job.native_dataset_id
+                ]
+            if len(matches) != 1 or matches[0].id == binding.native_job_id:
+                raise NativeWorkerError("correction_restart_not_confirmed")
+            updated.append((binding, matches[0]))
+        # One local transaction switches both bindings. Old native IDs remain
+        # in a separate historical table (and remain on the remote server).
+        for binding, new_job in updated:
+            previous = db.scalar(select(NativeJobRevision).where(
+                NativeJobRevision.native_job_id == binding.native_job_id,
+            ))
+            if previous is None:
+                db.add(NativeJobRevision(
+                    event_id=job.event_id, job_id=job.id,
+                    person_id=binding.person_id,
+                    native_job_id=binding.native_job_id,
+                    correction_round=job.correction_round,
+                ))
+            binding.native_job_id = new_job.id
+            binding.native_status = new_job.status
+            binding.last_synced_at = epoch()
+        job.status = "in_progress"
+        job.review_status = "unreviewed"
+        job.submitted_at = None
+        job.completed_at = None
+        task = db.get(NativeOperation, opid)
+        task.status = "done"
+        task.error_code = None
+        task.completed_at = epoch()
+        db.add(AuditEvent(
+            event_id=job.event_id,
+            action="native.job.correct_restart",
+            target_type="labeling_job", target_id=jobid,
+            details={
+                "round": job.correction_round,
+                "new_job_ids": [r.id for _, r in updated],
+                "historical_job_ids": [row.native_job_id for row in
+                    db.scalars(select(NativeJobRevision).where(
+                        NativeJobRevision.job_id == jobid,
+                    ))],
+            },
+        ))
+        db.commit()
+        return {"operation_id": opid, "status": "done", "correction_round": job.correction_round}
+    except Exception as exc:  # noqa: BLE001 - native restart may succeed with lost response
+        db.rollback()
+        task = db.get(NativeOperation, opid)
+        task.status = "attention"
+        task.error_code = (
+            exc.code if isinstance(exc, (NativeWorkerError, NativeAPIError))
+            else "native_correction_uncertain"
+        )
+        db.add(AuditEvent(
+            event_id=job.event_id,
+            action="native.job.correction_attention",
+            target_type="native_operation", target_id=opid,
+            details={"error_code": task.error_code},
+        ))
+        db.commit()
+        logger.warning("Correction operation %s requires reconciliation (%s)",
+                       opid, type(exc).__name__)
+        return {"operation_id": opid, "status": "attention"}
 
 
 def process_export_once(db: Session, api) -> dict | None:
@@ -469,12 +614,13 @@ def run_worker(*, once: bool, poll_seconds: int) -> None:
                 api = connect_native(config)
                 config_isolation = identifier
             try:
+                correction = process_correction_once(db, api, config)
                 operation = process_once(db, api, config)
                 export = process_export_once(db, api)
                 sync_result = sync_all(db, api, config)
-                if operation or export or sync_result["changed_jobs"]:
-                    logger.info("Nightjar native worker: operation=%s export=%s sync=%s",
-                                operation, export, sync_result)
+                if correction or operation or export or sync_result["changed_jobs"]:
+                    logger.info("Nightjar worker: correction=%s publish=%s export=%s sync=%s",
+                                correction, operation, export, sync_result)
             except Exception as exc:  # noqa: BLE001 - keep long-lived worker alive
                 db.rollback()
                 logger.warning("Supervisely worker cycle failed (type %s); "

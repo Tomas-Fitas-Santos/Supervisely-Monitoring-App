@@ -13,7 +13,9 @@ from sqlalchemy.orm import Session
 from .auth import AuthContext, normalized_email, requires
 from .db import get_db
 from .events_api import current_event
-from .models import AuditEvent, CompetitionTeam, ImportBatch, MonitorAssignment, Person
+from .models import (
+    AuditEvent, CompetitionTeam, ImportBatch, MonitorAssignment, MonitorPairMember, Person,
+)
 
 router = APIRouter(prefix="/api/v1", tags=["people"])
 VIEWER = ("organiser", "monitor", "reception", "activity", "distribution", "observer")
@@ -170,11 +172,21 @@ def list_teams(
     grouped: dict[str | None, list[Person]] = defaultdict(list)
     for person in people:
         grouped[person.team_id if person.kind == "participant" else None].append(person)
+    people_by_id = {p.id: p for p in people}
+    monitor_pairs: dict[str, list[Person]] = defaultdict(list)
+    for link in db.scalars(select(MonitorPairMember).where(
+        MonitorPairMember.event_id == event.id, MonitorPairMember.active.is_(True),
+    )):
+        person = people_by_id.get(link.person_id)
+        if person and person.kind == "monitor":
+            monitor_pairs[link.team_id].append(person)
     result = []
     for team in teams:
-        members = grouped.get(team.id, [])
+        members = grouped.get(team.id, []) + monitor_pairs.get(team.id, [])
+        pair_kind = "monitor_pair" if monitor_pairs.get(team.id) else "participants"
         result.append({
             "id": team.id, "name": team.name, "type": "competition",
+            "member_source": pair_kind,
             "table_number": team.table_number,
             "monitor_person_id": (responsibility.get(team.id)
                                   if responsibility.get(team.id) in monitor_names else None),

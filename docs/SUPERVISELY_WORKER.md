@@ -122,3 +122,44 @@ curated manifests. Large exports remain in `LOCAL_DATA_DIR/exports/` until
 downloaded. They contain annotation JSON only, not the original multi-GB media
 or historical annotation version records. Ensure the source media directory
 and database are preserved together after event closeout.
+
+## Strict one-pair-job-at-a-time queue and submission decisions
+
+An approved plan contains the planned distribution. **Only the first
+pair-level job of each team** is published at event launch. One Nightjar job
+is represented by two SDK-native job rows, one for each assigned annotator,
+against the same job-specific image dataset. The SDK does not guarantee
+simultaneous cooperative editing of a single annotation; this is a live
+acceptance-test item.
+
+The worker polls both native records. A pair goes **on review** only once
+both records report submitted/reviewed state and every assigned image is
+finished. A monitor scores at least one frame and explicitly accepts or
+returns the job. Only `completed` with `review_status=accepted` releases
+the next job for the same team. One native submission never releases work.
+
+**Return for correction** holds the team on that logical job, creates a
+durable correction operation, and uses the documented
+`api.labeling_job.restart(..., only_rejected_entities=False)` method for
+each member. The new IDs become the active bindings; the previous IDs stay
+in `native_job_revisions`. Earlier sampled frame reviews remain visible,
+and bad/incomplete frames must be rescored before acceptance. Uncertain
+remote restarts require explicit operator retry and reconcile deterministic
+remote job names rather than blindly creating duplicates. Pausing future
+release does not block correction of an active job.
+
+## Two-monitor local competition pairs
+
+In **People & Teams → Monitor test pairs**, organisers can combine exactly
+two active monitor records in one local competition team. Each keeps their
+staff monitor role and retains their existing Supervisely Manager/Admin/
+Developer role. The extra membership lives in `monitor_pair_members`;
+the ordinary participant team field is unchanged. Planning supports these
+pairs, and remote publication still requires both accounts to have verified
+membership in the same native Supervisely team.
+
+A pair can be disbanded only before any local labeling jobs exist for it.
+Disbanding deactivates the pair membership and team, and deactivates local
+monitor responsibility assignments. It does not delete people, native
+membership, annotation jobs or event audit history. For tests that generated
+jobs, create a new event rather than erasing provenance.
