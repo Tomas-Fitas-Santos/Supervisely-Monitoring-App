@@ -5,7 +5,7 @@ import {
   CircleHelp, ClipboardCheck, Cloud, Database, LayoutDashboard, LogOut,
   RefreshCw, Settings2, ShieldCheck, Ticket, UsersRound
 } from "lucide-react";
-import { api, type Auth } from "./api";
+import { api, refreshSuperviselyRoster, type Auth } from "./api";
 import { PeopleScreen } from "./people";
 import { SettingsScreen } from "./settings";
 import { EventSelector } from "./events";
@@ -127,6 +127,14 @@ function App() {
   useEffect(() => {
     api<Auth>("/auth/me").then(setAuth).catch(()=>setAuth(null)).finally(()=>setLoading(false));
   }, []);
+  // On every full app load/login, update joined members before normal
+  // local page polling takes over. An unavailable native API must not block
+  // staff access to the locally stored attendance and event data.
+  useEffect(() => {
+    if (!auth) return;
+    void refreshSuperviselyRoster(auth.csrf_token).catch(() => undefined);
+  }, [auth?.staff.id, auth?.csrf_token]);
+
   async function logout() {
     try {
       await api("/auth/logout","POST",undefined,auth?.csrf_token);
