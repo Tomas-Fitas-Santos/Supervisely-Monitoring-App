@@ -14,7 +14,7 @@ nothing; the computer running Docker Desktop must stay powered on.
   Docker network.
 - Nginx serves the compiled React UI and proxies `/api/v1/*` and `/health/*`
   to FastAPI **on the same origin**.
-- The media directory is `.nightjar-live-data/` on your computer and is mounted
+- The media directory defaults to `.nightjar-live-data/` on your computer and is mounted
   at `/data` in the API and native worker. It is NOT backed up automatically.
 - `APP_ENV=production` is intentionally forced inside the Docker stack so that
   login cookies have the `Secure` flag. **Sign in through the tunnel's HTTPS
@@ -52,6 +52,11 @@ notepad .env.live
 The script creates a **new**, private `.env.live` with a cryptographically
 random database password and stable Fernet encryption key. It never overwrites
 an existing file or prints the secrets. This file is ignored by Git.
+
+For large video datasets, change `NIGHTJAR_MEDIA_DIR` in `.env.live` to a
+local folder **outside OneDrive**, for example `D:/NightjarLiveMedia`, and
+create that folder on Windows before starting Docker. Keep the path consistent
+across restarts. The default repository-local directory is fine for small tests.
 
 In `.env.live`, fill the SMTP fields when you want real monitors to create
 their own Nightjar accounts. For example, `SMTP_HOST`, `SMTP_PORT`,
