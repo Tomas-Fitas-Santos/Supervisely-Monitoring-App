@@ -270,3 +270,13 @@ input,select{border:1px solid #dfe5ed;border-radius:9px;background:white;padding
  .staff-duty-editor{min-width:100%}
  .staff-duty-editor .role-options{grid-template-columns:1fr}
 }
+
+
+/* Other busy operations pages share the same subtab layout */
+.page-body>.page-body{padding:0}
+.ticket-section-grid{display:block}
+.ticket-section-grid>.panel{width:100%}
+.activities-subtab-layout{display:block}
+.activities-subtab-layout>.panel{width:100%}
+.activity-results-selector{display:block;max-width:520px;margin-bottom:20px;font-size:12px;color:#52677b;font-weight:700}
+.activity-results-selector select{display:block;width:100%;margin-top:7px}
