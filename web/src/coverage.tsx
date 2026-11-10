@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type React from "react";
 import {
   BarChart3, CheckCircle2, ChevronLeft, ChevronRight, Download,
-  Eye, Film, FolderTree, RefreshCw, Save, Tags, Trash2
+  Eye, Film, RefreshCw, Save, Tags, Trash2
 } from "lucide-react";
 import { api, type Auth } from "./api";
 
