@@ -11,12 +11,6 @@ class Settings(BaseSettings):
     app_env: str = "local"
     database_url: str
     nightjar_encryption_key: SecretStr | None = None
-    smtp_host: str | None = None
-    smtp_port: int = 587
-    smtp_username: str | None = None
-    smtp_password: SecretStr | None = None
-    smtp_sender: str | None = None
-    smtp_use_ssl: bool = False
     supervisely_allowed_hosts: str = "app.supervisely.com"
     local_data_dir: str = ".nightjar-data"
     max_dataset_bytes: int = 140_000_000_000
