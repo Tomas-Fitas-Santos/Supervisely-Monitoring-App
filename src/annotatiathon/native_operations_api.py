@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .auth import AuthContext, requires
-from .config import get_settings
+from .credentials import decrypt_token
 from .db import get_db
 from .events_api import current_event
 from .models import (
@@ -37,13 +37,18 @@ def native_ready(db: Session) -> SuperviselyConfig:
             status_code=409,
             detail="Verify a live Supervisely team AND workspace in Settings first.",
         )
-    token = get_settings().supervisely_api_token
-    if token is None or not token.get_secret_value().strip():
+    if not config.token_ciphertext:
         raise HTTPException(
-            status_code=409,
-            detail="Configure the server-side Supervisely API token before launch.",
+            status_code=422,
+            detail="An organiser must configure the Supervisely API token in Settings.",
         )
-    return config
+    try:
+        decrypt_token(config.token_ciphertext)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="Saved Supervisely integration credential is unavailable.",
+        ) from exc
 
 
 def team_members(db: Session, job: LabelingJob) -> list[Person]:
