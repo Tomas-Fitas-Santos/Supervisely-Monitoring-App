@@ -93,7 +93,7 @@ def test_balanced_preview_manual_and_idempotent_apply(ctx):
     assert first.json()["changes"] == 5
     proposals = first.json()["proposals"]
     assert {item["team_id"] for item in proposals} == set(teams)
-    assert set(item["new_monitor_id"] for item in proposals) == set(monitors)
+    assert {item["new_monitor_id"] for item in proposals} == set(monitors)
     assigned = mutate(
         http, csrf,
         "/monitoring/assignments/plans/"+first.json()["plan_id"]+"/apply",
