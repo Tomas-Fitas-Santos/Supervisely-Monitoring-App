@@ -612,7 +612,7 @@ def process_export_once(db: Session, api) -> dict | None:
 def run_worker(*, once: bool, poll_seconds: int) -> None:
     if not once and not 3 <= poll_seconds <= 300:
         raise ValueError("Polling interval must be 3-300 seconds.")
-    config_isolation: tuple[int, int, str] | None = None
+    config_isolation: tuple[int, int, str, str | None] | None = None
     api = None
     while True:
         with session_factory()() as db:
@@ -620,7 +620,8 @@ def run_worker(*, once: bool, poll_seconds: int) -> None:
             if (config is None or not config.verified or config.team_id is None
                     or config.workspace_id is None):
                 raise NativeWorkerError("verified_team_workspace_required")
-            identifier = (config.team_id, config.workspace_id, config.server_url)
+            identifier = (config.team_id, config.workspace_id, config.server_url,
+                          config.token_ciphertext)
             if api is None or config_isolation != identifier:
                 api = connect_native(config)
                 config_isolation = identifier
