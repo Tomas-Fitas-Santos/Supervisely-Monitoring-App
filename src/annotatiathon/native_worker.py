@@ -890,6 +890,7 @@ def run_worker(*, once: bool, poll_seconds: int) -> None:
                         logger.info("Nightjar reset worker: %s", reset_result)
                     if once:
                         return
+                    time.sleep(poll_seconds)
                     continue
                 correction = process_correction_once(db, api, config)
                 operation = process_once(db, api, config)
