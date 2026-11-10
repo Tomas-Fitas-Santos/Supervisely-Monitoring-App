@@ -410,7 +410,12 @@ def capture_job_annotations(db: Session, api, job: LabelingJob) -> bool:
             annotation = api.annotation.download_json(native.native_image_id)
             if not isinstance(annotation, dict):
                 raise NativeWorkerError("native_annotation_invalid")
-            if isinstance(annotation.get("labels"), list) and annotation["labels"]:
+            # Supervisely JSON uses "objects"; accept the legacy "labels"
+            # field as well for snapshots created by earlier SDK versions.
+            objects = annotation.get("objects")
+            legacy_labels = annotation.get("labels")
+            if ((isinstance(objects, list) and bool(objects)) or
+                    (isinstance(legacy_labels, list) and bool(legacy_labels))):
                 annotated_frames += 1
             row = {
                 "source_media_id": media_id,
