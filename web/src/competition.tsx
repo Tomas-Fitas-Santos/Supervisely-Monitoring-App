@@ -18,6 +18,9 @@ type Job={id:string;plan_id:string;team_id:string;team_name:string;
   assigned_monitor_id:string|null;started_at:number|null;submitted_at:number|null};
 type Media={id:string;relative_path:string;morphology:string;video_group:string|null;native_image_id:number|null};
 type MediaPage={items:Media[];total:number;page:number;size:number};
+type NativeOperation={id:string;target_id:string;kind:string;status:string;attempts:number;error_code:string|null};
+type NativeStatus={plans:{id:string;status:string}[];operations:NativeOperation[];
+  native_bindings:number;bindings_by_status:Record<string,number>;last_sync:number|null;};
 
 export function CompetitionScreen({auth}:{auth:Auth}) {
   const admin=auth.staff.roles.includes("organiser");
@@ -32,17 +35,20 @@ export function CompetitionScreen({auth}:{auth:Auth}) {
   const [jobsPerTeam,setJobsPerTeam]=useState(4);
   const [videoLimit,setVideoLimit]=useState("");
   const [created,setCreated]=useState<Created|null>(null);
+  const [native,setNative]=useState<NativeStatus|null>(null);
   const [error,setError]=useState("");
   const [notice,setNotice]=useState("");
   const [busy,setBusy]=useState(false);
   const refresh=useCallback(async()=>{
     try{
-      const [ds,ps,js]=await Promise.all([
+      const [ds,ps,js,ns]=await Promise.all([
         api<{items:Dataset[]}>("/datasets"),
         api<{items:Plan[]}>("/labeling/plans"),
         api<{items:Job[]}>("/labeling/jobs?limit=2000"),
+        api<NativeStatus>("/native/overview"),
       ]);
-      setDatasets(ds.items.filter(d=>d.status==="ready"));setPlans(ps.items);setJobs(js.items);
+      setDatasets(ds.items.filter(d=>d.status==="ready"));
+      setPlans(ps.items);setJobs(js.items);setNative(ns);
       setDataset(old=>old||ds.items.find(d=>d.status==="ready")?.id||"");
       setChosen(old=>js.items.some(j=>j.id===old)?old:(js.items[0]?.id||""));
       setError("");
@@ -76,6 +82,23 @@ export function CompetitionScreen({auth}:{auth:Auth}) {
     try{
       await api("/labeling/plans/"+plan.id+"/approve","POST",undefined,auth.csrf_token);
       setNotice("Labeling plan approved. Native dataset/job publishing remains a separate operation.");
+      await refresh();
+    }catch(e){setError((e as Error).message);}
+    finally{setBusy(false);}
+  }
+  async function nativeAction(endpoint:string, description:string){
+    if(!window.confirm(description))return;
+    setBusy(true);setError("");setNotice("");
+    try{
+      const approved=plans.find(p=>p.status==="approved");
+      const result=await api<{status?:string;pending_operations?:number}>(
+        endpoint,"POST",
+        endpoint==="/native/launch"?{plan_id:approved?.id}:undefined,auth.csrf_token,
+      );
+      setNotice(result.pending_operations!==undefined?
+        "First-job publishing queued for "+result.pending_operations+" team(s). "+
+        "The separate SDK worker performs remote writes.":
+        "Dispatch state updated.");
       await refresh();
     }catch(e){setError((e as Error).message);}
     finally{setBusy(false);}
@@ -128,8 +151,45 @@ export function CompetitionScreen({auth}:{auth:Auth}) {
               <span>{plan.jobs_per_team} jobs/team · {plan.redundancy}× coverage</span></div>
             {admin&&plan.status==="planned"&&<button className="btn secondary" disabled={busy}
               onClick={()=>void approve(plan)}><ClipboardCheck size={15}/> Approve</button>}
+            {plan.status==="approved"&&<button className="btn primary" disabled={busy}
+              onClick={()=>void nativeAction("/native/launch",
+                "Launch the native job queue? The worker will publish media and "+
+                "CREATE two native jobs for each competition team.")}>
+              <PlayCircle size={15}/> Launch event</button>}
+            {plan.status==="running"&&<button className="btn secondary" disabled={busy}
+              onClick={()=>void nativeAction("/native/plans/"+plan.id+"/pause",
+                "Pause new native job releases? Existing jobs remain accessible.")}>
+              Pause releases</button>}
+            {plan.status==="paused"&&<button className="btn primary" disabled={busy}
+              onClick={()=>void nativeAction("/native/plans/"+plan.id+"/resume",
+                "Resume publishing eligible native jobs?")}>
+              Resume releases</button>}
           </div>)}
           {!plans.length&&<p className="muted small">No distribution plans yet.</p>}
+        </div>
+        <div className="native-operations" style={{marginTop:18}}>
+          <span className="eyebrow">SUPERVISELY SDK WORKER</span>
+          <h4>Native publishing and sync</h4>
+          <p className="muted small">The separate worker processes durable queue items.
+            Until it runs, no native projects, datasets or jobs are created.</p>
+          <code className="native-worker-command">python -m annotatiathon.native_worker --loop</code>
+          <div className="morph-counts">
+            <span>Native job bindings: {native?.native_bindings??0}</span>
+            <span>Last sync: {native?.last_sync?
+              new Date(native.last_sync*1000).toLocaleString():"Not yet"}</span>
+            {Object.entries(native?.bindings_by_status||{}).map(([key,n])=>
+              <span key={key}>{key}: {n}</span>)}
+          </div>
+          {native?.operations.filter(op=>["attention","blocked"].includes(op.status))
+            .map(op=><div className="job-plan-row" key={op.id}>
+              <div><strong>Reconcile · {op.error_code||"Remote uncertainty"}</strong>
+                <span>{op.target_id} · {op.attempts} attempts</span></div>
+              {admin&&<button className="btn secondary" disabled={busy}
+                onClick={()=>void nativeAction("/native/operations/"+op.id+"/retry",
+                  "Retry publishing after inspecting native data? The worker reconciles "+
+                  "existing resources before creating missing records.")}>
+                <RefreshCw size={14}/> Retry</button>}
+            </div>)}
         </div>
       </section>}
       <section className="panel">

@@ -70,7 +70,7 @@ alembic upgrade head
 alembic current
 ```
 
-The new revision is `0006_monitor_assignments (head)`. Restart the backend and the Vite development server to see the new Check-in, Tickets & Rewards and Staff Access tabs.
+The new revision is `0009_native_work (head)`. Restart the backend and the Vite development server to see the new Check-in, Tickets & Rewards and Staff Access tabs.
 
 **Windows note:** if your machine's Application Control blocks SQLAlchemy compiled wheels, retain your working pure-Python SQLAlchemy installation; upgrading the app does not require reinstalling SQLAlchemy. Use `npm.cmd` instead of `npm` when PowerShell blocks npm scripts.
 
@@ -122,3 +122,11 @@ npm run build
 Do not commit real attendee lists, registration workbooks, media, API tokens, `.env`, exports or database dumps: **the repository is public**. Old branches contain historical registration artifacts and are not merged into `main`.
 
 Architecture, scope and remaining acceptance gates are documented under `docs/`.
+
+## SDK-based Supervisely publishing (optional, live operations)
+
+The local competition queue uses a **separate explicit SDK worker**, not HTTP requests tied to the page. Install with `python -m pip install -e ".[native]"`. Configure `SUPERVISELY_API_TOKEN` in the backend-only untracked `.env`, verify the team and workspace from Settings, reconcile both native participant IDs, upload a local dataset, generate and approve the distribution plan, and click **Launch event**. Start the worker in a third terminal: `python -m annotatiathon.native_worker --loop --poll-seconds 12`. For one cycle only, use `--once`. The server remains responsive; no native writes occur until an organiser launches and a worker is running.
+
+Native jobs are published in **two records per two-person team** using `api.labeling_job.create(name, dataset_id, user_ids=[...], images_ids=[...])`. Each pair job receives its own Supervisely dataset of copied image/frame assets, protecting overlapping jobs from other teams from sharing annotation IDs. Both native users receive one native labeling job over that pair-specific dataset. The SDK returns separate job entities and does **not** prove that both users can concurrently edit a single shared answer; perform a live two-account collaboration acceptance test before the official event. Worker errors enter an explicit attention state and never silently retry uncertain remote writes. After inspecting remote state, use the displayed **Retry** command; it reconciles deterministic project/dataset names, media IDs and native jobs rather than blindly duplicating them.
+
+The worker polls two native job statuses and only releases a subsequent job once **both** are on review/completed with all images submitted. Local quality scoring and native reviewer actions are separate; returned jobs block subsequent releases. Pause/resume controls affect only future Nightjar releases, not active native Supervisely jobs. The worker never deletes native data, adds members, changes roles or completes jobs on behalf of annotators. See [SDK worker contract](docs/SUPERVISELY_WORKER.md).

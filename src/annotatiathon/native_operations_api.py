@@ -1,0 +1,295 @@
+"""Explicit event launch and auditable Supervisely publishing operations.
+
+HTTP requests enqueue durable tasks. Only a separate SDK worker contacts the
+remote write API. No artificial/demo jobs or remote mutations on page load.
+"""
+from collections import Counter
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, ConfigDict
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from .auth import AuthContext, requires
+from .config import get_settings
+from .db import get_db
+from .events_api import current_event
+from .models import (
+    AuditEvent,
+    CompetitionTeam,
+    LabelingJob,
+    LabelingPlan,
+    NativeJobBinding,
+    NativeOperation,
+    Person,
+    SuperviselyConfig,
+    epoch,
+)
+
+router = APIRouter(prefix="/api/v1/native", tags=["Supervisely dispatch"])
+
+
+def native_ready(db: Session) -> SuperviselyConfig:
+    config = db.get(SuperviselyConfig, 1)
+    if (config is None or not config.verified or config.team_id is None
+            or config.workspace_id is None):
+        raise HTTPException(
+            status_code=409,
+            detail="Verify a live Supervisely team AND workspace in Settings first.",
+        )
+    token = get_settings().supervisely_api_token
+    if token is None or not token.get_secret_value().strip():
+        raise HTTPException(
+            status_code=409,
+            detail="Configure the server-side Supervisely API token before launch.",
+        )
+    return config
+
+
+def team_members(db: Session, job: LabelingJob) -> list[Person]:
+    people = list(db.scalars(select(Person).where(
+        Person.event_id == job.event_id, Person.team_id == job.team_id,
+        Person.active.is_(True), Person.kind == "participant",
+    ).order_by(Person.id)))
+    if len(people) != 2 or any(
+        p.supervisely_user_id is None or p.membership_status != "joined"
+        or p.supervisely_role != "annotator" or p.native_verified_at is None
+        for p in people
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Every team needs two verified native annotator accounts "
+                   "with correct roles. Refresh membership first.",
+        )
+    ids = [p.supervisely_user_id for p in people]
+    if len(set(ids)) != 2:
+        raise HTTPException(status_code=409, detail="Native user IDs must be distinct.")
+    return people
+
+
+def queue_publish(db: Session, job: LabelingJob) -> NativeOperation:
+    existing = db.scalar(select(NativeOperation).where(
+        NativeOperation.kind == "publish_job",
+        NativeOperation.target_id == job.id,
+    ))
+    if existing:
+        return existing
+    op = NativeOperation(
+        event_id=job.event_id, kind="publish_job", target_id=job.id,
+        status="pending",
+    )
+    db.add(op)
+    db.flush()
+    return op
+
+
+def can_queue_next(db: Session, job: LabelingJob) -> bool:
+    """Queued work may follow a completely submitted native pair job."""
+    earlier = list(db.scalars(select(LabelingJob).where(
+        LabelingJob.event_id == job.event_id,
+        LabelingJob.plan_id == job.plan_id,
+        LabelingJob.team_id == job.team_id,
+        LabelingJob.sequence < job.sequence,
+    )))
+    return bool(earlier) and all(
+        x.status in {"on_review", "completed"} for x in earlier
+    )
+
+
+def next_eligible(db: Session, plan: LabelingPlan) -> list[LabelingJob]:
+    jobs = list(db.scalars(select(LabelingJob).where(
+        LabelingJob.event_id == plan.event_id,
+        LabelingJob.plan_id == plan.id,
+    ).order_by(LabelingJob.team_id, LabelingJob.sequence)))
+    output: list[LabelingJob] = []
+    first_queued: dict[str, LabelingJob] = {}
+    for job in jobs:
+        if job.status == "queued":
+            first_queued.setdefault(job.team_id, job)
+    for job in first_queued.values():
+        if job.sequence == 1 or can_queue_next(db, job):
+            output.append(job)
+    return output
+
+
+class LaunchInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    plan_id: str
+
+
+@router.post("/launch")
+def launch_event(
+    payload: LaunchInput,
+    ctx: AuthContext = Depends(requires("organiser", mutation=True)),
+    db: Session = Depends(get_db),
+):
+    event = current_event(db, ctx, writable=True)
+    native_ready(db)
+    plan = db.scalar(select(LabelingPlan).where(
+        LabelingPlan.event_id == event.id,
+        LabelingPlan.id == payload.plan_id,
+    ).with_for_update())
+    if plan is None:
+        raise HTTPException(status_code=404, detail="Labeling plan not found.")
+    if plan.status not in {"approved", "running"}:
+        raise HTTPException(status_code=409, detail="Approve the labeling plan first.")
+    jobs = list(db.scalars(select(LabelingJob).where(
+        LabelingJob.event_id == event.id, LabelingJob.plan_id == plan.id,
+    ).order_by(LabelingJob.team_id, LabelingJob.sequence)))
+    if not jobs:
+        raise HTTPException(status_code=409, detail="Plan contains no jobs.")
+    first = [job for job in jobs if job.sequence == 1]
+    if not first:
+        raise HTTPException(status_code=409, detail="First team jobs are missing.")
+    for job in first:
+        team = db.scalar(select(CompetitionTeam).where(
+            CompetitionTeam.id == job.team_id,
+            CompetitionTeam.event_id == event.id,
+            CompetitionTeam.active.is_(True),
+        ))
+        if not team:
+            raise HTTPException(status_code=409, detail="A competition team is inactive.")
+        team_members(db, job)
+    created = 0
+    for job in first:
+        if job.status == "queued":
+            task = queue_publish(db, job)
+            if task.status == "pending":
+                created += 1
+    plan.status = "running"
+    db.add(AuditEvent(
+        staff_id=ctx.staff.id, event_id=event.id, action="labeling.plan.launch",
+        target_type="labeling_plan", target_id=plan.id,
+        details={"first_jobs": len(first), "publish_pending": created},
+    ))
+    db.commit()
+    return {
+        "status": plan.status, "plan_id": plan.id,
+        "first_jobs": len(first), "pending_operations": created,
+        "remote_writes_queued": True,
+        "note": "The separate Supervisely worker performs the remote writes.",
+    }
+
+
+@router.post("/plans/{plan_id}/pause")
+def pause_release(
+    plan_id: str,
+    ctx: AuthContext = Depends(requires("organiser", mutation=True)),
+    db: Session = Depends(get_db),
+):
+    event = current_event(db, ctx, writable=True)
+    plan = db.scalar(select(LabelingPlan).where(
+        LabelingPlan.id == plan_id, LabelingPlan.event_id == event.id,
+    ).with_for_update())
+    if not plan:
+        raise HTTPException(status_code=404, detail="Plan not found.")
+    if plan.status not in {"running", "paused"}:
+        raise HTTPException(status_code=409, detail="Only launched plans can be paused.")
+    plan.status = "paused"
+    db.add(AuditEvent(
+        staff_id=ctx.staff.id, event_id=event.id, action="labeling.plan.pause",
+        target_type="labeling_plan", target_id=plan.id,
+    ))
+    db.commit()
+    return {"status": plan.status, "remote_jobs_not_stopped": True}
+
+
+@router.post("/plans/{plan_id}/resume")
+def resume_release(
+    plan_id: str,
+    ctx: AuthContext = Depends(requires("organiser", mutation=True)),
+    db: Session = Depends(get_db),
+):
+    event = current_event(db, ctx, writable=True)
+    plan = db.scalar(select(LabelingPlan).where(
+        LabelingPlan.id == plan_id, LabelingPlan.event_id == event.id,
+    ).with_for_update())
+    if not plan:
+        raise HTTPException(status_code=404, detail="Plan not found.")
+    if plan.status not in {"paused", "running"}:
+        raise HTTPException(status_code=409, detail="Launch the plan first.")
+    plan.status = "running"
+    queued = 0
+    for job in next_eligible(db, plan):
+        if queue_publish(db, job).status == "pending":
+            queued += 1
+    db.add(AuditEvent(
+        staff_id=ctx.staff.id, event_id=event.id, action="labeling.plan.resume",
+        target_type="labeling_plan", target_id=plan.id,
+        details={"queued": queued},
+    ))
+    db.commit()
+    return {"status": plan.status, "queued": queued}
+
+
+@router.get("/overview")
+def native_overview(
+    ctx: AuthContext = Depends(requires(
+        "organiser", "monitor", "observer", "activity"
+    )),
+    db: Session = Depends(get_db),
+):
+    event = current_event(db, ctx)
+    plans = list(db.scalars(select(LabelingPlan).where(
+        LabelingPlan.event_id == event.id
+    )))
+    ops = list(db.scalars(select(NativeOperation).where(
+        NativeOperation.event_id == event.id
+    ).order_by(NativeOperation.created_at.desc()).limit(1000)))
+    bindings = list(db.scalars(select(NativeJobBinding).where(
+        NativeJobBinding.event_id == event.id,
+    )))
+    status_counts = Counter(o.status for o in ops)
+    return {
+        "plans": [{
+            "id": plan.id, "status": plan.status,
+            "dataset_id": plan.dataset_id,
+        } for plan in plans],
+        "operations": [{
+            "id": op.id, "kind": op.kind, "target_id": op.target_id,
+            "status": op.status, "attempts": op.attempts,
+            "error_code": op.error_code,
+            "created_at": op.created_at, "completed_at": op.completed_at,
+        } for op in ops],
+        "operation_counts": dict(status_counts),
+        "native_bindings": len(bindings),
+        "bindings_by_status": dict(Counter(b.native_status for b in bindings)),
+        "last_sync": max((b.last_synced_at or 0 for b in bindings), default=None),
+    }
+
+
+@router.post("/operations/{operation_id}/retry")
+def retry_operation(
+    operation_id: str,
+    ctx: AuthContext = Depends(requires("organiser", mutation=True)),
+    db: Session = Depends(get_db),
+):
+    event = current_event(db, ctx, writable=True)
+    op = db.scalar(select(NativeOperation).where(
+        NativeOperation.event_id == event.id,
+        NativeOperation.id == operation_id,
+    ).with_for_update())
+    if op is None:
+        raise HTTPException(status_code=404, detail="Operation not found.")
+    if op.status not in {"blocked", "attention"}:
+        raise HTTPException(status_code=409, detail="Only blocked operations can be retried.")
+    job = db.scalar(select(LabelingJob).where(
+        LabelingJob.id == op.target_id, LabelingJob.event_id == event.id
+    ))
+    if job is None:
+        raise HTTPException(status_code=404, detail="Associated job not found.")
+    plan = db.scalar(select(LabelingPlan).where(
+        LabelingPlan.id == job.plan_id, LabelingPlan.event_id == event.id
+    ))
+    if plan is None or plan.status != "running":
+        raise HTTPException(status_code=409, detail="Resume the event plan first.")
+    op.status = "pending"
+    op.error_code = None
+    op.claimed_at = None
+    db.add(AuditEvent(
+        staff_id=ctx.staff.id, event_id=event.id,
+        action="native.operation.retry", target_type="native_operation",
+        target_id=op.id, details={"prior_attempts": op.attempts},
+    ))
+    db.commit()
+    return {"id": op.id, "status": op.status}

@@ -25,6 +25,8 @@ from .models import (
     CompetitionTeam,
     Event,
     EventSnapshot,
+    LabelingJob,
+    LabelingPlan,
     MonitorAssignment,
     Person,
     ResetPlan,
@@ -322,6 +324,24 @@ def preview_reset(
         raise HTTPException(status_code=422, detail="Select distinct reset areas.")
     if payload.mode == "fresh" and payload.areas:
         raise HTTPException(status_code=422, detail="Fresh start includes all event areas.")
+    # Preserve all native job provenance when users reset event logistics.
+    if payload.mode == "selected" and "roster" in payload.areas:
+        if db.scalar(select(LabelingJob.id).where(LabelingJob.event_id == event.id)):
+            raise HTTPException(
+                status_code=409,
+                detail="This event already has labeling jobs. Start a new event instead of "
+                       "clearing the linked competition roster.",
+            )
+    if payload.mode == "fresh":
+        if db.scalar(select(LabelingPlan.id).where(
+            LabelingPlan.event_id == event.id,
+            LabelingPlan.status.in_(["running", "paused"]),
+        )):
+            raise HTTPException(
+                status_code=409,
+                detail="Cannot archive an event with active native release plans. "
+                       "Finish/reconcile the jobs before starting fresh.",
+            )
     state = state_data(db, event.id)
     if (payload.mode == "selected" and "roster" in payload.areas
             and "tickets" not in payload.areas
@@ -479,6 +499,15 @@ def execute_reset(
         raise HTTPException(status_code=409, detail="Preview expired; generate a new one.")
     if payload.confirmation != "RESET " + event.name:
         raise HTTPException(status_code=422, detail="Type the exact confirmation phrase.")
+    # Repeat the critical job guard at execution, as launch may occur after preview.
+    if plan.mode == "selected" and "roster" in plan.areas:
+        if db.scalar(select(LabelingJob.id).where(LabelingJob.event_id == event.id)):
+            raise HTTPException(status_code=409, detail="Event jobs exist; do not reset roster.")
+    if plan.mode == "fresh" and db.scalar(select(LabelingPlan.id).where(
+        LabelingPlan.event_id == event.id,
+        LabelingPlan.status.in_(["running", "paused"]),
+    )):
+        raise HTTPException(status_code=409, detail="Active native plan prevents fresh reset.")
     before = state_data(db, event.id)
     if plan.digest != state_digest(before):
         raise HTTPException(

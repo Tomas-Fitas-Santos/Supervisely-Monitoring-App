@@ -418,6 +418,7 @@ class LabelingJob(Base):
     video_count: Mapped[int] = mapped_column(Integer)
     morphology_counts: Mapped[dict[str, int]] = mapped_column(JSON)
     status: Mapped[str] = mapped_column(String(24), default="queued")
+    native_dataset_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     review_status: Mapped[str] = mapped_column(String(24), default="unreviewed")
     assigned_monitor_id: Mapped[str | None] = mapped_column(
         ForeignKey("people.id"), nullable=True
@@ -473,3 +474,39 @@ class EventCloseout(Base):
     snapshot_json: Mapped[dict] = mapped_column(JSON)
     closed_by: Mapped[str] = mapped_column(ForeignKey("staff_accounts.id"))
     closed_at: Mapped[int] = mapped_column(Integer, default=epoch)
+
+
+
+class NativeMediaInstance(Base):
+    """Per-job copies give overlapping teams independent annotation image identities."""
+
+    __tablename__ = "native_media_instances"
+    __table_args__ = (
+        UniqueConstraint("job_id", "media_id", name="uq_native_job_media"),
+        UniqueConstraint("native_image_id", name="uq_native_media_image_id"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=identifier)
+    event_id: Mapped[str] = mapped_column(ForeignKey("events.id"), index=True)
+    job_id: Mapped[str] = mapped_column(ForeignKey("labeling_jobs.id"), index=True)
+    media_id: Mapped[str] = mapped_column(ForeignKey("media_assets.id"), index=True)
+    native_dataset_id: Mapped[int] = mapped_column(Integer)
+    native_image_id: Mapped[int] = mapped_column(Integer)
+
+
+class NativeOperation(Base):
+    """Durable, deduplicated tasks for an optional Supervisely SDK worker."""
+
+    __tablename__ = "native_operations"
+    __table_args__ = (
+        UniqueConstraint("kind", "target_id", name="uq_native_task_target"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=identifier)
+    event_id: Mapped[str] = mapped_column(ForeignKey("events.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(30))
+    target_id: Mapped[str] = mapped_column(String(36))
+    status: Mapped[str] = mapped_column(String(20), default="pending")
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    error_code: Mapped[str | None] = mapped_column(String(70), nullable=True)
+    created_at: Mapped[int] = mapped_column(Integer, default=epoch)
+    claimed_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    completed_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
