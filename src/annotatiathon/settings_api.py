@@ -1,5 +1,5 @@
 """Non-secret organiser settings. Tokens are never accepted or returned by this API."""
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends
@@ -30,7 +30,7 @@ def as_status(config: SuperviselyConfig | None) -> SuperviselyConnectionStatus:
         credential_configured=bool(get_settings().supervisely_api_token),
         verified=bool(config and config.verified),
         last_checked_at=(datetime.fromtimestamp(
-            config.last_verified_at, tz=timezone.utc
+            config.last_verified_at, tz=UTC
         ).isoformat() if config and config.last_verified_at else None),
         last_error_code=config.last_error_code if config else None,
     )
