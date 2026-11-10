@@ -22,16 +22,33 @@ import "./styles.css";
 type Tab = "overview" | "people" | "attendance" | "tickets" | "activities" | "datasets" | "competition" | "quality" | "closeout" | "staff" | "settings";
 
 function Login({ onLogin }: { onLogin: (auth: Auth) => void }) {
+  const [mode, setMode] = useState<"login" | "register" | "complete">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [code, setCode] = useState("");
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [working, setWorking] = useState(false);
+
   async function submit(e: React.FormEvent) {
-    e.preventDefault(); setError(""); setWorking(true);
-    try { onLogin(await api<Auth>("/auth/login", "POST", { email, password })); }
-    catch (exc) { setError((exc as Error).message); }
-    finally { setWorking(false); }
+    e.preventDefault(); setError(""); setNotice(""); setWorking(true);
+    try {
+      if (mode === "login") {
+        onLogin(await api<Auth>("/auth/login", "POST", {email, password}));
+      } else if (mode === "register") {
+        const result = await api<{message:string}>("/auth/register/request", "POST", {email});
+        setNotice(result.message);
+        setMode("complete");
+      } else {
+        const result = await api<{message:string}>("/auth/register/complete",
+          "POST", {email, code, password});
+        setMode("login"); setPassword(""); setCode("");
+        setNotice(result.message);
+      }
+    } catch(exc) {setError((exc as Error).message);}
+    finally {setWorking(false);}
   }
+
   return <main className="login-shell">
     <section className="login-art">
       <div className="login-brand"><div className="brand-mark"><Bird size={25}/></div>
@@ -46,22 +63,41 @@ function Login({ onLogin }: { onLogin: (auth: Auth) => void }) {
     <section className="login-panel">
       <div className="login-card">
         <div className="mobile-brand"><Bird size={23}/> NIGHTJAR</div>
-        <span className="eyebrow">WELCOME BACK</span>
-        <h2>Sign in to Nightjar</h2>
-        <p className="muted">Use your Annotatiathon staff account. A Supervisely API token is not needed to sign in.</p>
+        <span className="eyebrow">{mode === "login"?"WELCOME BACK":"MONITOR REGISTRATION"}</span>
+        <h2>{mode === "login"?"Sign in to Nightjar":
+          mode === "register"?"Create your monitor account":"Verify your email"}</h2>
+        <p className="muted">{mode === "login"?
+          "Sign in using your Nightjar staff account, not your Supervisely credentials.":
+          "Only monitors already registered in the event roster can create an account. Email verification is required."}</p>
         <form onSubmit={submit} className="form-stack">
           <label>Email address<input type="email" autoComplete="username" autoFocus required
             value={email} onChange={e=>setEmail(e.target.value)}
-            placeholder="you@institution.pt" /></label>
-          <label>Password<input type="password" autoComplete="current-password" required
-            value={password} onChange={e=>setPassword(e.target.value)}
-            placeholder="Enter your password" /></label>
-          {error && <div role="alert" className="alert danger">{error}</div>}
+            disabled={mode==="complete"} placeholder="you@institution.pt" /></label>
+          {mode==="complete"&&<label>8-digit verification code<input
+            inputMode="numeric" autoComplete="one-time-code" minLength={8} maxLength={8}
+            pattern="[0-9]{8}" value={code} required
+            onChange={e=>setCode(e.target.value)} placeholder="Enter email code"/></label>}
+          {mode!=="register"&&<label>{mode==="login"?"Password":"Choose a password (12+ characters)"}
+            <input type="password" autoComplete={mode==="login"?"current-password":"new-password"}
+              required minLength={mode==="complete"?12:undefined}
+              value={password} onChange={e=>setPassword(e.target.value)}
+              placeholder="Enter password" /></label>}
+          {error&&<div role="alert" className="alert danger">{error}</div>}
+          {notice&&<div role="status" className="alert success">{notice}</div>}
           <button className="btn primary large" disabled={working} type="submit">
-            {working ? "Signing in…" : "Sign in"} <ArrowRight size={17}/>
+            {working?"Working…":mode==="login"?"Sign in":
+              mode==="register"?"Email verification code":"Create account"} <ArrowRight size={17}/>
           </button>
         </form>
-        <p className="login-hint"><CircleHelp size={15}/> Contact the organiser if you do not have a staff account.</p>
+        <div className="settings-action-row" style={{marginTop:15}}>
+          <button type="button" className="btn secondary" onClick={()=>{
+            setMode(mode==="login"?"register":"login");setError("");setNotice("");setCode("");
+          }}>{mode==="login"?"Create monitor account":"Back to sign in"}</button>
+          {mode==="complete"&&<button type="button" className="btn secondary"
+            onClick={()=>{setMode("register");setError("");}}>Request another code</button>}
+        </div>
+        <p className="login-hint"><CircleHelp size={15}/>
+          Contact the organiser if your email is not on the approved monitor roster.</p>
       </div>
       <div className="login-bottom">TÉCNICO · Bird Annotatiathon</div>
     </section>
@@ -133,7 +169,7 @@ function App() {
   useEffect(() => {
     if (!auth) return;
     void refreshSuperviselyRoster(auth.csrf_token).catch(() => undefined);
-  }, [auth?.staff.id, auth?.csrf_token]);
+  }, [auth?.staff.id, auth?.csrf_token, tab]);
 
   async function logout() {
     try {
@@ -155,7 +191,7 @@ function App() {
     {id:"quality",label:"Monitoring & Review",icon:ClipboardCheck},
     {id:"closeout",label:"Results & Exports",icon:CalendarDays},
     ...(organiser ? [{id:"staff" as Tab,label:"Staff Access",icon:ShieldCheck}] : []),
-    ...(organiser ? [{id:"settings" as Tab,label:"Settings",icon:Settings2}] : []),
+    {id:"settings",label:"Settings",icon:Settings2},
   ];
   return <div className="app-shell">
     <aside className="sidebar">
@@ -194,7 +230,7 @@ function App() {
       {tab==="quality"&&<QualityScreen auth={auth}/>}
       {tab==="closeout"&&<CloseoutScreen auth={auth}/>}
       {tab==="staff"&&organiser&&<div className="page-body"><div className="page-heading"><div><span className="eyebrow">ORGANISER · PERMISSIONS</span><h2>Staff Access</h2><p className="muted">Manage staff roles independently of the attendee roster.</p></div></div><StaffScreen auth={auth}/></div>}
-      {tab==="settings"&&organiser&&<SettingsScreen auth={auth}/>}
+      {tab==="settings"&&<SettingsScreen auth={auth}/>}
       <footer className="page-footer"><Bird size={14}/> Nightjar Annotatiathon · Técnico</footer>
     </div>
   </div>;
