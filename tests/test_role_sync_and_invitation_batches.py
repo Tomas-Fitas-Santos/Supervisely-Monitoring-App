@@ -215,3 +215,28 @@ def test_organiser_role_cannot_be_demoted(setup):
     assert not called
     with maker() as db:
         assert db.get(Person,pid).kind=="monitor"
+
+
+def test_pending_invitation_role_edit_does_not_silently_diverge(setup):
+    http, maker, _ = setup
+    header = login(http)
+    with maker.begin() as db:
+        db.add(Person(
+            event_id=DEFAULT_EVENT_ID,
+            name="Previously invited",
+            email="pending@example.org",
+            kind="monitor",
+            membership_status="reported_sent",
+            supervisely_user_id=None,
+        ))
+    person_id = next(
+        p["id"] for p in http.get("/api/v1/people").json()["items"]
+        if p["email"] == "pending@example.org"
+    )
+    response = http.patch(
+        "/api/v1/people/" + person_id, headers=header, json={"kind": "participant"},
+    )
+    assert response.status_code == 409
+    assert "pending" in response.json()["detail"].lower()
+    with maker() as db:
+        assert db.get(Person, person_id).kind == "monitor"
