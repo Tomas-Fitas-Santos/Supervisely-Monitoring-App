@@ -226,7 +226,7 @@ def decide_review(
     if job.status != "on_review":
         raise HTTPException(
             status_code=409,
-            detail="Wait for both native annotator submissions before deciding a review.",
+            detail="Wait for the assigned annotator to submit in Supervisely before deciding a review.",
         )
     reviewed = list(db.scalars(select(JobReview).where(
         JobReview.job_id == job.id, JobReview.event_id == event.id,
@@ -253,7 +253,7 @@ def decide_review(
             NativeJobBinding.event_id == event.id,
             NativeJobBinding.job_id == job.id,
         )))
-        if len(bindings) == 2:
+        if len(bindings) == (1 if job.assignee_person_id else 2):
             previous = db.scalar(select(NativeOperation).where(
                 NativeOperation.kind == "restart_job",
                 NativeOperation.target_id == job.id,
