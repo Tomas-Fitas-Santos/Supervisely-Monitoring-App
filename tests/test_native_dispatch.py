@@ -7,7 +7,6 @@ from types import SimpleNamespace as Obj
 
 import pytest
 from fastapi.testclient import TestClient
-from pydantic import SecretStr
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -167,6 +166,7 @@ def configured(monkeypatch, tmp_path):
         db.add(SuperviselyConfig(
             id=1, server_url="https://app.supervisely.com",
             team_id=125980, workspace_id=2001, verified=True,
+            token_ciphertext="FAKE_TEST_CIPHERTEXT",
         ))
         team = CompetitionTeam(event_id=DEFAULT_EVENT_ID, name="Pair One")
         db.add(team)
@@ -226,10 +226,8 @@ def configured(monkeypatch, tmp_path):
         lambda: type("Settings", (), {"local_data_dir": str(tmp_path)})(),
     )
     monkeypatch.setattr(
-        "annotatiathon.native_operations_api.get_settings",
-        lambda: type("Settings", (), {
-            "supervisely_api_token": SecretStr("PLACEHOLDER_TEST_TOKEN"),
-        })(),
+        "annotatiathon.native_operations_api.decrypt_token",
+        lambda ciphertext: "PLACEHOLDER_TEST_TOKEN",
     )
     def override():
         with maker() as db:
