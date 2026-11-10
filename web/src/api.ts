@@ -43,3 +43,29 @@ export async function api<T>(
   }
   return result as T;
 }
+
+
+export type SuperviselyRefresh = {
+  status: "ok" | "archived" | "needs_review";
+  matched: number; updated: number; created: number;
+  unmatched_native: number; unmatched_roster: number;
+  role_warnings: number; conflicts: number; native_mutations: boolean;
+};
+
+// Browser-wide coalescing: page changes reuse a recent result while an
+// explicit Refresh button always checks Supervisely again.
+let membershipRefreshPending: Promise<SuperviselyRefresh> | null = null;
+let lastMembershipRefresh = 0;
+export function refreshSuperviselyRoster(
+  csrfToken: string, force = false
+): Promise<SuperviselyRefresh | null> {
+  if (membershipRefreshPending) return membershipRefreshPending;
+  if (!force && Date.now() - lastMembershipRefresh < 60_000) {
+    return Promise.resolve(null);
+  }
+  lastMembershipRefresh = Date.now();
+  membershipRefreshPending = api<SuperviselyRefresh>(
+    "/people/supervisely/refresh", "POST", undefined, csrfToken
+  );
+  return membershipRefreshPending.finally(() => { membershipRefreshPending = null; });
+}
