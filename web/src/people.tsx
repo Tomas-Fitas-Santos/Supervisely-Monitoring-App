@@ -9,9 +9,22 @@ import { NativeMembershipPanel } from "./native";
 import { InvitationBatches } from "./invitation_batches";
 import { MonitorAssignmentsPanel } from "./monitoring";
 import { MonitorPairPanel } from "./monitor_pairs";
+import { AttendanceScreen } from "./attendance";
 
-type PersonForm = {name:string;email:string;kind:"participant"|"monitor";team_name:string};
-const emptyForm: PersonForm = {name:"",email:"",kind:"participant",team_name:""};
+type PersonForm = {name:string;email:string;kind:"participant"|"monitor";team_name:string;
+  date_of_birth:string;phone:string;under_18:string;image_consent:string;
+  data_consent:string;food_allergies:string;};
+const emptyForm: PersonForm = {name:"",email:"",kind:"participant",team_name:"",
+  date_of_birth:"",phone:"",under_18:"",image_consent:"",
+  data_consent:"",food_allergies:""};
+function consentLabel(value:string|undefined){
+  if(!value)return "—";
+  const key=value.trim().toLocaleLowerCase();
+  if(["yes","sim","true","1","autorizo","authorized"].includes(key))return "Yes";
+  if(["no","não","nao","false","0","não autorizo"].includes(key))return "No";
+  return value;
+}
+
 
 function statusName(status: string) {
   return ({joined:"Joined", pending:"Pending (verified)", reported_sent:"Reported invited",
@@ -91,7 +104,7 @@ function RosterImporter({auth,onComplete}:{auth:Auth;onComplete:()=>void}) {
 
 export function PeopleScreen({auth}:{auth:Auth}) {
   const admin=auth.staff.roles.includes("organiser");
-  const [mode,setMode]=useState<"teams"|"people">("teams");
+  const [mode,setMode]=useState<"teams"|"people"|"checkin"|"setup">("people");
   const [teams,setTeams]=useState<Team[]>([]);
   const [people,setPeople]=useState<PeopleResponse>({items:[],total:0,page:1,size:50});
   const [sort,setSort]=useState<"name"|"check_in"|"size">("name");
@@ -150,7 +163,11 @@ export function PeopleScreen({auth}:{auth:Auth}) {
   function openEdit(person?:Person) {
     setEditing(person||null);
     setPersonForm(person?{name:person.name,email:person.email,kind:person.kind,
-      team_name:person.team_name||""}:emptyForm);
+      team_name:person.team_name||"",
+      date_of_birth:person.date_of_birth||"",phone:person.phone||"",
+      under_18:person.under_18||"",image_consent:person.image_consent||"",
+      data_consent:person.data_consent||"",food_allergies:person.food_allergies||"",
+    }:emptyForm);
     setError("");setMessage("");setModalError("");setModalStatus("");
   }
   async function savePerson(e:React.FormEvent) {
@@ -226,10 +243,17 @@ export function PeopleScreen({auth}:{auth:Auth}) {
     }catch(exc){setError((exc as Error).message);}
     finally{setBusy(false);}
   }
+  const showSensitive=auth.staff.roles.some(r=>r==="organiser"||r==="reception");
+  function personal(value:string|undefined){
+    return showSensitive?(value?.trim()||"—"):"Restricted";
+  }
   function peopleTable(items:Person[],selectable=true) {
     return <div className="table-scroll"><table className="data-table">
       <thead><tr>{selectable&&admin&&<th className="check-cell">Select</th>}
-        <th>Name</th><th>Role</th><th>Team</th><th>Supervisely</th><th>Check-in</th>
+        <th>Name</th><th>Date of birth</th><th>Email</th><th>Phone</th>
+        <th>Under 18</th><th>Image consent</th><th>Data processing consent</th>
+        <th>Food allergies / intolerances</th>
+        <th>Role</th><th>Team</th><th>Supervisely</th><th>Check-in</th>
         {admin&&<th>Manage</th>}</tr></thead>
       <tbody>{items.map(p=><tr key={p.id}>
         {selectable&&admin&&<td><input aria-label={"Select "+p.name} type="checkbox"
@@ -237,6 +261,11 @@ export function PeopleScreen({auth}:{auth:Auth}) {
             e.target.checked?prev.length<50?[...prev,p.id]:prev:prev.filter(id=>id!==p.id))}/></td>}
         <td><div className="person-name"><div className="mini-avatar">{p.name.slice(0,1).toUpperCase()}</div>
           <div><strong>{p.name}</strong><span>{p.email}</span></div></div></td>
+        <td>{personal(p.date_of_birth)}</td><td>{p.email}</td><td>{personal(p.phone)}</td>
+        <td>{personal(showSensitive?consentLabel(p.under_18):"")}</td>
+        <td>{personal(showSensitive?consentLabel(p.image_consent):"")}</td>
+        <td>{personal(showSensitive?consentLabel(p.data_consent):"")}</td>
+        <td>{personal(p.food_allergies)}</td>
         <td><span className="soft-pill">{p.kind==="monitor"?"Monitor":"Participant"}</span></td>
         <td>{p.team_name||"—"}</td>
         <td><span className={"membership "+(p.membership_status==="joined"?"joined":"")}>
@@ -248,7 +277,7 @@ export function PeopleScreen({auth}:{auth:Auth}) {
   }
   return <div className="page-body">
     <div className="page-heading"><div><span className="eyebrow">EVENT SETUP · PEOPLE</span>
-      <h2>People & Teams</h2><p className="muted">Manage your event roster and prepare invitations for the shared Supervisely team.</p>
+      <h2>People & Teams</h2><p className="muted">Roster, teams, check-in and invitations have separate workspaces. Sensitive registration details are restricted to organisers and reception staff.</p>
     </div><div className="heading-actions">
       <span className="last-refresh">{updated?"Updated "+updated.toLocaleTimeString():"Loading…"}</span>
       <button className="btn secondary" onClick={()=>void syncNative()}><RefreshCw size={16}/> Refresh from Supervisely</button>
@@ -261,23 +290,26 @@ export function PeopleScreen({auth}:{auth:Auth}) {
       <div className="stat-card"><UserRound size={19}/><span className="muted small">Monitoring staff</span><strong>{teams.find(t=>t.type==="monitoring")?.members.length??0}</strong></div>
       <div className="stat-card"><Check size={19}/><span className="muted small">People listed</span><strong>{teams.reduce((n,t)=>n+t.members.length,0)}</strong></div>
     </div>
-    {admin&&<div className="toolbar-secondary">
+    <nav className="workspace-subtabs" aria-label="People and teams sections">
+      <button className={mode==="people"?"active":""} onClick={()=>setMode("people")}>People & monitors</button>
+      <button className={mode==="teams"?"active":""} onClick={()=>setMode("teams")}>Teams</button>
+      <button className={mode==="checkin"?"active":""} onClick={()=>setMode("checkin")}>Check-in</button>
+      {admin&&<button className={mode==="setup"?"active":""} onClick={()=>setMode("setup")}>Invitations & assignments</button>}
+    </nav>
+    {mode==="checkin"&&<AttendanceScreen auth={auth}/>}
+    {admin&&mode==="setup"&&<div className="toolbar-secondary">
       <button className="btn secondary" onClick={()=>setShowImporter(v=>!v)}><FileSpreadsheet size={17}/>
         {showImporter?"Close roster import":"Import CSV roster"}</button>
       <span className="muted small">Refresh from Supervisely updates joined participants and monitors, and adds new members with verified native email. Unmatched identities require review below.</span>
     </div>}
-    {showImporter&&admin&&<RosterImporter auth={auth} onComplete={()=>{setShowImporter(false);setInviteVersion(v=>v+1);void refresh();}}/>}
-    {admin&&<InvitationBatches auth={auth} version={inviteVersion}
+    {showImporter&&admin&&mode==="setup"&&<RosterImporter auth={auth} onComplete={()=>{setShowImporter(false);setInviteVersion(v=>v+1);void refresh();}}/>}
+    {admin&&mode==="setup"&&<InvitationBatches auth={auth} version={inviteVersion}
       onComplete={()=>{setInviteVersion(v=>v+1);void refresh();}}/>}
-    {admin&&<NativeMembershipPanel auth={auth} onApplied={()=>{setInviteVersion(v=>v+1);void refresh();}}/>}
-    {admin&&<MonitorAssignmentsPanel auth={auth} onApplied={()=>void refresh()}/>}
-    {admin&&<MonitorPairPanel auth={auth} onChanged={()=>void refresh()}/>}
-    <section className="panel table-panel">
+    {admin&&mode==="setup"&&<NativeMembershipPanel auth={auth} onApplied={()=>{setInviteVersion(v=>v+1);void refresh();}}/>}
+    {admin&&mode==="setup"&&<MonitorAssignmentsPanel auth={auth} onApplied={()=>void refresh()}/>}
+    {admin&&mode==="setup"&&<MonitorPairPanel auth={auth} onChanged={()=>void refresh()}/>}
+    {(mode==="teams"||mode==="people")&&<section className="panel table-panel">
       <div className="panel-header-line">
-        <div className="segmented"><button className={mode==="teams"?"selected":""}
-          onClick={()=>{setMode("teams");setSelectedTeam(null);}}><UsersRound size={16}/> Teams</button>
-          <button className={mode==="people"?"selected":""}
-          onClick={()=>{setMode("people");setSelectedTeam(null);}}><UserRound size={16}/> People</button></div>
         <div className="filter-bar">
           <div className="search-box"><Search size={16}/><input aria-label="Search roster"
             placeholder="Search names or teams…" value={search} onChange={e=>{setSearch(e.target.value);setPage(1);}}/></div>
@@ -324,7 +356,7 @@ export function PeopleScreen({auth}:{auth:Auth}) {
             <span>{Math.min((page-1)*50+1,people.total)}–{Math.min(page*50,people.total)} of {people.total}</span>
             <button className="btn secondary" disabled={page*50>=people.total}
               onClick={()=>setPage(v=>v+1)}>Next <ChevronRight size={16}/></button></div></>}
-    </section>
+    </section>}
     {editing!==undefined&&<div className="modal-overlay" role="presentation">
       <div className="modal-card" role="dialog" aria-modal="true" aria-label={editing?"Edit person":"Add person"}>
         <div className="modal-heading"><h3>{editing?"Edit person":"Add person"}</h3>
@@ -352,6 +384,25 @@ export function PeopleScreen({auth}:{auth:Auth}) {
                 onClick={()=>void synchronizeRole(editing)}>Sync existing saved role</button>}
             </div>
           </div>}
+          <div className="form-grid triple roster-private-form">
+            <label>Date of birth<input placeholder="YYYY-MM-DD" value={personForm.date_of_birth}
+              onChange={e=>setPersonForm({...personForm,date_of_birth:e.target.value})}/></label>
+            <label>Phone<input type="tel" value={personForm.phone}
+              onChange={e=>setPersonForm({...personForm,phone:e.target.value})}/></label>
+            {([
+              ["under_18","Under 18"],
+              ["image_consent","Image use consent"],
+              ["data_consent","Data processing consent"],
+            ] as const).map(([key,label])=><label key={key}>{label}
+              <select value={personForm[key]} onChange={e=>setPersonForm({...personForm,[key]:e.target.value})}>
+                <option value="">Not recorded</option><option value="Yes">Yes</option>
+                <option value="No">No</option>
+              </select>
+            </label>)}
+            <label>Food allergies / intolerances<input value={personForm.food_allergies}
+              onChange={e=>setPersonForm({...personForm,food_allergies:e.target.value})}
+              placeholder="Record dietary needs; blank if unknown"/></label>
+          </div>
           {personForm.kind==="participant"&&<label>Competition team name<input value={personForm.team_name}
             onChange={e=>setPersonForm({...personForm,team_name:e.target.value})}
             placeholder="e.g. Team 014"/></label>}
