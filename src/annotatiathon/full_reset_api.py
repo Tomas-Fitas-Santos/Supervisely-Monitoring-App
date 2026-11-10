@@ -18,7 +18,7 @@ from .db import get_db
 from .events_api import current_event
 from .models import (
     AuditEvent, Base, CompetitionTeam, Event, LabelingJob, MediaDataset,
-    NativeOperation, Person, SuperviselyConfig, epoch,
+    NativeOperation, Person, SuperviselyConfig,
 )
 
 router = APIRouter(prefix="/api/v1/settings/reset", tags=["reset"])
@@ -115,17 +115,22 @@ def request_reset(
         )
     if not config.workspace_id or not config.team_id:
         raise HTTPException(status_code=409, detail="Supervisely workspace/team required.")
-    if reset_operation(db, event.id):
+    previous = reset_operation(db, event.id)
+    if previous is not None and previous.status != "done":
         raise HTTPException(
-            status_code=409, detail="A reset was already requested; inspect its status."
+            status_code=409, detail="A reset is already underway; inspect its status."
         )
     # The event lock serializes against any event-scoped job or upload mutation.
     # 'resetting' blocks new mutations via current_event(writable=True).
     event.status = "resetting"
-    operation = NativeOperation(
+    operation = previous or NativeOperation(
         event_id=event.id, kind="reset_event", target_id=event.id,
         status="pending",
     )
+    operation.status = "pending"
+    operation.error_code = None
+    operation.claimed_at = None
+    operation.completed_at = None
     db.add(operation)
     db.add(AuditEvent(
         staff_id=ctx.staff.id, event_id=event.id,
