@@ -285,6 +285,14 @@ def test_initial_release_and_next_after_both_submit(configured):
         published = process_once(db, sdk, config)
         assert published["status"] == "done"
         assert published["native_jobs"] == 2
+        assert len(sdk.meta_updates) == 1
+        native_classes = {
+            cls["title"]: cls for cls in sdk.project_metas[sdk.projects[0].id]["classes"]
+        }
+        assert len(native_classes) == 9
+        assert native_classes["bird"]["shape"] == "rectangle"
+        assert native_classes["left_eye"]["shape"] == "point"
+        assert native_classes["left_eye_occ"]["shape"] == "point"
         assert process_once(db, sdk, config) is None
         assert len(db.scalars(select(NativeJobBinding)).all()) == 2
         assert len(db.scalars(select(NativeMediaInstance)).all()) == 2
@@ -335,6 +343,7 @@ def test_initial_release_and_next_after_both_submit(configured):
         assert next_run["status"] == "done"
         assert len(sdk.datasets) == 2
         assert len(sdk.jobs) == 4
+        assert len(sdk.meta_updates) == 1  # No redundant metadata write per job.
         images_by_dataset = [{i.id for i in sdk.images[d.id]} for d in sdk.datasets]
         assert images_by_dataset[0].isdisjoint(images_by_dataset[1])
     overview = http.get("/api/v1/native/overview").json()
