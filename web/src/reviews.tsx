@@ -48,6 +48,7 @@ export function QualityScreen({auth}:{auth:Auth}) {
   const [notice,setNotice]=useState("");
   const [busy,setBusy]=useState(false);
   const refresh=useCallback(async()=>{
+    if(!canReview){setJobs([]);setJobId("");return;}
     try{
       const response=await api<{items:Job[]}>("/review/assigned-jobs");
       setJobs(response.items);
@@ -55,7 +56,7 @@ export function QualityScreen({auth}:{auth:Auth}) {
         (response.items.find(j=>["submitted","on_review","needs_correction"].includes(j.status))?.id||response.items[0]?.id||""));
       setError("");
     }catch(e){setError((e as Error).message);}
-  },[]);
+  },[canReview]);
   const loadReviews=useCallback(async()=>{
     if(!jobId){setReviews(null);setMedia(null);return;}
     try{
@@ -152,8 +153,8 @@ export function QualityScreen({auth}:{auth:Auth}) {
         Team dashboard</button>
       <button className={tab==="rankings"?"active":""} onClick={()=>setTab("rankings")}>
         Rankings board</button>
-      <button className={tab==="review"?"active":""} onClick={()=>setTab("review")}>
-        Review assigned jobs {reviewJobs.length?("(" + reviewJobs.length + ")"):""}</button>
+      {canReview&&<button className={tab==="review"?"active":""} onClick={()=>setTab("review")}>
+        Review assigned jobs {reviewJobs.length?("(" + reviewJobs.length + ")"):""}</button>}
     </nav>
     {tab!=="review"?<TeamReviewOverview auth={auth} mode={tab}/> : <>
     {notice&&<div className="alert success" role="status">{notice}</div>}
