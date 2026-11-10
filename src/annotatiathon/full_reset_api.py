@@ -34,7 +34,7 @@ router = APIRouter(prefix="/api/v1/settings/reset", tags=["reset"])
 # identity so monitors/teams keep their existing references and accounts.
 PRESERVED = frozenset({
     "events", "people", "competition_teams", "monitor_pair_members",
-    "monitor_assignments", "audit_events", "native_operations",
+    "monitor_assignments", "audit_events", "native_operations", "staff_sessions",
 })
 
 
