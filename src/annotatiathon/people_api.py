@@ -276,7 +276,12 @@ def enforce_native_role(
     Returns whether a remote write was required. Nothing is silently changed
     in Supervisely when a person has not joined yet.
     """
-    if person.kind == desired_kind and not reconcile:
+    target_role = "manager" if desired_kind == "monitor" else "annotator"
+    # A saved Nightjar role can be out of sync with the native team role.
+    # Save must reconcile that mismatch even when the selected event role
+    # itself is unchanged, or the modal misleadingly appears to succeed.
+    if (person.kind == desired_kind and not reconcile
+            and person.supervisely_role in (None, target_role, "admin")):
         return False
     if person.supervisely_user_id is None:
         if person.membership_status == "joined":
@@ -295,7 +300,6 @@ def enforce_native_role(
     config = db.get(SuperviselyConfig, 1)
     if config is None or not config.team_id:
         raise HTTPException(status_code=409, detail="Configure the Supervisely team before editing this member.")
-    target_role = "manager" if desired_kind == "monitor" else "annotator"
     original = person.supervisely_role
     if not original or original == "unknown":
         raise HTTPException(
