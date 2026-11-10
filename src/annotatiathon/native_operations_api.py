@@ -103,6 +103,7 @@ def can_queue_next(db: Session, job: LabelingJob) -> bool:
         LabelingJob.plan_id == job.plan_id,
         LabelingJob.team_id == job.team_id,
         LabelingJob.assignee_person_id == job.assignee_person_id,
+        LabelingJob.release_mode == "automatic",
         LabelingJob.sequence < job.sequence,
     )))
     return all(
