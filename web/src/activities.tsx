@@ -188,7 +188,7 @@ export function ActivitiesScreen({auth}:{auth:Auth}) {
             {item.awards_finalised_at&&<span className="activity-awarded"><CheckCircle2 size={13}/> Rewards finalised</span>}
           </button>)}</div>
         {!items.length&&<p className="muted small">No activities scheduled. Create the first one to begin.</p>}
-      </section>
+      </section>}
       {section==="results"&&<section className="panel activity-detail-panel">
         <label className="activity-results-selector">Activity to review
           <select value={selected} onChange={e=>{setSelected(e.target.value);setSubjectId("");}}>
