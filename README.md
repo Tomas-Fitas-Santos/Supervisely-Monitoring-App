@@ -58,25 +58,33 @@ The existing ingestion structure remains unchanged:
 
 ## Free, real-user live testing (Cloudflare Tunnel)
 
-To share the full Nightjar app with real monitors without paying for hosting,
-use the isolated Docker stack and email-protected Cloudflare Quick Tunnel.
-It runs FastAPI, PostgreSQL, the built React website and an optional real
-Supervisely worker on your own Windows computer. The stack is completely
-separate from the existing local development database.
+Share the full Nightjar app with real monitors without paying for hosting
+using an isolated Docker stack and a temporary Cloudflare Quick Tunnel.
+To avoid a known short-session bug in Cloudflare email-protected Quick
+Tunnels, Nginx requires an additional private **site-access password**
+before anyone can reach Nightjar.
 
 **[Step-by-step Windows live-testing guide](docs/LIVE_TESTING.md)**
 
 ```powershell
 git pull --ff-only origin main
 .\scripts\init-live-test.ps1
+.\scripts\enable-live-access.ps1
 docker compose --env-file .env.live -f compose.live.yaml up -d --build web
-curl.exe -f http://127.0.0.1:8080/health/ready
 ```
 
-When ready to share the app, install `cloudflared` and run a Quick Tunnel
-restricted to your testers' specific email addresses. Sign in using the HTTPS
-tunnel URL; production-mode session cookies are deliberately secure-only.
-Do not use this temporary tunnel for the official event.
+Confirm that opening `http://127.0.0.1:8080` prompts for the username
+`nightjar-gate` and the separate password created above, **before**
+starting an ordinary Quick Tunnel:
+
+```powershell
+cloudflared tunnel --url http://127.0.0.1:8080
+```
+
+The tunnel is HTTPS and temporary; the site password is the required
+outer access control, with separate Nightjar logins and roles inside.
+Never use a public Quick Tunnel without first enabling this gate.
+This is not hosting for the official event.
 
 ## Start locally on Windows
 
