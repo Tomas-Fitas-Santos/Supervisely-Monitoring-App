@@ -552,6 +552,11 @@ def test_manual_assignments_publish_independent_videos(configured):
         r = http.get("/api/v1/review/jobs/" + jobid)
         assert r.status_code == 200
         assert r.json()["annotation_snapshot_ready"]
+        with maker() as db:
+            job = db.get(LabelingJob, jobid)
+            dataset = db.get(MediaDataset, job.dataset_id)
+            manifest = Path(dataset.root_path) / "annotations" / jobid / "round-0" / "manifest.json"
+            assert json.loads(manifest.read_text(encoding="utf-8"))["annotated_frames"] == 1
 
 
 def test_confirmed_reset_archives_only_event_projects_and_keeps_members(configured):
@@ -676,6 +681,8 @@ def test_team_dashboard_rankings_and_monitor_scoped_review(configured):
         assert {j["team_id"] for j in allowed.json()["items"]} == {team_id}
         assert monitor_client.get("/api/v1/review/team-metrics").status_code == 200
         assert monitor_client.get("/api/v1/review/jobs/" + outside_id).status_code == 403
+        assert monitor_client.get("/api/v1/review/jobs/" + outside_id +
+                                  "/annotations/test-frame").status_code == 403
         assert monitor_client.get("/api/v1/labeling/jobs/" + outside_id + "/media").status_code == 403
         assert monitor_client.get("/api/v1/review/jobs/" + own_id).status_code == 200
 
