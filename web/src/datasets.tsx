@@ -62,7 +62,7 @@ export function DatasetScreen({auth}:{auth:Auth}) {
     let created:Dataset|null=null;
     try {
       created=await api<Dataset>("/datasets/uploads","POST",{
-        name:name.trim()||files[0].name.replace(/\\.zip$/i,""),
+        name:name.trim()||files[0].name.replace(/\.zip$/i,""),
         upload_kind:mode
       },auth.csrf_token);
       setSelected(created.id);
@@ -143,7 +143,7 @@ export function DatasetScreen({auth}:{auth:Auth}) {
     <div className="content-grid datasets-layout">
       {admin&&<section className="panel">
         <span className="eyebrow">PRIVATE LOCAL STORAGE</span><h3>Import dataset</h3>
-        <p className="muted small">Expected directory structure: dataset-name/images/morphology/images and dataset-name/videos/morphology/video-title/frames. A ZIP can wrap the dataset folder.</p>
+        <p className="muted small">Expected structure: dataset-name/images/morphology/image.jpg and dataset-name/videos/morphology/video-title/frame.jpg. A ZIP can wrap the dataset folder.</p>
         <form className="form-stack" onSubmit={e=>void ingest(e)}>
           <label>Dataset name<input maxLength={200} value={name} placeholder="BirdGaze 2026"
             onChange={e=>setName(e.target.value)}/></label>
