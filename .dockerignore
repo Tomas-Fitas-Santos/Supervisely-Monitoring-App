@@ -5,6 +5,8 @@
 !.env.example
 .venv
 .venv-*
+.benchmark-venv/
+.benchmark-data/
 __pycache__/
 *.pyc
 .pytest_cache/

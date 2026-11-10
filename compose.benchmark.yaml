@@ -1,0 +1,100 @@
+# Synthetic event only. Independent database/media volumes and internal network.
+name: nightjar-benchmark
+x-runtime: &runtime
+  image: nightjar-benchmark-runtime
+  environment: &environment
+    APP_ENV: production
+    POSTGRES_USER: benchmark
+    POSTGRES_PASSWORD: synthetic-benchmark-only
+    POSTGRES_DB: benchmark
+    LOCAL_DATA_DIR: /data
+    NIGHTJAR_ENCRYPTION_KEY: MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=
+    SUPERVISELY_ALLOWED_HOSTS: supervisely-sim
+    REQUESTS_CA_BUNDLE: /data/tls/ca.pem
+    SSL_CERT_FILE: /data/tls/ca.pem
+    PYTHONUNBUFFERED: "1"
+    PYTHONPATH: /bench
+    BENCHMARK_FRAMES: ${BENCHMARK_FRAMES:-30}
+    BENCHMARK_BURST: ${BENCHMARK_BURST:-0}
+    BENCHMARK_UPLOAD: ${BENCHMARK_UPLOAD:-0}
+  volumes:
+    - benchmark_media:/data
+    - ./scripts:/bench:ro
+  networks: [benchmark]
+
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: benchmark
+      POSTGRES_PASSWORD: synthetic-benchmark-only
+      POSTGRES_DB: benchmark
+    volumes: [benchmark_pg:/var/lib/postgresql/data]
+    networks: [benchmark]
+    cpus: 0.75
+    mem_limit: 2560m
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U benchmark -d benchmark"]
+      interval: 2s
+      retries: 30
+  seed:
+    <<: *runtime
+    user: root
+    command: [sh, -c, "alembic upgrade head && python /bench/benchmark_full.py seed"]
+    depends_on:
+      db: {condition: service_healthy}
+  supervisely-sim:
+    <<: *runtime
+    command: [python, /bench/benchmark_full.py, simulate]
+    depends_on:
+      seed: {condition: service_completed_successfully}
+  api:
+    <<: *runtime
+    image: nightjar-benchmark-api
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.api
+      target: base
+    command: [uvicorn, "annotatiathon.app:app", --host, "0.0.0.0", --port, "8000"]
+    cpus: 1.5
+    mem_limit: 2g
+    depends_on:
+      seed: {condition: service_completed_successfully}
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/ready')"]
+      interval: 3s
+      retries: 30
+  worker:
+    <<: *runtime
+    command: [python, -m, annotatiathon.native_worker, --loop, --poll-seconds, "12"]
+    cpus: 1.5
+    mem_limit: 2g
+    depends_on:
+      supervisely-sim: {condition: service_started}
+      api: {condition: service_healthy}
+  web:
+    image: nightjar-benchmark-web
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.web
+    volumes:
+      - benchmark_media:/data:ro
+      - ./deploy/nginx-benchmark.conf:/etc/nginx/conf.d/default.conf:ro
+    networks: [benchmark]
+    cpus: 0.25
+    mem_limit: 256m
+    depends_on:
+      api: {condition: service_healthy}
+  load:
+    <<: *runtime
+    command: [python, /bench/benchmark_full.py, load, --seconds, "600"]
+    depends_on:
+      web: {condition: service_started}
+      worker: {condition: service_started}
+
+networks:
+  benchmark:
+    internal: true
+volumes:
+  benchmark_media:
+  benchmark_pg:

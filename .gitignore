@@ -9,6 +9,8 @@ secrets/
 # Python
 .venv/
 .venv-nightjar/
+.benchmark-venv/
+.benchmark-data/
 __pycache__/
 *.py[cod]
 .pytest_cache/
