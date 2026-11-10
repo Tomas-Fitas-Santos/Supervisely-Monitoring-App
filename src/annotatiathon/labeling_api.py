@@ -131,6 +131,26 @@ def allocate(
                 videos[team] += 1
     result: dict[str, list[JobGroup]] = {}
     for team in teams:
+        # A video assignment is indivisible and is the entire team job.
+        # Do not combine multiple videos into one labeling job.
+        if selected[team] and all(u.video_group is not None for u in selected[team]):
+            if len(selected[team]) > jobs_per_team:
+                raise HTTPException(
+                    status_code=422,
+                    detail="One video per job requires jobs_per_team to be at least "
+                           "the number of videos allocated to each team. "
+                           "Increase jobs_per_team or reduce redundancy.",
+                )
+            video_jobs = []
+            for unit in selected[team]:
+                video_jobs.append(JobGroup(
+                    media_ids=list(unit.media_ids),
+                    frame_count=unit.weight,
+                    video_groups={unit.video_group},
+                    morph_counts=Counter({unit.morphology: unit.weight}),
+                ))
+            result[team] = video_jobs
+            continue
         buckets = [JobGroup() for _ in range(jobs_per_team)]
         # Largest group first, distribute by frame count, never split a video.
         for unit in sorted(selected[team], key=lambda x: (-x.weight, x.id)):
@@ -192,6 +212,15 @@ def create_plan(
     ).order_by(MediaAsset.relative_path)))
     if not assets:
         raise HTTPException(status_code=422, detail="Dataset has no media assets.")
+    # Video assignments must never include a second video or unrelated images.
+    # Reject mixed plans rather than silently creating an ambiguous shared task.
+    has_videos = any(asset.video_group is not None for asset in assets)
+    if has_videos and any(asset.video_group is None for asset in assets):
+        raise HTTPException(
+            status_code=422,
+            detail="A video labeling plan cannot mix standalone images with video "
+                   "frames. Import or select a video-only collection.",
+        )
     groups, totals = allocate(
         build_units(assets), [t.id for t in teams], payload.jobs_per_team,
         payload.redundancy, payload.video_limit,
