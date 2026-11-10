@@ -95,6 +95,13 @@ def person_record(p: Person, team: str | None = None,
         "id": p.id, "name": p.name, "email": p.email, "kind": p.kind,
         "team_id": p.team_id, "team_name": team, "active": p.active,
         "membership_status": p.membership_status,
+        "monitor_registration_approved": bool(
+            p.kind == "monitor" and p.active and (
+                (p.source_fields or {}).get("source") != "supervisely_member_sync"
+                or (p.source_fields or {}).get("monitor_registration_approved") is True
+            )
+        ),
+        "native_auto_imported": (p.source_fields or {}).get("source") == "supervisely_member_sync",
         "supervisely_login": p.supervisely_login,
         "supervisely_role": p.supervisely_role,
         "native_verified_at": p.native_verified_at,
@@ -290,6 +297,38 @@ def update_person(
     return person_record(person, team.name if team else None)
 
 
+
+class MonitorRegistrationApproval(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    approved: bool
+
+
+@router.put("/people/{person_id}/monitor-registration")
+def change_monitor_registration_approval(
+    person_id: str,
+    payload: MonitorRegistrationApproval,
+    ctx: AuthContext = Depends(requires("organiser", mutation=True)),
+    db: Session = Depends(get_db),
+):
+    event = current_event(db, ctx, writable=True)
+    person = db.scalar(select(Person).where(
+        Person.id == person_id, Person.event_id == event.id,
+    ).with_for_update())
+    if person is None:
+        raise HTTPException(status_code=404, detail="Monitor not found.")
+    if not person.active or person.kind != "monitor":
+        raise HTTPException(status_code=409, detail="Registration approval requires an active monitor.")
+    fields = dict(person.source_fields or {})
+    # Set explicit allow/deny regardless of whether the monitor came from CSV.
+    fields["monitor_registration_approved"] = payload.approved
+    person.source_fields = fields
+    audit(db, ctx.staff.id, event.id, "monitor.registration.approval",
+          person.id, {"approved": payload.approved})
+    db.commit()
+    return person_record(person)
+
+
+
 def parse_rows(payload: RosterPayload) -> list[dict]:
     try:
         reader = csv.DictReader(io.StringIO(payload.csv_text.lstrip("\ufeff"), newline=""))
@@ -356,9 +395,9 @@ def import_report(db: Session, rows: list[dict], apply: bool, actor: str,
                     team_id=team_id(db, desired, event_id) if row["kind"] == "participant" else None,
                     source_fields=row["source_fields"],
                 ))
-        elif (found.name, found.kind, current_team, found.active) != (
+        elif ((found.name, found.kind, current_team, found.active) != (
             row["name"], row["kind"], desired or None, True
-        ):
+        ) or (found.source_fields or {}).get("source") == "supervisely_member_sync"):
             changed += 1
             if apply:
                 found.active = True
