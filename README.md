@@ -140,7 +140,7 @@ After the final accepted jobs are reconciled, close the event in **Results & Exp
 Open **People & Teams → Monitor test pairs** to create a competition team
 from exactly two registered monitors. They retain their existing Supervisely
 Admin/Manager/Developer roles and remain on the Monitoring Team. You may
-disband the local pair **before** planning any labeling job. Once jobs
+disband the local pair **before** planning any labeling job or **after** every planned job has been accepted and its native operations are settled. Once jobs
 exist, that pair's historical links must be preserved; use a fresh event
 for a new full-workflow test rather than removing annotated jobs.
 

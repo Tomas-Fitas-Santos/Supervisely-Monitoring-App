@@ -270,3 +270,18 @@ def test_monitor_pair_creation_disband_and_plan_provenance(ctx):
             MonitorPairMember.active.is_(True)
         )))
         assert len(active) == 2
+    with maker.begin() as db:
+        for job in db.scalars(select(LabelingJob).where(
+            LabelingJob.team_id == reused.json()["id"]
+        )):
+            job.status = "completed"
+            job.review_status = "accepted"
+    finished = act(
+        client, csrf, "/teams/monitor-pairs/"+reused.json()["id"]+"/disband",
+    )
+    assert finished.status_code == 200, finished.text
+    with maker() as db:
+        assert len(db.scalars(select(LabelingJob)).all()) >= 1
+        assert len(db.scalars(select(MonitorPairMember).where(
+            MonitorPairMember.active.is_(True)
+        )).all()) == 0

@@ -22,7 +22,7 @@
    or uncertain remote write must not advance the team.
 2. **Two-monitor test pairing:** organiser can form exactly two existing
    monitors into a competition pair, without changing either staff/native
-   role; can disband only while there is no local job history for the team.
+   role; can disband before job planning or after all jobs are accepted with no unfinished native operation; old job history remains.
 3. **Corrections:** a rejected pair stays on the same logical job. SDK
    restarts keep old native job IDs for audit and require resubmission.
    The retry action reconciles existing native records after interrupted writes.

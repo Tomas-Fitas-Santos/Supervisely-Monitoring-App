@@ -17,6 +17,7 @@ from .models import (
     LabelingJob,
     MonitorAssignment,
     MonitorPairMember,
+    NativeOperation,
     Person,
 )
 from .pair_members import pair_members
@@ -144,15 +145,27 @@ def disband_monitor_pair(
     people, mode = pair_members(db, event.id, team.id)
     if mode != "monitor_pair":
         raise HTTPException(status_code=409, detail="This is not a two-monitor trial team.")
-    has_jobs = db.scalar(select(LabelingJob.id).where(
+    jobs = list(db.scalars(select(LabelingJob).where(
         LabelingJob.event_id == event.id,
         LabelingJob.team_id == team.id,
-    ))
-    if has_jobs:
+    )))
+    if jobs and any(
+        job.status != "completed" or job.review_status != "accepted"
+        for job in jobs
+    ):
         raise HTTPException(
             status_code=409,
-            detail="This pair already has competition jobs. Finish or archive the event "
-                   "to preserve annotation provenance; disbanding would break job links.",
+            detail="Complete and accept every job before disbanding this pair. "
+                   "An incomplete or returned job must remain assigned to the team.",
+        )
+    if jobs and db.scalar(select(NativeOperation.id).where(
+        NativeOperation.event_id == event.id,
+        NativeOperation.target_id.in_([job.id for job in jobs]),
+        NativeOperation.status.in_(["pending", "running", "attention", "blocked"]),
+    )):
+        raise HTTPException(
+            status_code=409,
+            detail="A native job operation still needs completion or reconciliation.",
         )
     links = list(db.scalars(select(MonitorPairMember).where(
         MonitorPairMember.event_id == event.id,
@@ -173,7 +186,8 @@ def disband_monitor_pair(
         action="team.monitor_pair.disband", target_type="competition_team",
         target_id=team.id,
         details={"monitor_ids": [p.id for p in people],
-                 "native_mutations": False, "historical_records_preserved": True},
+                 "native_mutations": False, "historical_records_preserved": True,
+                 "completed_jobs_preserved": len(jobs)},
     ))
     db.commit()
     return {"id": team.id, "status": "disbanded", "already_disbanded": False,

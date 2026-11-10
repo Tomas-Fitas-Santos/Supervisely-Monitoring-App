@@ -50,8 +50,8 @@ export function MonitorPairPanel({auth,onChanged}:{auth:Auth;onChanged:()=>void}
     finally{setBusy(false);}
   }
   async function disband(teamId:string,teamName:string){
-    if(!window.confirm("Disband "+teamName+"? This is allowed only before "+
-      "any annotation job is planned. Monitor staff and native accounts are retained."))return;
+    if(!window.confirm("Disband "+teamName+"? This is allowed before "+
+      "any job is planned OR after all jobs are accepted. Monitor staff and native accounts are retained."))return;
     setBusy(true);setError("");setNotice("");
     try{
       await api("/teams/monitor-pairs/"+teamId+"/disband","POST",undefined,auth.csrf_token);
@@ -116,8 +116,8 @@ export function MonitorPairPanel({auth,onChanged}:{auth:Auth;onChanged:()=>void}
       </div>
       <div className="settings-note" style={{marginTop:15}}>
         <ShieldCheck size={17}/>
-        <p>Disbanding is a local, audited change only. Once jobs exist for a pair,
-          Nightjar preserves their source assignments and blocks disbanding.</p>
+        <p>Disbanding is a local, audited change only. During active jobs,
+          Nightjar blocks disbanding. After all jobs are accepted, historical assignments remain intact.</p>
       </div>
     </div>}
   </section>;

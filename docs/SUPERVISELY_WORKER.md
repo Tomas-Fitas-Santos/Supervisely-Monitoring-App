@@ -158,7 +158,7 @@ the ordinary participant team field is unchanged. Planning supports these
 pairs, and remote publication still requires both accounts to have verified
 membership in the same native Supervisely team.
 
-A pair can be disbanded only before any local labeling jobs exist for it.
+A pair can be disbanded before job planning, or after every job has been explicitly accepted and all native operations have settled.
 Disbanding deactivates the pair membership and team, and deactivates local
 monitor responsibility assignments. It does not delete people, native
 membership, annotation jobs or event audit history. For tests that generated
