@@ -49,10 +49,10 @@ export function DatasetScreen({auth}:{auth:Auth}) {
       .catch(e=>setError((e as Error).message));
   },[selected,datasets]);
   const dataset=datasets.find(d=>d.id===selected);
-  const groups=useMemo(()=>summary?.morphologies.reduce<Record<string,{images:number;frames:number}>>(
+  const groups=useMemo(()=>summary?.morphologies.reduce<Record<string,{frames:number}>>(
     (acc,m)=>{
-      const row=acc[m.name]||(acc[m.name]={images:0,frames:0});
-      if(m.kind==="image")row.images+=m.count;else row.frames+=m.count;
+      const row=acc[m.name]||(acc[m.name]={frames:0});
+      if(m.kind==="video_frame")row.frames+=m.count;
       return acc;
     },{})||{},[summary]);
   async function ingest(e:React.FormEvent) {
@@ -129,7 +129,7 @@ export function DatasetScreen({auth}:{auth:Auth}) {
   return <div className="page-body">
     <div className="page-heading"><div><span className="eyebrow">DATA · IMPORT & INVENTORY</span>
       <h2>Dataset Management</h2>
-      <p className="muted">Upload the bird dataset once, validate morphologies and keep video frames together.</p>
+      <p className="muted">Upload bird videos organised by species. Nightjar keeps each video's frames together for labeling jobs.</p>
     </div><button className="btn secondary" onClick={()=>void refresh()} disabled={busy}>
       <RefreshCw size={15}/> Refresh</button></div>
     {error&&<div className="alert danger" role="alert">{error}</div>}
@@ -137,22 +137,22 @@ export function DatasetScreen({auth}:{auth:Auth}) {
     <div className="stat-grid compact">
       <div className="stat-card"><HardDrive size={20}/><span className="muted small">Datasets</span>
         <strong>{datasets.length}</strong></div>
-      <div className="stat-card"><Layers3 size={20}/><span className="muted small">Selected images</span>
-        <strong>{dataset?.image_count??0}</strong></div>
+      <div className="stat-card"><Layers3 size={20}/><span className="muted small">Available video frames</span>
+        <strong>{dataset?.frame_count??0}</strong></div>
       <div className="stat-card"><FolderOpen size={20}/><span className="muted small">Selected videos</span>
         <strong>{dataset?.video_count??0}</strong></div>
     </div>
     <div className="content-grid datasets-layout">
       {admin&&<section className="panel">
         <span className="eyebrow">PRIVATE LOCAL STORAGE</span><h3>Import dataset</h3>
-        <p className="muted small">Expected structure: dataset-name/images/morphology/image.jpg and dataset-name/videos/morphology/video-title/frame.jpg. A ZIP can wrap the dataset folder.</p>
+        <p className="muted small">Video-only structure: <code>dataset-name/bird-species/video.mp4</code> or <code>dataset-name/bird-species/video-title/frame.jpg</code>. Multiple species folders are supported. Do not create separate <code>images</code> or <code>videos</code> folders. You can upload the root folder or a ZIP containing it. Raw videos are sampled at 1 frame per second for Supervisely labeling; already extracted frames retain their original sampling.</p>
         <form className="form-stack" onSubmit={e=>void ingest(e)}>
           <label>Dataset name<input maxLength={200} value={name} placeholder="BirdGaze 2026"
             onChange={e=>setName(e.target.value)}/></label>
           <label>Upload format<select value={mode} disabled={busy}
             onChange={e=>{setMode(e.target.value as "zip"|"folder");setFiles([]);}}>
-            <option value="zip">ZIP containing dataset folder</option>
-            <option value="folder">Dataset folder with images and videos</option>
+            <option value="zip">ZIP of species folders</option>
+            <option value="folder">Folder containing species folders</option>
           </select></label>
           {mode==="zip"?<label className="dataset-drop">
             <FileArchive size={28}/><span>Select .zip file</span>
@@ -191,8 +191,8 @@ export function DatasetScreen({auth}:{auth:Auth}) {
             {d.status}</span></button>)}
         {!datasets.length&&<p className="muted small">No dataset uploaded yet.</p>}</div>
         {dataset&&<div className="dataset-detail"><h4>{dataset.name}</h4>
-          <p className="muted small">{dataset.image_count} stand-alone images ·
-            {dataset.frame_count} video frames · {dataset.video_count} atomic video groups</p>
+          <p className="muted small">{dataset.video_count} videos ·
+            {dataset.frame_count} frames available for annotation</p>
           <p className="muted small">Local status: {dataset.status} · Native project: {dataset.native_project_id||"Not published"}</p>
           {transfer?.datasetId===dataset.id&&transfer.error&&
             <p className="alert danger" role="alert">{transfer.error}</p>}
@@ -217,13 +217,12 @@ export function DatasetScreen({auth}:{auth:Auth}) {
       </section>
     </div>
     {summary&&<section className="panel" style={{marginTop:20}}>
-      <span className="eyebrow">MORPHOLOGY COVERAGE</span><h3>Dataset distribution</h3>
+      <span className="eyebrow">BIRD SPECIES</span><h3>Video frame distribution</h3>
       <div className="table-scroll"><table className="data-table"><thead><tr>
-        <th>Species / Morphology</th><th>Images</th><th>Video frames</th><th>Total</th>
+        <th>Bird species / morphology</th><th>Video frames</th>
       </tr></thead><tbody>{Object.entries(groups).sort(([a],[b])=>a.localeCompare(b))
         .map(([m,count])=><tr key={m}><td><strong>{m}</strong></td>
-          <td>{count.images}</td><td>{count.frames}</td>
-          <td>{count.images+count.frames}</td></tr>)}</tbody></table></div>
+          <td>{count.frames}</td></tr>)}</tbody></table></div>
       <p className="muted small">Planning balances assignment counts by morphology and
         uses frame count as job weight. Every frame of one video stays in the same job.</p>
     </section>}
