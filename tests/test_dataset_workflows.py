@@ -456,3 +456,33 @@ def test_species_first_video_rejects_mixed_independent_images(ctx):
     })
     rejected = act(client, csrf, f"/datasets/{dataset['id']}/finalize")
     assert rejected.status_code == 422, rejected.text
+
+
+def test_species_first_folder_upload_matches_zip_structure(ctx):
+    client, maker, csrf = ctx
+    created = act(client, csrf, "/datasets/uploads", {
+        "name": "Folder of Species", "upload_kind": "folder",
+    })
+    assert created.status_code == 201, created.text
+    dsid = created.json()["id"]
+    for relative_path in (
+        "BirdGaze/CorvusCorone/flight_01/frame_0001.jpg",
+        "BirdGaze/CorvusCorone/flight_01/frame_0002.jpg",
+        "BirdGaze/ColumbaPalumbus/feeding_02/frame_0001.jpg",
+    ):
+        contents = b"bird-video-frame"
+        result = client.put(
+            f"/api/v1/datasets/uploads/{dsid}/chunk",
+            params={"relative_path": relative_path, "offset": 0,
+                    "total": len(contents)},
+            data=contents, headers={"X-CSRF-Token": csrf},
+        )
+        assert result.status_code == 200, result.text
+    done = act(client, csrf, f"/datasets/{dsid}/finalize")
+    assert done.status_code == 200, done.text
+    assert done.json()["video_count"] == 2
+    assert done.json()["frame_count"] == 3
+    with maker() as db:
+        paths = {row.relative_path for row in db.scalars(select(MediaAsset))}
+        assert "videos/CorvusCorone/flight_01/frame_0001.jpg" in paths
+        assert "videos/ColumbaPalumbus/feeding_02/frame_0001.jpg" in paths
