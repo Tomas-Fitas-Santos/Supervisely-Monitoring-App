@@ -284,6 +284,13 @@ def enforce_native_role(
                 status_code=409,
                 detail="This joined member has no verified Supervisely ID. Refresh and link their account first.",
             )
+        if person.membership_status in {"reported_sent", "pending"}:
+            raise HTTPException(
+                status_code=409,
+                detail="This person already has a pending or reported Supervisely invitation. "
+                       "Pending invitation roles cannot be verified or changed until "
+                       "the member joins. Review the invitation in Supervisely first.",
+            )
         return False
     config = db.get(SuperviselyConfig, 1)
     if config is None or not config.team_id:
