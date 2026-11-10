@@ -113,6 +113,11 @@ def test_ecomorphology_counts_are_unique_frames_and_include_unknown(ctx):
     assert groups["Hummingbird-type birds"]["frames"] == 1
     assert groups["Unclassified"]["frames"] == 2
     assert sum(m["frames"] for m in content["movements"]) == 6
+    matrix = {r["ecomorphology"]: r for r in content["movement_matrix"]}
+    assert matrix["General perching birds"]["counts"]["unlabeled"] == 3
+    assert matrix["Hummingbird-type birds"]["counts"]["unlabeled"] == 1
+    assert matrix["Unclassified"]["counts"]["unlabeled"] == 2
+    assert all(sum(row["counts"].values()) == row["frames"] for row in matrix.values())
     folders = {r["source_folder"]:r for r in content["folders"]}
     assert folders["PasserDomesticus"]["species_name"] == "House Sparrow"
     assert folders["PasserDomesticus"]["ecomorphology"] == "General perching birds"
@@ -155,6 +160,11 @@ def test_observed_motion_ranges_are_disjoint_and_not_inferred(ctx):
     assert after["totals"]["unlabeled_frames"] == 4
     assert sum(x["frames"] for x in after["movements"]) == 6
     assert next(x for x in after["movements"] if x["type"]=="head_bobbing")["frames"] == 2
+    general = next(x for x in after["movement_matrix"]
+                   if x["ecomorphology"] == "General perching birds")
+    assert general["counts"]["head_bobbing"] == 2
+    assert general["counts"]["unlabeled"] == 1
+    assert sum(g["counts"]["head_bobbing"] for g in after["movement_matrix"]) == 2
     csv = http.get("/api/v1"+base+"/export.csv")
     assert csv.status_code == 200
     assert "head_bobbing,1,2,2" in csv.text
