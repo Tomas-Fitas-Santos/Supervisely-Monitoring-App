@@ -74,10 +74,12 @@ jobs:
           curl --fail --silent --show-error http://127.0.0.1:8080/ | grep -qi '<html'
           # A visitor sees Nightjar, but cannot read authenticated staff data.
           test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/api/v1/auth/me)" = "401"
-          # Login and approved-monitor registration reach FastAPI (422 for missing fields).
-          for path in /api/v1/auth/login /api/v1/auth/register/request /api/v1/auth/register/complete; do
+          # Login and direct roster-only app registration reach FastAPI.
+          for path in /api/v1/auth/login /api/v1/auth/register; do
             test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -d '{}' "http://127.0.0.1:8080$path")" = "422"
           done
+          # Unknown email cannot create a monitor account.
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -d '{"email":"not-registered@example.invalid","password":"VeryStrongExamplePassword2026!"}' http://127.0.0.1:8080/api/v1/auth/register)" = "403"
           # Invalid credentials are rejected by the application as JSON, not by Nginx.
           test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -d '{"email":"not-registered@example.invalid","password":"sample-password"}' http://127.0.0.1:8080/api/v1/auth/login)" = "401"
           curl -s -H 'Content-Type: application/json' -d '{"email":"not-registered@example.invalid","password":"sample-password"}' http://127.0.0.1:8080/api/v1/auth/login | grep -q 'Invalid credentials'
