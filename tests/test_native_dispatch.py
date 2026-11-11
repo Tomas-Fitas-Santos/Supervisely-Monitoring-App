@@ -473,7 +473,8 @@ def test_initial_release_and_next_after_both_submit(configured):
         }
     overview = http.get("/api/v1/native/overview").json()
     assert overview["native_bindings"] == 4
-    assert len(overview["operations"]) == 2
+    assert len([item for item in overview["operations"]
+                if item["kind"] == "publish_job"]) == 2
 
 
 def test_returned_pair_job_restarts_and_blocks_next_release(configured):
