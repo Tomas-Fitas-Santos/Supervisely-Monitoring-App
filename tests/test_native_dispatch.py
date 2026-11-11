@@ -49,6 +49,8 @@ class MockSDK:
         self.project_metas = {}
         self.meta_updates = []
         self.removed_projects = []
+        self.removed_datasets = []
+        self.removed_jobs = []
         self.datasets = []
         self.images = {}
         self.jobs = []
@@ -67,6 +69,7 @@ class MockSDK:
         self.dataset = Obj(
             get_list=self.datasets_list,
             create=self.dataset_create,
+            remove=self.dataset_remove,
             get_info_by_id=lambda ident: next(
                 (d for d in self.datasets if d.id == ident), None
             ),
@@ -84,6 +87,7 @@ class MockSDK:
         self.labeling_job = Obj(
             get_list=self.jobs_list,
             create=self.jobs_create,
+            remove=self.jobs_remove,
             restart=self.jobs_restart,
             get_info_by_id=lambda ident: next((j for j in self.jobs if j.id == ident), None),
         )
@@ -119,6 +123,11 @@ class MockSDK:
     def datasets_list(self, project_id):
         return [d for d in self.datasets if d.project_id == project_id]
 
+    def dataset_remove(self, dataset_id):
+        self.removed_datasets.append(dataset_id)
+        self.datasets = [d for d in self.datasets if d.id != dataset_id]
+        self.images.pop(dataset_id, None)
+
     def dataset_create(self, project_id, name, **kwargs):
         assert kwargs["change_name_if_conflict"] is False
         item = Obj(id=self.new_id(), project_id=project_id, name=name)
@@ -143,8 +152,24 @@ class MockSDK:
         assert team_id == 125980 and kwargs["show_disabled"] is True
         return [j for j in self.jobs if j.dataset_id == dataset_id]
 
+    def jobs_remove(self, job_id):
+        self.removed_jobs.append(job_id)
+        self.jobs = [j for j in self.jobs if j.id != job_id]
+
     def jobs_create(self, name, dataset_id, user_ids, images_ids):
         assert len(images_ids) == len(self.images[dataset_id])
+        dataset = next(d for d in self.datasets if d.id == dataset_id)
+        classes = {
+            cls["title"]: cls
+            for cls in self.project_metas[dataset.project_id]["classes"]
+        }
+        assert len(classes) == 9
+        assert classes["bird"]["shape"] == "rectangle"
+        for key in ("left_eye", "left_eye_occ", "right_eye", "right_eye_occ",
+                    "beak", "beak_occ", "crown", "crown_occ"):
+            assert classes[key]["shape"] == "point"
+        assert "Nightjar video " not in name
+        assert " · " in name
         new_jobs = []
         for uid in user_ids:
             j = Obj(
@@ -593,6 +618,10 @@ def test_confirmed_reset_archives_only_event_projects_and_keeps_members(configur
         assert len(list(db.scalars(select(CompetitionTeam)))) == 1
         assert db.get(SuperviselyConfig, 1).team_id == 125980
     assert owned_project in sdk.removed_projects
+    assert len(sdk.removed_jobs) == 2
+    assert len(sdk.removed_datasets) == 1
+    assert not sdk.jobs
+    assert not any(d.project_id == owned_project for d in sdk.datasets)
     assert other.id not in sdk.removed_projects
     assert len(sdk.projects) == 1
     assert sdk.projects[0].id == other.id
@@ -601,6 +630,7 @@ def test_confirmed_reset_archives_only_event_projects_and_keeps_members(configur
     assert final.json()["datasets"] == 0
     assert final.json()["jobs"] == 0
     assert final.json()["operation"]["status"] == "done"
+    assert final.json()["remote_action"] == "remove_labeling_jobs_archive_datasets_and_projects"
     categories = http.get("/api/v1/tickets/categories")
     assert categories.status_code == 200
     assert len(categories.json().get("items", [])) >= 3
