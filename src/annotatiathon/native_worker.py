@@ -55,9 +55,11 @@ from .models import (
 )
 from .native_export_api import export_event_zip
 from .native_media_pool import (
-    MirrorError, assert_mirror_complete, mirror_dataset,
-    source_image_name,
+    MirrorError,
+    assert_mirror_complete,
+    mirror_dataset,
 )
+from .manual_jobs_api import apply_local_reassignment, target_team
 from .native_names import (
     dataset_name,
     labeling_job_name,
@@ -748,6 +750,85 @@ def process_once(db: Session, api, config: SuperviselyConfig) -> dict | None:
     return {"operation_id": opid, "status": "done", **details}
 
 
+def process_reassignment_once(db: Session, api,
+                              config: SuperviselyConfig) -> dict | None:
+    """Update real native annotator before changing the Nightjar owner/team.
+
+    A lost response is safe to retry because the native job ID and desired
+    assignee are immutable in the queued operation payload.
+    """
+    op = db.scalar(select(NativeOperation).where(
+        NativeOperation.kind == "reassign_job",
+        NativeOperation.status == "pending",
+    ).order_by(NativeOperation.created_at, NativeOperation.id)
+      .with_for_update(skip_locked=True))
+    if op is None:
+        db.rollback()
+        return None
+    op.status = "running"
+    op.attempts += 1
+    op.claimed_at = epoch()
+    oid, jid, payload = op.id, op.target_id, dict(op.payload or {})
+    db.commit()
+    try:
+        job = db.get(LabelingJob, jid)
+        person = db.get(Person, payload.get("person_id"))
+        if job is None or person is None or job.event_id != person.event_id:
+            raise NativeWorkerError("reassign_target_identity_mismatch")
+        if job.status in {"on_review", "completed", "needs_correction"}:
+            raise NativeWorkerError("reassign_job_already_submitted")
+        team = target_team(db, job.event_id, person)
+        if team.id != payload.get("team_id") or not person.supervisely_user_id:
+            raise NativeWorkerError("reassign_team_or_member_changed")
+        native = list(db.scalars(select(NativeJobBinding).where(
+            NativeJobBinding.event_id == job.event_id,
+            NativeJobBinding.job_id == job.id,
+        )))
+        if len(native) != 1:
+            raise NativeWorkerError("reassign_expected_single_native_job")
+        binding = native[0]
+        current = api.labeling_job.get_info_by_id(binding.native_job_id)
+        if (current is None or current.dataset_id != job.native_dataset_id):
+            raise NativeWorkerError("reassign_native_job_identity_changed")
+        if current.assigned_to_id != person.supervisely_user_id:
+            api.labeling_job.set_assignees(
+                binding.native_job_id,
+                annotator_id=person.supervisely_user_id,
+            )
+        confirmed = api.labeling_job.get_info_by_id(binding.native_job_id)
+        if confirmed is None or confirmed.assigned_to_id != person.supervisely_user_id:
+            raise NativeWorkerError("reassign_native_confirmation_failed")
+        old = {"person_id": job.assignee_person_id, "team_id": job.team_id}
+        binding.person_id = person.id
+        binding.native_status = confirmed.status
+        binding.last_synced_at = epoch()
+        apply_local_reassignment(db, job, person, team)
+        db.add(AuditEvent(
+            event_id=job.event_id,
+            action="native.job.reassigned",
+            target_type="labeling_job", target_id=job.id,
+            details={"previous": old, "person_id": person.id,
+                     "team_id": team.id, "native_job_id": binding.native_job_id},
+        ))
+        db.commit()
+    except Exception as exc:  # noqa: BLE001 - idempotent retry
+        db.rollback()
+        failed = db.get(NativeOperation, oid)
+        failed.status = "attention"
+        failed.error_code = (
+            exc.code if isinstance(exc, NativeWorkerError)
+            else "reassign_remote_uncertain"
+        )
+        db.commit()
+        return {"operation_id": oid, "status": "attention"}
+    finished = db.get(NativeOperation, oid)
+    finished.status = "done"
+    finished.completed_at = epoch()
+    finished.error_code = None
+    db.commit()
+    return {"operation_id": oid, "status": "done", "job_id": jid}
+
+
 def process_correction_once(db: Session, api, config: SuperviselyConfig) -> dict | None:
     """Restart the current pair job for corrections, without advancing its queue."""
     operations = list(db.scalars(
@@ -1174,13 +1255,14 @@ def run_worker(*, once: bool, poll_seconds: int) -> None:
                     time.sleep(poll_seconds)
                     continue
                 mirror = process_mirror_once(db, api, config)
+                reassignment = process_reassignment_once(db, api, config)
                 correction = process_correction_once(db, api, config)
                 operation = process_once(db, api, config)
                 export = process_export_once(db, api)
                 sync_result = sync_all(db, api, config)
-                if mirror or correction or operation or export or sync_result["changed_jobs"] or sync_result["annotation_snapshots"]:
-                    logger.info("Nightjar worker: mirror=%s correction=%s publish=%s export=%s sync=%s",
-                                mirror, correction, operation, export, sync_result)
+                if mirror or reassignment or correction or operation or export or sync_result["changed_jobs"] or sync_result["annotation_snapshots"]:
+                    logger.info("Nightjar worker: mirror=%s reassign=%s correction=%s publish=%s export=%s sync=%s",
+                                mirror, reassignment, correction, operation, export, sync_result)
             except Exception as exc:  # noqa: BLE001 - keep long-lived worker alive
                 db.rollback()
                 logger.warning("Supervisely worker cycle failed (type %s); "
