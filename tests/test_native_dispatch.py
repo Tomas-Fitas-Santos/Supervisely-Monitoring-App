@@ -780,3 +780,74 @@ def test_private_roster_csv_fields_are_restricted_and_editable(configured):
         assert "date_of_birth" not in food_person
         assert "data_consent" not in food_person
         assert "phone" not in food_person
+
+
+def test_reset_cleans_historical_jobs_from_already_archived_project(configured):
+    """A previous archive-only reset could leave jobs without local bindings."""
+    from sqlalchemy import delete
+
+    http, maker, csrf, plan_id, sdk = configured
+    launch(http, csrf, plan_id)
+    with maker() as db:
+        conf = db.get(SuperviselyConfig, 1)
+        assert process_once(db, sdk, conf)["status"] == "done"
+        owned_id = sdk.projects[0].id
+        assert len(sdk.jobs) == 2
+        sdk.project.remove(owned_id)
+    with maker.begin() as db:
+        db.execute(delete(NativeJobBinding))
+    assert owned_id not in {p.id for p in sdk.projects}
+    assert owned_id in {p.id for p in sdk.archived_projects}
+    preview = http.get("/api/v1/settings/reset/preview").json()
+    queued = call(http, csrf, "/settings/reset/request", {
+        "confirmation": preview["confirmation_phrase"],
+    })
+    assert queued.status_code == 202, queued.text
+    with maker() as db:
+        result = process_event_reset(db, sdk, db.get(SuperviselyConfig, 1))
+        assert result["status"] == "done", result
+        assert result["removed_native_jobs"] == 2
+        assert result["archived_projects"] == 0
+        assert db.get(Event, DEFAULT_EVENT_ID).status == "active"
+    assert sdk.jobs == []
+    assert sdk.removed_jobs and len(sdk.removed_jobs) == 2
+
+
+def test_reset_can_retry_after_remote_job_removal_interruption(configured):
+    http, maker, csrf, plan_id, sdk = configured
+    launch(http, csrf, plan_id)
+    with maker() as db:
+        assert process_once(db, sdk, db.get(SuperviselyConfig, 1))["status"] == "done"
+    preview = http.get("/api/v1/settings/reset/preview").json()
+    queued = call(http, csrf, "/settings/reset/request", {
+        "confirmation": preview["confirmation_phrase"],
+    })
+    assert queued.status_code == 202, queued.text
+    original_remove = sdk.labeling_job.remove
+    failed_once = False
+
+    def interrupted_remove(job_id):
+        nonlocal failed_once
+        if not failed_once:
+            failed_once = True
+            original_remove(job_id)
+            raise ConnectionError("Simulated lost response after removal")
+        original_remove(job_id)
+
+    sdk.labeling_job.remove = interrupted_remove
+    with maker() as db:
+        first = process_event_reset(db, sdk, db.get(SuperviselyConfig, 1))
+        assert first["status"] == "attention"
+        assert db.get(Event, DEFAULT_EVENT_ID).status == "resetting"
+        assert list(db.scalars(select(MediaDataset)))
+        assert list(db.scalars(select(LabelingJob)))
+    sdk.labeling_job.remove = original_remove
+    queued = call(http, csrf, "/settings/reset/retry")
+    assert queued.status_code == 202, queued.text
+    with maker() as db:
+        second = process_event_reset(db, sdk, db.get(SuperviselyConfig, 1))
+        assert second["status"] == "done", second
+        assert db.get(Event, DEFAULT_EVENT_ID).status == "active"
+        assert not list(db.scalars(select(MediaDataset)))
+        assert not list(db.scalars(select(LabelingJob)))
+    assert not sdk.jobs
