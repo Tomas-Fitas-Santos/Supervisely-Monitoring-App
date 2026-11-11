@@ -463,8 +463,14 @@ def test_initial_release_and_next_after_both_submit(configured):
         assert len(sdk.datasets) == 1
         assert len(sdk.jobs) == 4
         assert len(sdk.meta_updates) == 1  # No redundant metadata write per job.
-        images_by_dataset = [{i.id for i in sdk.images[d.id]} for d in sdk.datasets]
-        assert images_by_dataset[0].isdisjoint(images_by_dataset[1])
+        # One shared remote dataset, distinct video-frame subsets per job.
+        assert len(sdk.datasets) == 1
+        first_video_ids = set(sdk.jobs[0].image_ids)
+        second_video_ids = set(sdk.jobs[2].image_ids)
+        assert first_video_ids.isdisjoint(second_video_ids)
+        assert first_video_ids | second_video_ids == {
+            row.id for row in sdk.images[sdk.datasets[0].id]
+        }
     overview = http.get("/api/v1/native/overview").json()
     assert overview["native_bindings"] == 4
     assert len(overview["operations"]) == 2
