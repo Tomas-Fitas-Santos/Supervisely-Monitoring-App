@@ -29,7 +29,7 @@ from .models import (
     Person,
     epoch,
 )
-from .native_operations_api import native_ready, queue_publish
+from .native_operations_api import native_identity_assignable, native_ready, queue_publish
 from .pair_members import pair_members
 
 router = APIRouter(prefix="/api/v1/labeling/manual", tags=["manual labeling jobs"])
@@ -90,11 +90,7 @@ def manual_options(
         "teams": [
             {"id": team_id, "name": team_names[team_id],
              "members": [{"id": p.id, "name": p.name,
-                          "native_ready": bool(p.supervisely_user_id
-                              and p.membership_status == "joined" and p.native_verified_at
-                              and (p.supervisely_role or "").lower() in
-                              ({"annotator"} if p.kind == "participant"
-                               else {"admin", "manager", "developer"}))}
+                          "native_ready": native_identity_assignable(p)}
                          for p in members]}
             for team_id, members in teams.items() if len(members) == 2
         ],
