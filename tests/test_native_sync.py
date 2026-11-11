@@ -190,7 +190,8 @@ def test_native_membership_read_requires_organiser(context, monkeypatch):
     monitor_csrf = login.json()["csrf_token"]
     assert call(http, monitor_csrf, "/settings/supervisely/verify").status_code == 403
     assert call(http, monitor_csrf, "/people/supervisely/preview", {}).status_code == 403
-    assert http.get("/api/v1/settings/supervisely").status_code == 403
+    # Monitors may view integration status; only organisers mutate it.
+    assert http.get("/api/v1/settings/supervisely").status_code == 200
 
 
 def test_pagination_and_token_never_in_error(monkeypatch):
