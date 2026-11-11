@@ -1,10 +1,17 @@
 """Stable readable Supervisely titles and strict reset ownership discovery."""
 from annotatiathon.models import (
-    CompetitionTeam, Event, LabelingJob, MediaDataset,
+    CompetitionTeam,
+    Event,
+    LabelingJob,
+    MediaDataset,
 )
 from annotatiathon.native_names import (
-    dataset_name, labeling_job_name, legacy_project_name,
-    owned_project_event_id, project_name, video_label,
+    dataset_name,
+    labeling_job_name,
+    legacy_project_name,
+    owned_project_event_id,
+    project_name,
+    video_label,
 )
 
 EVENT_ID = "00000000-0000-4000-8000-000000000010"
