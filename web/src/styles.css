@@ -427,3 +427,49 @@ input,select{border:1px solid #dfe5ed;border-radius:9px;background:white;padding
 .shared-review-canvas-panel .annotation-image-overlay .annotation-shape{pointer-events:stroke;cursor:pointer}
 .shared-review-canvas-panel .annotation-image-overlay .annotation-shape:focus-visible{outline:none;filter:drop-shadow(0 0 3px #fff)}
 .shared-review-canvas-panel .annotation-image-overlay .annotation-shape.selected{filter:drop-shadow(0 0 4px #fef08a)}
+
+
+/* People/Teams: one scrolling roster surface, responsive team cards, compact member details. */
+.roster-viewport .roster-team-grid{
+  flex:1;min-height:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(min(310px,100%),1fr));
+  align-content:start;gap:14px;overflow-y:auto;padding:20px 22px;
+  scrollbar-gutter:stable;background:#f8fbf9;
+}
+.roster-viewport .roster-team-grid-heading{
+  grid-column:1/-1;display:flex;align-items:baseline;gap:14px;
+  flex-wrap:wrap;padding:0 0 6px;color:#314d43;font-size:13px;
+}
+.roster-viewport .roster-team-card{
+  display:flex;flex-direction:column;align-items:stretch;gap:14px;padding:18px;
+  min-height:180px;background:white;border:1px solid #e2eae5;border-radius:13px;
+  box-shadow:0 3px 12px #143c3310;text-align:left;
+}
+.roster-viewport .roster-team-card:hover{background:#f4faf6;border-color:#a8d0bc}
+.roster-viewport .roster-team-card:focus-visible{outline:2px solid #27826a;outline-offset:2px}
+.roster-team-card-top{display:flex;align-items:center;gap:12px;min-width:0}
+.roster-team-card-top>.muted-icon{flex:none;margin-left:auto}
+.roster-team-card-members{flex:1;display:flex;align-content:flex-start;align-items:flex-start;flex-wrap:wrap;gap:6px}
+.roster-team-card-members>span{display:inline-block;max-width:100%;padding:6px 9px;
+  background:#eef4f1;border-radius:7px;color:#42645a;font-size:11px;
+  white-space:normal;overflow-wrap:anywhere}
+.roster-team-card-footer{display:flex;align-items:center;justify-content:space-between;
+  flex-wrap:wrap;gap:8px;padding-top:11px;border-top:1px solid #e8eee9;
+  font-size:11px;color:#577365;font-weight:700}
+.roster-viewport .roster-team-detail{display:flex;flex-direction:column;min-height:0;
+  overflow:hidden;flex:1;padding:20px 24px}
+.roster-team-detail .back-link{flex:none}
+.roster-team-detail-header{flex:none;display:flex;align-items:center;
+  justify-content:space-between;gap:12px;flex-wrap:wrap}
+.roster-team-detail-title h3{margin:0 0 6px}
+.roster-team-detail-stats{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.roster-team-member-table{flex:1;min-height:0;overflow:hidden;display:flex;flex-direction:column}
+.roster-team-member-table .table-scroll{flex:1;min-height:0;overflow:auto;
+  border:1px solid #e3ebe6;border-radius:10px;scrollbar-gutter:stable}
+.roster-viewport .roster-team-member-table .data-table{min-width:720px}
+.roster-viewport .roster-team-member-table th{position:sticky;top:0;z-index:2}
+.roster-viewport .roster-team-grid-empty{grid-column:1/-1}
+@media(max-width:760px){
+  .roster-viewport .roster-team-grid{padding:12px;grid-template-columns:1fr}
+  .roster-viewport .roster-team-detail{padding:14px}
+  .roster-team-card-members>span{white-space:normal}
+}

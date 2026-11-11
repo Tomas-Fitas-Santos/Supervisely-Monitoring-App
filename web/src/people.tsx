@@ -8,7 +8,6 @@ import {
 import { api, refreshSuperviselyRoster, type Auth, type PeopleResponse, type Person, type Team, type TeamResponse } from "./api";
 import { NativeMembershipPanel } from "./native";
 import { InvitationBatches } from "./invitation_batches";
-import { MonitorAssignmentsPanel } from "./monitoring";
 import { MonitorPairPanel } from "./monitor_pairs";
 
 type PersonForm = {name:string;email:string;kind:"participant"|"monitor";team_name:string;
@@ -156,9 +155,11 @@ export function PeopleScreen({auth}:{auth:Auth}) {
     }catch(e){setError("Supervisely sync: "+(e as Error).message);}
   }
   const activeTeam=teams.find(t=>t.id===selectedTeam);
-  const shownTeams=teams.filter(t=>t.type==="monitoring"||
-    !search||t.name.toLowerCase().includes(search.toLowerCase())||
-    t.members.some(p=>p.name.toLowerCase().includes(search.toLowerCase())));
+  const shownTeams=teams.filter(t=>!search||
+    t.name.toLocaleLowerCase().includes(search.toLocaleLowerCase())||
+    t.members.some(p=>p.name.toLocaleLowerCase().includes(search.toLocaleLowerCase())||
+      p.email.toLocaleLowerCase().includes(search.toLocaleLowerCase())));
+  const competitionCount=teams.filter(t=>t.type==="competition").length;
   const selectedPeople=people.items.filter(p=>selected.includes(p.id));
   function openEdit(person?:Person) {
     setEditing(person||null);
@@ -286,7 +287,8 @@ export function PeopleScreen({auth}:{auth:Auth}) {
   }
   return <div className={"page-body "+((mode==="people"||mode==="teams")?"roster-viewport":"")}>
     <div className="page-heading"><div><span className="eyebrow">EVENT SETUP · PEOPLE</span>
-      <h2>People & Teams</h2><p className="muted">Roster, teams, check-in and invitations have separate workspaces. Birthdates and consent details are restricted to organisers and reception. Food distribution staff can see dietary allergies.</p>
+      <h2>People & Teams</h2><p className="muted">Manage the roster, competition teams and Supervisely invitations.
+        Event-day attendance is handled separately in Check-in. No monitor-to-team assignments are needed for shared annotation review.</p>
     </div><div className="heading-actions">
       <span className="last-refresh">{updated?"Updated "+updated.toLocaleTimeString():"Loading…"}</span>
       <button className="btn secondary" onClick={()=>void syncNative()}><RefreshCw size={16}/> Refresh from Supervisely</button>
@@ -295,14 +297,14 @@ export function PeopleScreen({auth}:{auth:Auth}) {
     {error&&<div className="alert danger" role="alert">{error}</div>}
     {message&&<div className="alert success" role="status">{message}</div>}
     <div className="stat-grid compact">
-      <div className="stat-card"><UsersRound size={19}/><span className="muted small">Competition teams</span><strong>{Math.max(teams.length-1,0)}</strong></div>
+      <div className="stat-card"><UsersRound size={19}/><span className="muted small">Competition teams</span><strong>{competitionCount}</strong></div>
       <div className="stat-card"><UserRound size={19}/><span className="muted small">Monitoring staff</span><strong>{teams.find(t=>t.type==="monitoring")?.members.length??0}</strong></div>
       <div className="stat-card"><Check size={19}/><span className="muted small">People listed</span><strong>{teams.reduce((n,t)=>n+t.members.length,0)}</strong></div>
     </div>
     <nav className="workspace-subtabs" aria-label="People and teams sections">
       <button className={mode==="people"?"active":""} onClick={()=>setMode("people")}>People & monitors</button>
-      <button className={mode==="teams"?"active":""} onClick={()=>setMode("teams")}>Teams</button>
-      {admin&&<button className={mode==="setup"?"active":""} onClick={()=>setMode("setup")}>Invitations & assignments</button>}
+      <button className={mode==="teams"?"active":""} onClick={()=>{setMode("teams");setSelectedTeam(null);}}>Teams</button>
+      {admin&&<button className={mode==="setup"?"active":""} onClick={()=>setMode("setup")}>Invitations & membership</button>}
     </nav>
     {admin&&mode==="setup"&&<div className="toolbar-secondary">
       <button className="btn secondary" onClick={()=>setShowImporter(v=>!v)}><FileSpreadsheet size={17}/>
@@ -313,13 +315,12 @@ export function PeopleScreen({auth}:{auth:Auth}) {
     {admin&&mode==="setup"&&<InvitationBatches auth={auth} version={inviteVersion}
       onComplete={()=>{setInviteVersion(v=>v+1);void refresh();}}/>}
     {admin&&mode==="setup"&&<NativeMembershipPanel auth={auth} onApplied={()=>{setInviteVersion(v=>v+1);void refresh();}}/>}
-    {admin&&mode==="setup"&&<MonitorAssignmentsPanel auth={auth} onApplied={()=>void refresh()}/>}
     {admin&&mode==="setup"&&<MonitorPairPanel auth={auth} onChanged={()=>void refresh()}/>}
     {(mode==="teams"||mode==="people")&&<section className="panel table-panel">
       <div className="panel-header-line">
         <div className="filter-bar">
           <div className="search-box"><Search size={16}/><input aria-label="Search roster"
-            placeholder="Search names or teams…" value={search} onChange={e=>{setSearch(e.target.value);setPage(1);}}/></div>
+            placeholder={mode==="teams"?"Search teams, members or emails…":"Search participants or monitors…"} value={search} onChange={e=>{setSearch(e.target.value);setPage(1);}}/></div>
           {mode==="teams"?
             <label className="inline-filter"><Filter size={15}/><select value={sort} onChange={e=>setSort(e.target.value as typeof sort)}>
               <option value="name">Alphabetical</option><option value="check_in">Check-in time</option><option value="size">Team size</option>
@@ -334,23 +335,50 @@ export function PeopleScreen({auth}:{auth:Auth}) {
         </div>
       </div>
       {mode==="teams" ? (activeTeam?
-        <div className="team-detail">
+        <div className="team-detail roster-team-detail">
           <button className="back-link" onClick={()=>setSelectedTeam(null)}><ChevronLeft size={16}/> All teams</button>
-          <div className="team-detail-header"><h3>{activeTeam.name}</h3>
-            {activeTeam.type==="competition"&&<span className="soft-pill">Responsible monitor: {activeTeam.monitor_name||"Unassigned"}</span>}
-            <span className="soft-pill">{activeTeam.members.length} member(s)</span></div>
-          {peopleTable(activeTeam.members,false,false)}
+          <div className="team-detail-header">
+            <div className="roster-team-detail-title"><h3>{activeTeam.name}</h3>
+              <span className="muted small">{activeTeam.type==="monitoring"?"Monitoring staff":"Competition team"}</span>
+            </div>
+            <div className="roster-team-detail-stats">
+              <span className="soft-pill">{activeTeam.members.length} members</span>
+              {activeTeam.type==="competition"&&<>
+                <span className="soft-pill">{activeTeam.checked_in} checked in</span>
+                <span className="soft-pill">{activeTeam.table_number?"Table "+activeTeam.table_number:"Table not assigned"}</span>
+              </>}
+            </div>
+          </div>
+          <div className="roster-team-member-table">{peopleTable(activeTeam.members,false,false)}</div>
         </div>:
-        <div className="team-list">{shownTeams.map(team=><button className={"team-row "+(team.type==="monitoring"?"pinned":"")}
-          key={team.id} onClick={()=>setSelectedTeam(team.id)}>
-          <div className={"team-symbol "+(team.type==="monitoring"?"monitoring":"")}><UsersRound size={19}/></div>
-          <div className="team-main"><strong>{team.name}</strong>
-            <span>{team.type==="monitoring"?"Pinned · Event staff":team.members.map(p=>p.name).join(" · ")||"No members assigned"}</span></div>
-          <span className="team-count">{team.members.length} members</span>
-          {team.type==="competition"&&<span className="team-monitor-name">{team.monitor_name||"Monitor unassigned"}</span>}
-          <span className="team-attendance">{team.checked_in} checked in</span>
-          <ChevronRight size={18} className="muted-icon"/>
-        </button>)}{shownTeams.length===0&&<div className="empty-table">No teams found.</div>}</div>)
+        <div className="team-list roster-team-grid">
+          <div className="roster-team-grid-heading">
+            <strong>{shownTeams.length} {shownTeams.length===1?"team":"teams"}</strong>
+            <span className="muted small">Select a team to inspect its members and Supervisely status.</span>
+          </div>
+          {shownTeams.map(team=><button className={"team-row roster-team-card "+(team.type==="monitoring"?"pinned":"")}
+            key={team.id} onClick={()=>setSelectedTeam(team.id)}>
+            <div className="roster-team-card-top">
+              <div className={"team-symbol "+(team.type==="monitoring"?"monitoring":"")}><UsersRound size={19}/></div>
+              <div className="team-main"><strong>{team.name}</strong>
+                <span>{team.type==="monitoring"?"Event monitoring staff":"Competition team"}</span>
+              </div>
+              <ChevronRight size={18} className="muted-icon"/>
+            </div>
+            <div className="roster-team-card-members">
+              {team.members.length?team.members.map(member=><span key={member.id}>{member.name}</span>):
+                <span className="muted">No members assigned</span>}
+            </div>
+            <div className="roster-team-card-footer">
+              <span>{team.members.length} {team.members.length===1?"member":"members"}</span>
+              {team.type==="competition"&&<>
+                <span>{team.checked_in} checked in</span>
+                <span>{team.table_number?"Table "+team.table_number:"No table"}</span>
+              </>}
+            </div>
+          </button>)}
+          {!shownTeams.length&&<div className="empty-table roster-team-grid-empty">No teams match this search.</div>}
+        </div>)
         :<><div className="table-summary"><span>{people.total} matching people · Page {page}</span>
           {admin&&selectedPeople.length>0&&<div className="batch-actions">
             <span>{selectedPeople.length}/50 selected</span>
