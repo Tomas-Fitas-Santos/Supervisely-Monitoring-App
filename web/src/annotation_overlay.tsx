@@ -3,7 +3,7 @@ import { Eye, EyeOff } from "lucide-react";
 import { api } from "./api";
 
 type Point={x:number;y:number};
-type VisualObject={title:string;shape:"rectangle"|"point";points:Point[];color:string};
+type VisualObject={index:number;title:string;shape:"rectangle"|"point";points:Point[];color:string};
 type AnnotationPalette={items:{name:string;shape:string;color:string}[]};
 const DEFAULT_COLORS:Record<string,string>={
   bird:"#FFD600",left_eye:"#00C853",left_eye_occ:"#91D7A9",
@@ -22,10 +22,10 @@ function asPoint(value:unknown):Point|null{
 }
 function parseVisuals(annotation:Record<string,unknown>|null,
   colors:Record<string,string>):VisualObject[]{
-  const rows=annotation?.objects;
+  const rows=annotation?.objects??annotation?.labels;
   if(!Array.isArray(rows))return [];
   const shapes:VisualObject[]=[];
-  for(const original of rows){
+  for(const [index,original] of rows.entries()){
     const object=asRecord(original);
     if(!object||typeof object.classTitle!=="string")continue;
     const points=asRecord(object.points);
@@ -45,13 +45,14 @@ function parseVisuals(annotation:Record<string,unknown>|null,
     }
     if(!normalized.length||(shape==="rectangle"&&normalized.length!==2))continue;
     if(shape!=="point"&&shape!=="rectangle")continue;
-    shapes.push({title,shape,points:normalized,
+    shapes.push({index,title,shape,points:normalized,
       color:colors[title]||"#FFFFFF"});
   }
   return shapes;
 }
-export function AnnotationFrame({src,alt,annotation}:{
-  src:string;alt:string;annotation:Record<string,unknown>|null
+export function AnnotationFrame({src,alt,annotation,selectedIndex,onSelectObject}:{
+  src:string;alt:string;annotation:Record<string,unknown>|null;
+  selectedIndex?:number|null;onSelectObject?:(index:number)=>void;
 }){
   const [visible,setVisible]=useState(true);
   const [imageSize,setImageSize]=useState<{width:number;height:number}|null>(null);
@@ -89,23 +90,40 @@ export function AnnotationFrame({src,alt,annotation}:{
         <svg className="annotation-image-overlay"
           viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="xMidYMid meet"
           role="img" aria-label="Saved Supervisely bird bounding boxes and keypoints">
-          {objects.map((object,index)=>object.shape==="rectangle"?(()=>{
+          {objects.map(object=>object.shape==="rectangle"?(()=>{
             const a=object.points[0],b=object.points[1];
-            return <g key={index}>
+            const selected=object.index===selectedIndex;
+            return <g key={object.index} className={"annotation-shape "+(selected?"selected":"")}
+              role={onSelectObject?"button":undefined}
+              aria-label={onSelectObject?"Select "+object.title+" annotation "+(object.index+1):undefined}
+              tabIndex={onSelectObject?0:undefined}
+              onClick={()=>onSelectObject?.(object.index)}
+              onKeyDown={e=>{if(onSelectObject&&(e.key==="Enter"||e.key===" ")){
+                e.preventDefault();onSelectObject(object.index);
+              }}}>
               <rect x={Math.min(a.x,b.x)} y={Math.min(a.y,b.y)}
                 width={Math.abs(b.x-a.x)} height={Math.abs(b.y-a.y)}
-                fill="none" stroke="#121827" strokeWidth={Math.max(4,pointRadius*.9)}/>
+                fill="none" stroke="#121827" strokeWidth={selected?Math.max(7,pointRadius*1.5):Math.max(4,pointRadius*.9)}/>
               <rect x={Math.min(a.x,b.x)} y={Math.min(a.y,b.y)}
                 width={Math.abs(b.x-a.x)} height={Math.abs(b.y-a.y)}
-                fill="none" stroke={object.color} strokeWidth={Math.max(2,pointRadius*.55)}/>
+                fill="none" stroke={selected?"#FFFFFF":object.color}
+                strokeWidth={selected?Math.max(4,pointRadius*.9):Math.max(2,pointRadius*.55)}/>
               <text x={Math.min(a.x,b.x)+3} y={Math.max(14,Math.min(a.y,b.y)-5)}
                 stroke="#15212D" strokeWidth={Math.max(3,pointRadius*.6)}
                 paintOrder="stroke" fill={object.color} fontSize={Math.max(12,pointRadius*2)}
-                fontWeight="bold">{object.title}</text>
+                fontWeight="bold">{object.index+1}. {object.title}</text>
             </g>;
-          })():<g key={index}>
+          })():<g key={object.index} className={"annotation-shape "+(object.index===selectedIndex?"selected":"")}
+            role={onSelectObject?"button":undefined}
+            aria-label={onSelectObject?"Select "+object.title+" annotation "+(object.index+1):undefined}
+            tabIndex={onSelectObject?0:undefined}
+            onClick={()=>onSelectObject?.(object.index)}
+            onKeyDown={e=>{if(onSelectObject&&(e.key==="Enter"||e.key===" ")){
+              e.preventDefault();onSelectObject(object.index);
+            }}}>
             <circle cx={object.points[0].x} cy={object.points[0].y}
-              r={pointRadius*1.4} fill="#141b28"/>
+              r={object.index===selectedIndex?pointRadius*2.3:pointRadius*1.4}
+              fill={object.index===selectedIndex?"#FFFFFF":"#141b28"} />
             <circle cx={object.points[0].x} cy={object.points[0].y}
               r={pointRadius} fill={object.color} stroke="#fff" strokeWidth={Math.max(1,pointRadius*.2)}/>
             <text x={object.points[0].x+pointRadius*1.7}
@@ -113,7 +131,7 @@ export function AnnotationFrame({src,alt,annotation}:{
               stroke="#0E1822" strokeWidth={Math.max(3,pointRadius*.6)}
               paintOrder="stroke" fill={object.color}
               fontSize={Math.max(11,pointRadius*1.7)} fontWeight="bold">
-              {object.title}
+              {object.index+1}. {object.title}
             </text>
           </g>)}
         </svg>}

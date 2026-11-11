@@ -416,3 +416,14 @@ input,select{border:1px solid #dfe5ed;border-radius:9px;background:white;padding
 .app-confirm-modal label{display:flex;flex-direction:column;gap:9px;margin-bottom:20px;font-size:12px;font-weight:700}
 .app-confirm-modal input{width:100%}
 .app-confirm-modal .modal-actions{margin-top:20px}
+
+
+/* Match grading controls to numbered overlay objects. SVG selection never changes source labels. */
+.shared-review-object-row.selected{border-color:#2d8065;background:#eef9f3;box-shadow:inset 3px 0 #2d8065}
+.shared-review-object-select{text-align:left;background:transparent;border:0;cursor:pointer;display:flex;flex-direction:column;align-items:flex-start;gap:4px;padding:5px 0;color:inherit}
+.shared-review-object-select strong{font-size:13px}
+.shared-review-object-select small{font-size:10px;color:#587f6b}
+.shared-review-canvas-panel .annotation-image-overlay{pointer-events:none}
+.shared-review-canvas-panel .annotation-image-overlay .annotation-shape{pointer-events:stroke;cursor:pointer}
+.shared-review-canvas-panel .annotation-image-overlay .annotation-shape:focus-visible{outline:none;filter:drop-shadow(0 0 3px #fff)}
+.shared-review-canvas-panel .annotation-image-overlay .annotation-shape.selected{filter:drop-shadow(0 0 4px #fef08a)}
