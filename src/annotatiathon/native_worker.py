@@ -47,10 +47,17 @@ from .models import (
     NativeJobRevision,
     NativeMediaInstance,
     NativeOperation,
+    NativeSourceMedia,
+    Person,
+    MonitorAssignment,
     SuperviselyConfig,
     epoch,
 )
 from .native_export_api import export_event_zip
+from .native_media_pool import (
+    MirrorError, assert_mirror_complete, mirror_dataset,
+    source_image_name,
+)
 from .native_names import (
     dataset_name,
     labeling_job_name,
@@ -251,6 +258,98 @@ def assigned_people(db: Session, job: LabelingJob):
     return [person]
 
 
+def process_mirror_once(db: Session, api, config: SuperviselyConfig) -> dict | None:
+    """Mirror a whole source library once, before any labeling job can be issued."""
+    op = db.scalar(select(NativeOperation).where(
+        NativeOperation.kind == "mirror_dataset",
+        NativeOperation.status == "pending",
+    ).order_by(NativeOperation.created_at, NativeOperation.id)
+      .with_for_update(skip_locked=True))
+    if op is None:
+        db.rollback()
+        return None
+    op.status = "running"
+    op.claimed_at = epoch()
+    op.attempts += 1
+    opid, dsid = op.id, op.target_id
+    db.commit()
+    try:
+        ds = db.get(MediaDataset, dsid)
+        if ds is None:
+            raise MirrorError("source_dataset_not_found")
+        result = mirror_dataset(db, api, config, ds)
+    except Exception as exc:  # noqa: BLE001 - uncertain writes stay retryable
+        db.rollback()
+        failed = db.get(NativeOperation, opid)
+        failed.status = "attention"
+        failed.error_code = (
+            exc.code if isinstance(exc, (MirrorError, NativeAPIError))
+            else "mirror_remote_uncertain"
+        )
+        db.commit()
+        logger.warning("Supervisely source mirror %s needs reconciliation (%s)",
+                       opid, type(exc).__name__)
+        return {"status": "attention", "operation_id": opid}
+    finished = db.get(NativeOperation, opid)
+    finished.status = "done"
+    finished.completed_at = epoch()
+    finished.error_code = None
+    db.commit()
+    return {"status": "done", "operation_id": opid, **result}
+
+
+def source_media_for_job(db: Session, job: LabelingJob,
+                         native_dataset_id: int) -> list[int]:
+    """Build job-local references to mirrored images without uploading files."""
+    source = {row.media_id: row for row in db.scalars(
+        select(NativeSourceMedia).where(
+            NativeSourceMedia.event_id == job.event_id,
+            NativeSourceMedia.dataset_id == job.dataset_id,
+            NativeSourceMedia.media_id.in_(job.media_ids),
+        )
+    )}
+    if len(source) != len(job.media_ids):
+        raise NativeWorkerError("job_source_frames_not_mirrored")
+    mappings = {row.media_id: row for row in db.scalars(select(
+        NativeMediaInstance,
+    ).where(NativeMediaInstance.job_id == job.id))}
+    for media_id in job.media_ids:
+        remote = source[media_id]
+        if remote.native_dataset_id != native_dataset_id:
+            raise NativeWorkerError("source_dataset_changed")
+        old = mappings.get(media_id)
+        if old:
+            if (old.native_image_id != remote.native_image_id
+                    or old.native_dataset_id != native_dataset_id):
+                raise NativeWorkerError("native_job_image_mapping_changed")
+        else:
+            db.add(NativeMediaInstance(
+                event_id=job.event_id, job_id=job.id, media_id=media_id,
+                native_dataset_id=native_dataset_id,
+                native_image_id=remote.native_image_id,
+            ))
+    db.commit()
+    return [source[media_id].native_image_id for media_id in job.media_ids]
+
+
+def manual_media_dataset(api, dataset: MediaDataset, project_id: int) -> int:
+    name = "Manual assignments · independent video copies"
+    if dataset.native_manual_dataset_id is not None:
+        ds = api.dataset.get_info_by_id(dataset.native_manual_dataset_id)
+        if ds is None or ds.project_id != project_id or ds.name != name:
+            raise NativeWorkerError("manual_dataset_identity_changed")
+        return ds.id
+    options = [item for item in api.dataset.get_list(project_id)
+               if item.name == name]
+    if len(options) > 1:
+        raise NativeWorkerError("ambiguous_manual_media_dataset")
+    ds = options[0] if options else api.dataset.create(
+        project_id, name, change_name_if_conflict=False,
+    )
+    dataset.native_manual_dataset_id = ds.id
+    return ds.id
+
+
 def publish_job(db: Session, job: LabelingJob, api, config: SuperviselyConfig) -> dict:
     """Idempotent by deterministic project/dataset names and native user IDs."""
     if job.status not in {"queued", "publishing", "in_progress"}:
@@ -278,12 +377,28 @@ def publish_job(db: Session, job: LabelingJob, api, config: SuperviselyConfig) -
     if dataset.native_project_id is None:
         dataset.native_project_id = project_id
         db.commit()
-    remote_ds_id = remote_dataset(api, db, project_id, job, team)
+    if job.native_dataset_id is not None and job.native_dataset_id not in {
+        dataset.native_dataset_id, dataset.native_manual_dataset_id,
+    }:
+        # Existing pre-upgrade per-job native datasets remain readable and
+        # recoverable; do not attempt to move an in-progress native job.
+        remote_ds_id = remote_dataset(api, db, project_id, job, team)
+        native_media = upload_media(db, api, job, dataset, remote_ds_id)
+    elif job.release_mode == "automatic":
+        try:
+            assert_mirror_complete(db, dataset)
+        except MirrorError as exc:
+            raise NativeWorkerError(exc.code) from exc
+        remote_ds_id = dataset.native_dataset_id
+        native_media = source_media_for_job(db, job, remote_ds_id)
+    else:
+        remote_ds_id = manual_media_dataset(api, dataset, project_id)
+        db.commit()
+        native_media = upload_media(db, api, job, dataset, remote_ds_id)
     if job.native_dataset_id is None:
         job.native_dataset_id = remote_ds_id
         job.status = "publishing"
         db.commit()
-    native_media = upload_media(db, api, job, dataset, remote_ds_id)
     roster_ids = {p.supervisely_user_id: p for p in people}
     # One immutable dataset and one native job per assigned annotator.
     current = api.labeling_job.get_list(
@@ -571,7 +686,10 @@ def process_once(db: Session, api, config: SuperviselyConfig) -> dict | None:
             NativeOperation.kind == "publish_job",
             LabelingPlan.status == "running",
             Event.status == "active",
-        ).order_by(NativeOperation.created_at).with_for_update(skip_locked=True).limit(200)
+        ).order_by(
+            NativeOperation.priority.desc(),
+            NativeOperation.created_at, NativeOperation.id,
+        ).with_for_update(skip_locked=True).limit(200)
     ))
     op = next((
         row for row in operations
@@ -1044,13 +1162,14 @@ def run_worker(*, once: bool, poll_seconds: int) -> None:
                         return
                     time.sleep(poll_seconds)
                     continue
+                mirror = process_mirror_once(db, api, config)
                 correction = process_correction_once(db, api, config)
                 operation = process_once(db, api, config)
                 export = process_export_once(db, api)
                 sync_result = sync_all(db, api, config)
-                if correction or operation or export or sync_result["changed_jobs"] or sync_result["annotation_snapshots"]:
-                    logger.info("Nightjar worker: correction=%s publish=%s export=%s sync=%s",
-                                correction, operation, export, sync_result)
+                if mirror or correction or operation or export or sync_result["changed_jobs"] or sync_result["annotation_snapshots"]:
+                    logger.info("Nightjar worker: mirror=%s correction=%s publish=%s export=%s sync=%s",
+                                mirror, correction, operation, export, sync_result)
             except Exception as exc:  # noqa: BLE001 - keep long-lived worker alive
                 db.rollback()
                 logger.warning("Supervisely worker cycle failed (type %s); "
