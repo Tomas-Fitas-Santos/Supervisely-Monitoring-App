@@ -1015,6 +1015,29 @@ def test_manual_duplicate_jobs_use_independent_copies_and_annotator_mappings(con
     assert len(sdk.jobs) == 2
     assert len(sdk.datasets) == 2
     assert len(sdk.upload_history) == 3  # source upload + two manual copies
+    for native_job in sdk.jobs:
+        native_job.status = "on_review"
+    with maker() as db:
+        result = sync_all(db, sdk, db.get(SuperviselyConfig, 1))
+        assert result["changed_jobs"] == 2
+        dataset = db.get(MediaDataset, "dataset01")
+        original_path = (Path(dataset.root_path) / "media" /
+                         "videos/sparrows/flight01/0001.jpg")
+        assert original_path.read_bytes() == b"one video frame"
+        for job_id in response.json()["job_ids"]:
+            native_id = db.scalar(select(NativeJobBinding.native_job_id).where(
+                NativeJobBinding.job_id == job_id,
+            ))
+            snapshot = (Path(dataset.root_path) / "annotations" / job_id /
+                        "round-0" / (asset_id + ".json"))
+            assert snapshot.is_file()
+            data = json.loads(snapshot.read_text(encoding="utf-8"))
+            assert data["source_media_id"] == asset_id
+            assert data["native_job_id"] == native_id
+            assert data["annotation"]["objects"][0]["tags"][0]["job_id"] == native_id
+            assert not (snapshot.parent / "images").exists()
+            assert not (snapshot.parent / "videos").exists()
+
 
 
 def test_live_reassignment_updates_supervisely_before_local_team(configured):
