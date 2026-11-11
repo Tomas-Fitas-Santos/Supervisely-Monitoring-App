@@ -68,7 +68,7 @@ def native_identity_assignable(person: Person) -> bool:
 
 
 def team_members(db: Session, job: LabelingJob) -> list[Person]:
-    people, kind = pair_members(db, job.event_id, job.team_id)
+    people, _kind = pair_members(db, job.event_id, job.team_id)
     if len(people) != 2:
         raise HTTPException(
             status_code=409,
