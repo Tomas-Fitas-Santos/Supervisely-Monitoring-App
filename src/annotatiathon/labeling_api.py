@@ -246,8 +246,8 @@ def create_plan(
         build_units(assets), [t.id for t in teams], payload.jobs_per_team,
         payload.redundancy, payload.video_limit,
     )
-    if assets and all(item.video_group for item in assets):
-        if any(totals["video_counts"].get(t.id, 0) < 2 for t in teams):
+    if (assets and all(item.video_group for item in assets)
+            and any(totals["video_counts"].get(t.id, 0) < 2 for t in teams)):
             raise HTTPException(
                 status_code=422,
                 detail="Automatic allocation must give both members of every team "
