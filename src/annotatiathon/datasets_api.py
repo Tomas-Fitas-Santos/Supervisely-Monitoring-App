@@ -19,7 +19,6 @@ from .auth import AuthContext, requires
 from .config import get_settings
 from .db import get_db
 from .events_api import current_event
-from .native_media_pool import enqueue_mirror, mirror_status
 from .models import (
     AuditEvent,
     DatasetStagedFile,
@@ -29,6 +28,7 @@ from .models import (
     MediaDataset,
     epoch,
 )
+from .native_media_pool import enqueue_mirror, mirror_status
 
 router = APIRouter(prefix="/api/v1/datasets", tags=["datasets"])
 VIEWERS = ("organiser", "monitor", "observer", "reception", "activity", "distribution")
