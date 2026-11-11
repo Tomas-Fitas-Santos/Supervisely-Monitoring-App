@@ -110,12 +110,15 @@ export function CompetitionScreen({auth}:{auth:Auth}) {
       .then(setMedia).catch(e=>setError((e as Error).message));
   },[chosen,page]);
   const currentTeam=options?.teams.find(t=>t.id===teamId);
+  useEffect(()=>setReassignTo(""),[chosen]);
   const selectedForTeam=drafts.filter(x=>x.team_id===teamId);
   const availableVideos=useMemo(()=>{
     const used=new Set((options?.existing||[]).map(x=>x.video_group));
     return (options?.videos||[]).filter(v=>allowDuplicates||
-      !used.has(v.video_group)||drafts.some(d=>d.video_group===v.video_group));
-  },[options,allowDuplicates,drafts]);
+      (!used.has(v.video_group)&&!drafts.some(d=>
+        d.video_group===v.video_group&&d.team_id!==teamId))||
+      drafts.some(d=>d.team_id===teamId&&d.video_group===v.video_group));
+  },[options,allowDuplicates,drafts,teamId]);
   function toggleVideo(group:string){
     setDrafts(prev=>prev.some(row=>row.team_id===teamId&&row.video_group===group)?
       prev.filter(row=>!(row.team_id===teamId&&row.video_group===group)):
