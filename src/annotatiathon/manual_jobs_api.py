@@ -145,10 +145,6 @@ def create_manual_jobs(
     if not videos:
         raise HTTPException(status_code=422, detail="Dataset contains no videos.")
     teams = roster(db, event.id)
-    existing = list(db.scalars(select(LabelingJob).where(
-        LabelingJob.event_id == event.id,
-        LabelingJob.dataset_id == dataset.id,
-    )))
     # Never allow accidental overlaps. Deliberate manual repeats require
     # allow_duplicates=True; an automatic plan can never create overlaps.
     all_existing = list(db.scalars(select(LabelingJob).where(
