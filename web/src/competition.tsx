@@ -8,11 +8,11 @@ import { api, refreshSuperviselyRoster, type Auth } from "./api";
 
 type Dataset={id:string;name:string;status:string;image_count:number;
   frame_count:number;video_count:number};
-type Plan={id:string;dataset_id:string;status:string;jobs_per_team:number;
+type PlanMode="legacy"|"shared_30_v1";
+type Plan={id:string;dataset_id:string;status:string;jobs_per_team:number;mode:PlanMode;
   redundancy:number;video_limit:number|null};
-type Created={plan_id:string;status:string;assets:number;assignment_copies:number;
-  job_count:number;min_frames_per_team:number;max_frames_per_team:number;
-  morphologies:string[]};
+type Created={job_count:number;assets:number;min_frames_per_team:number;max_frames_per_team:number}
+  |{primary_blocks:number;unique_frames:number;short_tails:number;repeat_frames:number};
 type Binding={person_id:string;person_name:string;native_job_id:number;
   native_status:string;last_synced_at:number|null};
 type Job={id:string;plan_id:string;team_id:string;team_name:string;
@@ -51,6 +51,7 @@ export function CompetitionScreen({auth,view="progress"}:{
   const [media,setMedia]=useState<MediaPage|null>(null);
   const [page,setPage]=useState(1);
   const [jobsPerTeam,setJobsPerTeam]=useState(4);
+  const [planMode,setPlanMode]=useState<PlanMode>("shared_30_v1");
   const [videoLimit,setVideoLimit]=useState("");
   const [created,setCreated]=useState<Created|null>(null);
   const [native,setNative]=useState<NativeStatus|null>(null);
@@ -132,6 +133,7 @@ export function CompetitionScreen({auth,view="progress"}:{
       .catch(error=>setError((error as Error).message));
   },[]);
   useEffect(()=>{setDrafts([]);void refreshOptions();},[refreshOptions]);
+  useEffect(()=>setCreated(null),[dataset,planMode]);
   useEffect(()=>{
     if(!chosen){setMedia(null);return;}
     void api<MediaPage>("/labeling/jobs/"+chosen+"/media?page="+page+"&size=50")
@@ -160,12 +162,16 @@ export function CompetitionScreen({auth,view="progress"}:{
   async function generate(){
     setBusy(true);setError("");setNotice("");
     try {
-      const response=await api<Created>("/labeling/plans","POST",{
+      const response=await api<Created>("/labeling/plans","POST",planMode==="shared_30_v1"?{
+        dataset_id:dataset,mode:planMode,
+      }:{
         dataset_id:dataset,jobs_per_team:jobsPerTeam,redundancy:1,
         video_limit:videoLimit.trim()?Number(videoLimit):null,
       },auth.csrf_token);
       setCreated(response);
-      setNotice(response.job_count+" individual jobs planned. Nothing was published yet.");
+      setNotice("primary_blocks" in response?
+        response.primary_blocks+" primary blocks planned. Nothing was published yet.":
+        response.job_count+" individual jobs planned. Nothing was published yet.");
       await refresh();
     }catch(e){setError((e as Error).message);}
     finally{setBusy(false);}
@@ -175,7 +181,9 @@ export function CompetitionScreen({auth,view="progress"}:{
     setBusy(true);setError("");setNotice("");
     try {
       await api("/labeling/plans/"+plan.id+"/approve","POST",undefined,auth.csrf_token);
-      setNotice("Plan approved. Launch it to release one video to each available annotator.");
+      setNotice(plan.mode==="shared_30_v1"?
+        "Shared queue approved. Launch it to let the worker assign available blocks.":
+        "Plan approved. Launch it to release one video to each available annotator.");
       await refresh();
     }catch(e){setError((e as Error).message);}
     finally{setBusy(false);}
@@ -184,11 +192,11 @@ export function CompetitionScreen({auth,view="progress"}:{
     if(!await confirmAction(description))return;
     setBusy(true);setError("");setNotice("");
     try {
-      const result=await api<{status?:string;pending_operations?:number}>(
+      const result=await api<{status?:string;pending_operations?:number;note?:string}>(
         endpoint,"POST",body,auth.csrf_token);
-      setNotice(result.pending_operations!==undefined?
+      setNotice(result.note??(result.pending_operations!==undefined?
         result.pending_operations+" first jobs queued for the Supervisely worker.":
-        "Dispatch updated. Check worker status below.");
+        "Dispatch updated. Check worker status below."));
       await refresh();await refreshOptions();
     }catch(e){setError((e as Error).message);}
     finally{setBusy(false);}
@@ -436,35 +444,55 @@ export function CompetitionScreen({auth,view="progress"}:{
     </>}
     {admin&&view==="setup"&&section==="automatic"&&<section className="panel manual-automatic-panel">
       <div className="panel-heading"><div><span className="eyebrow">AUTOMATIC PLANNING</span>
-        <h3>Generate jobs from a video collection</h3>
-        <p>Automatically distribute whole videos across eligible teams, with one job per person and video.</p>
+        <h3>Plan automatic assignments</h3>
       </div></div>
 
-      <p className="muted small">Automatic distribution uses the complete pre-uploaded Supervisely video library. Each video is given to exactly one annotator across the whole event, with no overlap. The two people in a team receive different videos. Jobs alternate between teammates. Finalize and fully mirror the dataset before launch.</p>
-      <div className="form-grid triple">
+      <div className="form-grid">
+        <label>Source dataset<select value={dataset} onChange={e=>setDataset(e.target.value)}>
+          {!datasets.length&&<option value="">No ready datasets</option>}
+          {datasets.map(item=><option key={item.id} value={item.id}>{item.name}</option>)}
+        </select></label>
+        <label>Distribution mode<select value={planMode} onChange={e=>setPlanMode(e.target.value as PlanMode)}>
+          <option value="shared_30_v1">Shared 30-image queue</option>
+          <option value="legacy">Whole videos</option>
+        </select></label>
+      </div>
+      <p className="muted small">{planMode==="shared_30_v1"?
+        "Split each video into blocks of up to 30 images. The worker assigns the next eligible job after a complete submission.":
+        "Assign whole videos to eligible teams. Each video goes to one annotator across the event."}</p>
+      {planMode==="legacy"&&<div className="form-grid triple">
         <label>Maximum jobs per team<input type="number" min={1} max={100}
           value={jobsPerTeam} onChange={e=>setJobsPerTeam(Number(e.target.value))}/></label>
         <label>Maximum videos per team (optional)<input type="number" min={0}
           value={videoLimit} placeholder="Unlimited"
           onChange={e=>setVideoLimit(e.target.value)}/></label>
-      </div>
+      </div>}
       <p className="muted small">Supervisely mirror: {mirror?.state||"Unknown"} · {mirror?.uploaded_frames||0}/{mirror?.total_frames||0} frames uploaded. {mirror?.ready_for_automatic_jobs?"Ready for instant assignment.":"Wait until the full dataset is mirrored before launching."}</p>
       <button className="btn secondary" disabled={busy||!dataset||plans.some(p=>p.status==="approved")}
-        onClick={()=>void generate()}><UsersRound size={15}/> Generate draft plan</button>
-      {created&&<div className="job-plan-summary"><strong>{created.job_count} jobs created in a draft</strong>
-        <p>{created.assets} source frames · {created.min_frames_per_team}–{created.max_frames_per_team} frames per team</p></div>}
+        onClick={()=>void generate()}><UsersRound size={15}/>{planMode==="shared_30_v1"?"Create shared queue draft":"Generate draft plan"}</button>
+      {created&&<div className="job-plan-summary">{"primary_blocks" in created?<>
+        <strong>{created.primary_blocks} primary blocks planned</strong>
+        <p>{created.unique_frames} source frames · {created.short_tails} short blocks · {created.repeat_frames} repeat frames</p>
+      </>:<>
+        <strong>{created.job_count} jobs created in a draft</strong>
+        <p>{created.assets} source frames · {created.min_frames_per_team}–{created.max_frames_per_team} frames per team</p>
+      </>}</div>}
       <div className="job-plan-history"><h4>Plans in this event</h4>
         {plans.map(plan=><div className="job-plan-row" key={plan.id}>
-          <div><strong>{plan.jobs_per_team===0?"Manual assignments":"Automatic plan"} · {plan.status}</strong>
-            <span>{plan.jobs_per_team===0?"Jobs added as needed":
+          <div><strong>{plan.mode==="shared_30_v1"?"Shared 30-image queue":
+            plan.jobs_per_team===0?"Manual assignments":"Whole-video plan"} · {plan.status}</strong>
+            <span>{datasets.find(item=>item.id===plan.dataset_id)?.name||plan.dataset_id}</span>
+            <span>{plan.mode==="shared_30_v1"?"Up to 30 images per assignment":plan.jobs_per_team===0?"Jobs added as needed":
               plan.jobs_per_team+" maximum jobs/team · "+(plan.redundancy===1?"No overlap":"Legacy overlap plan")}</span></div>
           {plan.status==="planned"&&<button className="btn secondary" disabled={busy}
             onClick={()=>void approve(plan)}><ClipboardCheck size={15}/> Approve</button>}
           {plan.status==="approved"&&<button className="btn primary" disabled={busy}
             onClick={()=>void nativeAction("/native/launch",
-              "Launch this plan? The worker creates one native job per individual annotator.",
+              plan.mode==="shared_30_v1"?
+                "Launch this shared queue? The worker will assign available blocks to eligible annotators.":
+                "Launch this plan? The worker creates one native job per individual annotator.",
               {plan_id:plan.id})}><PlayCircle size={15}/> Launch plan</button>}
-          {plan.status==="running"&&plan.jobs_per_team!==0&&<button className="btn secondary"
+          {plan.status==="running"&&(plan.mode==="shared_30_v1"||plan.jobs_per_team!==0)&&<button className="btn secondary"
             disabled={busy} onClick={()=>void nativeAction(
               "/native/plans/"+plan.id+"/pause","Pause automatic releases?")}>Pause releases</button>}
           {plan.status==="paused"&&<button className="btn primary" disabled={busy}
