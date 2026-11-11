@@ -14,7 +14,7 @@ type Balance={person_id:string;category_id:string;allocated:number;issued:number
   allocated_remaining:number;issued_remaining:number};
 
 export function TicketsScreen({auth}:{auth:Auth}) {
-  const canDistribute=auth.staff.roles.some(r=>["organiser","distribution","reception"].includes(r));
+  const canDistribute=auth.staff.roles.some(r=>["organiser","monitor","distribution","reception"].includes(r));
   const organiser=auth.staff.roles.includes("organiser");
   const [section,setSection]=useState<"distribution"|"policies"|"history">("distribution");
   const [categories,setCategories]=useState<Category[]>([]);

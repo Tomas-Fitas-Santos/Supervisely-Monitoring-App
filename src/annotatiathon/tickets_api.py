@@ -22,7 +22,7 @@ from .models import (
 
 router = APIRouter(prefix="/api/v1/tickets", tags=["tickets"])
 VIEW_ROLES = ("organiser", "distribution", "reception", "activity", "monitor", "observer")
-ACTION_ROLES = ("organiser", "distribution", "reception")
+ACTION_ROLES = ("organiser", "monitor", "distribution", "reception")
 
 
 class TicketCategoryInput(BaseModel):

@@ -21,7 +21,7 @@ const localDate=(value:number|null)=>value?new Date(value*1000).toLocaleString()
 const parseInput=(value:string)=>value?Math.floor(new Date(value).getTime()/1000):null;
 
 export function ActivitiesScreen({auth}:{auth:Auth}) {
-  const canEdit=auth.staff.roles.some(r=>r==="organiser"||r==="activity");
+  const canEdit=auth.staff.roles.some(r=>r==="organiser"||r==="activity"||r==="monitor");
   const organiser=auth.staff.roles.includes("organiser");
   const [section,setSection]=useState<"schedule"|"results">("schedule");
   const [items,setItems]=useState<Activity[]>([]);
@@ -218,7 +218,7 @@ export function ActivitiesScreen({auth}:{auth:Auth}) {
               <tbody>{detail.results.map(r=><tr key={r.id}>
                 <td><strong>#{r.rank}</strong></td><td>{r.subject_name} <span className="muted small">({r.subject_type})</span></td>
                 <td>{r.score_points??"—"}</td>
-                <td>{canEdit&&!frozen?<button className="link-button" disabled={busy}
+                <td>{organiser&&!frozen?<button className="link-button" disabled={busy}
                   onClick={()=>void removeResult(r)}><Trash2 size={14}/> Remove</button>:"—"}</td>
               </tr>)}</tbody></table></div>:<p className="muted small">No results entered.</p>}
             {canEdit&&!frozen&&<form className="activity-result-form" onSubmit={e=>void saveResult(e)}>

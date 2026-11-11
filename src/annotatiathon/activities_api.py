@@ -29,7 +29,7 @@ from .models import (
 
 router = APIRouter(prefix="/api/v1/activities", tags=["activities"])
 VIEW_ROLES = ("organiser", "activity", "monitor", "reception", "distribution", "observer")
-EDIT_ROLES = ("organiser", "activity")
+EDIT_ROLES = ("organiser", "monitor", "activity")
 
 
 class ActivityCreate(BaseModel):
@@ -298,7 +298,7 @@ def record_result(
 @router.delete("/{activity_id}/results/{result_id}", status_code=204)
 def remove_result(
     activity_id: str, result_id: str,
-    ctx: AuthContext = Depends(requires(*EDIT_ROLES, mutation=True)),
+    ctx: AuthContext = Depends(requires("organiser", mutation=True)),
     db: Session = Depends(get_db),
 ):
     event = current_event(db, ctx, writable=True)

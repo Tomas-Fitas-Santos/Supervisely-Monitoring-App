@@ -220,4 +220,7 @@ def test_redemption_cannot_exceed_physical_issuance_and_role_isolation(setup):
     assert client.get("/api/v1/tickets/categories").status_code == 200
     assert client.post("/api/v1/tickets/preview", headers={"X-CSRF-Token": monitor_csrf},
       json={"category_id": category, "operation": "issue", "quantity": 1,
-            "selection": {"scope": "individuals", "person_ids": [person]}}).status_code == 403
+            "selection": {"scope": "individuals", "person_ids": [person]}}).status_code == 200
+    assert client.post("/api/v1/tickets/categories",
+        headers={"X-CSRF-Token": monitor_csrf},
+        json={"slug": "forbidden", "name": "Forbidden"}).status_code == 403
