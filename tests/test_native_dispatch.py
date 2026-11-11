@@ -176,28 +176,6 @@ class MockSDK:
                 (dataset_id is None or j.dataset_id == dataset_id) and
                 (project_id is None or j.project_id == project_id)]
 
-    def jobs_project_meta(self, job_id):
-        job = next(j for j in self.jobs if j.id == job_id)
-        return {"native_job_id": job_id, "project_id": job.project_id}
-
-    def jobs_annotations(self, job_id, image_ids, project_meta):
-        assert project_meta["native_job_id"] == job_id
-        job = next(j for j in self.jobs if j.id == job_id)
-        assert set(image_ids).issubset(set(job.image_ids))
-        # Each annotator's JSON is independently attributable to their job,
-        # even when they share source image IDs in the pre-uploaded pool.
-        def annotation(image_id):
-            return Obj(to_json=lambda _meta: {
-                "size": {"width": 100, "height": 100},
-                "objects": [{
-                    "classTitle": "bird", "geometryType": "rectangle",
-                    "points": {"exterior": [[12, 12], [82, 88]], "interior": []},
-                    "tags": [{"job_id": job_id, "image_id": image_id}],
-                }],
-                "tags": [],
-            })
-        return [annotation(image_id) for image_id in image_ids]
-
     def jobs_get_project_meta(self, job_id):
         job = next(item for item in self.jobs if item.id == job_id)
         return self.project_metas[job.project_id]
@@ -212,6 +190,7 @@ class MockSDK:
             "objects": [{
                 "classTitle": "bird", "geometryType": "rectangle",
                 "points": {"exterior": [[12, 12], [82, 88]], "interior": []},
+                "tags": [{"job_id": job_id, "image_id": iid}],
             }],
             "tags": [],
         }) for image_id in image_ids]
