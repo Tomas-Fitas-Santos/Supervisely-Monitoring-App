@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { api, refreshSuperviselyRoster, type Auth } from "./api";
 import { PeopleScreen } from "./people";
+import { AttendanceScreen } from "./attendance";
 import { SettingsScreen } from "./settings";
 import { EventSelector } from "./events";
 import { StaffScreen } from "./staff";
@@ -18,7 +19,9 @@ import { QualityScreen } from "./reviews";
 import { CloseoutScreen } from "./closeout";
 import "./styles.css";
 
-type Tab = "overview" | "people" | "tickets" | "activities" | "datasets" | "competition" | "quality" | "closeout" | "staff" | "settings";
+type Tab = "overview" | "checkin" | "tickets" | "activities" | "competition" |
+  "quality" | "closeout" | "people" | "datasets" | "job_setup" |
+  "staff" | "settings" | "account";
 
 function Login({ onLogin }: { onLogin: (auth: Auth) => void }) {
   const [mode,setMode] = useState<"login"|"register">("login");
@@ -208,35 +211,59 @@ function App() {
   if (loading) return <div className="loading-screen"><Bird size={33}/> Loading Nightjar…</div>;
   if (!auth) return <Login onLogin={a=>{setAuth(a);setTab("overview");}}/>;
   const has=(...roles:string[])=>auth.staff.roles.some(role=>roles.includes(role));
-  const navigation: {id:Tab;label:string;icon:typeof LayoutDashboard}[] = [
+  const organiser=has("organiser");
+  const eventNavigation: {id:Tab;label:string;icon:typeof LayoutDashboard}[] = [
     {id:"overview",label:"Overview",icon:LayoutDashboard},
-    {id:"people",label:"People & Teams",icon:UsersRound},
+    ...(has("organiser","monitor","reception")?
+      [{id:"checkin" as Tab,label:"Check-in",icon:CheckCircle2}]:[]),
     ...(has("organiser","monitor","reception","distribution","activity")?
       [{id:"tickets" as Tab,label:"Tickets & Rewards",icon:Ticket}]:[]),
-    ...(has("organiser","activity","monitor","reception")?
+    ...(has("organiser","monitor","activity","reception")?
       [{id:"activities" as Tab,label:"Activities & Prizes",icon:Activity}]:[]),
-    ...(has("organiser","monitor","observer")?
-      [{id:"datasets" as Tab,label:"Dataset",icon:Database}]:[]),
     ...(has("organiser","monitor","observer","activity")?
-      [{id:"competition" as Tab,label:"Competition & Jobs",icon:UsersRound}]:[]),
+      [{id:"competition" as Tab,label:"Job Progress",icon:UsersRound}]:[]),
     ...(has("organiser","monitor","observer")?
       [{id:"quality" as Tab,label:"Monitoring & Review",icon:ClipboardCheck}]:[]),
     ...(has("organiser","monitor","observer")?
-      [{id:"closeout" as Tab,label:"Results & Exports",icon:CalendarDays}]:[]),
-    ...(has("organiser","monitor") ? [{id:"staff" as Tab,label:"Staff Access",icon:ShieldCheck}] : []),
-    {id:"settings",label:"Settings",icon:Settings2},
+      [{id:"closeout" as Tab,label:"Results & Rankings",icon:CalendarDays}]:[]),
   ];
+  const setupNavigation: {id:Tab;label:string;icon:typeof LayoutDashboard}[] = organiser?[
+    {id:"people",label:"People & Teams",icon:UsersRound},
+    {id:"datasets",label:"Dataset",icon:Database},
+    {id:"job_setup",label:"Job Distribution",icon:Cloud},
+    {id:"staff",label:"Staff Access",icon:ShieldCheck},
+    {id:"settings",label:"Settings",icon:Settings2},
+  ]:[];
+  const accountNavigation: {id:Tab;label:string;icon:typeof LayoutDashboard}[] =
+    organiser?[]:[{id:"account",label:"My Supervisely Account",icon:Settings2}];
+  const navigation=[...eventNavigation,...setupNavigation,...accountNavigation];
   const accessibleTab=navigation.some(item=>item.id===tab)?tab:"overview";
   return <div className="app-shell">
     <aside className="sidebar">
       <div className="sidebar-logo"><div className="brand-mark"><Bird size={23}/></div>
         <div><strong>NIGHTJAR</strong><span>ANNOTATIATHON</span></div></div>
-      <div className="sidebar-label">WORKSPACE</div>
-      <nav aria-label="Main navigation">
-        {navigation.map(item=><button key={item.id} className={"nav-link "+(accessibleTab===item.id?"active":"")}
+      <div className="sidebar-label">EVENT OPERATIONS</div>
+      <nav aria-label="Event operations">
+        {eventNavigation.map(item=><button key={item.id} className={"nav-link "+(accessibleTab===item.id?"active":"")}
           onClick={()=>setTab(item.id)}><item.icon size={19}/>{item.label}
-          {tab===item.id&&<ArrowRight size={15} className="nav-end"/>}</button>)}
+          {accessibleTab===item.id&&<ArrowRight size={15} className="nav-end"/>}</button>)}
       </nav>
+      {organiser&&<>
+        <div className="sidebar-label section-break">EVENT SETUP · ORGANISERS</div>
+        <nav aria-label="Organiser event setup">
+          {setupNavigation.map(item=><button key={item.id} className={"nav-link "+(accessibleTab===item.id?"active":"")}
+            onClick={()=>setTab(item.id)}><item.icon size={19}/>{item.label}
+            {accessibleTab===item.id&&<ArrowRight size={15} className="nav-end"/>}</button>)}
+        </nav>
+      </>}
+      {accountNavigation.length>0&&<>
+        <div className="sidebar-label section-break">ACCOUNT</div>
+        <nav aria-label="My account">
+          {accountNavigation.map(item=><button key={item.id} className={"nav-link "+(accessibleTab===item.id?"active":"")}
+            onClick={()=>setTab(item.id)}><item.icon size={19}/>{item.label}
+            {accessibleTab===item.id&&<ArrowRight size={15} className="nav-end"/>}</button>)}
+        </nav>
+      </>}
       <div className="sidebar-spacer"/>
       <div className="sidebar-info"><Database size={17}/><div><strong>Shared database</strong>
         <span>PostgreSQL · Shared state</span></div></div>
@@ -255,15 +282,17 @@ function App() {
           <span className="topbar-avatar">{auth.staff.name.slice(0,1).toUpperCase()}</span></div>
       </header>
       {accessibleTab==="overview"&&<Overview auth={auth}/>}
-      {accessibleTab==="people"&&<PeopleScreen auth={auth}/>}
+      {accessibleTab==="people"&&organiser&&<PeopleScreen auth={auth}/>}
+      {accessibleTab==="checkin"&&<AttendanceScreen auth={auth}/>}
       {accessibleTab==="tickets"&&<TicketsScreen auth={auth}/>}
       {accessibleTab==="activities"&&<ActivitiesScreen auth={auth}/>}
-      {accessibleTab==="datasets"&&<DatasetWorkspace auth={auth}/>}
-      {accessibleTab==="competition"&&<CompetitionScreen auth={auth}/>}
+      {accessibleTab==="datasets"&&organiser&&<DatasetWorkspace auth={auth}/>}
+      {accessibleTab==="competition"&&<CompetitionScreen auth={auth} view="progress"/>}
+      {accessibleTab==="job_setup"&&organiser&&<CompetitionScreen auth={auth} view="setup"/>}
       {accessibleTab==="quality"&&<QualityScreen auth={auth}/>}
       {accessibleTab==="closeout"&&<CloseoutScreen auth={auth}/>}
-      {accessibleTab==="staff"&&has("organiser","monitor")&&<div className="page-body"><div className="page-heading"><div><span className="eyebrow">STAFF DIRECTORY</span><h2>Staff Access</h2><p className="muted">All monitors can view staff roles. Only organisers may change account permissions.</p></div></div><StaffScreen auth={auth}/></div>}
-      {accessibleTab==="settings"&&<SettingsScreen auth={auth}/>}
+      {accessibleTab==="staff"&&organiser&&<div className="page-body"><div className="page-heading"><div><span className="eyebrow">EVENT SETUP · PERMISSIONS</span><h2>Staff Access</h2><p className="muted">Only organisers manage Nightjar staff roles and permissions.</p></div></div><StaffScreen auth={auth}/></div>}
+      {((accessibleTab==="settings"&&organiser)||accessibleTab==="account")&&<SettingsScreen auth={auth}/>}
       <footer className="page-footer"><Bird size={14}/> Nightjar Annotatiathon · Técnico</footer>
     </div>
   </div>;

@@ -35,9 +35,13 @@ type AssigneeOption={id:string;name:string;team_name:string;team_id:string;nativ
 type MirrorStatus={state:string;uploaded_frames:number;total_frames:number;
   ready_for_automatic_jobs:boolean;error_code:string|null};
 
-export function CompetitionScreen({auth}:{auth:Auth}) {
+export function CompetitionScreen({auth,view="progress"}:{
+  auth:Auth;view?:"progress"|"setup"
+}) {
   const admin=auth.staff.roles.includes("organiser");
-  const [section,setSection]=useState<"overview"|"manual"|"automatic">("overview");
+  const [section,setSection]=useState<"overview"|"manual"|"automatic">(
+    view==="setup"?"manual":"overview"
+  );
   const [datasets,setDatasets]=useState<Dataset[]>([]);
   const [dataset,setDataset]=useState("");
   const [plans,setPlans]=useState<Plan[]>([]);
@@ -236,9 +240,11 @@ export function CompetitionScreen({auth}:{auth:Auth}) {
 
   return <div className="page-body">
     <div className="page-heading"><div>
-      <span className="eyebrow">ANNOTATIATHON · JOB OPERATIONS</span>
-      <h2>Competition & Jobs</h2>
-      <p className="muted">Create manual assignments, manage the publishing queue and configure optional automatic distribution in separate workspaces.</p>
+      <span className="eyebrow">{view==="setup"?"EVENT SETUP · JOB DISTRIBUTION":"EVENT OPERATIONS · JOB STATUS"}</span>
+      <h2>{view==="setup"?"Job Distribution":"Job Progress"}</h2>
+      <p className="muted">{view==="setup"?
+        "Create and publish jobs using the manual or automatic distribution tools.":
+        "Follow the publishing queue, annotation progress and submissions."}</p>
     </div><button className="btn secondary" onClick={()=>{void refresh();void refreshOptions();}}>
       <RefreshCw size={15}/> Refresh status</button></div>
     {error&&<div role="alert" className="alert danger">{error}</div>}
@@ -246,9 +252,9 @@ export function CompetitionScreen({auth}:{auth:Auth}) {
     <nav className="workspace-subtabs" aria-label="Competition and jobs sections">
       <button className={section==="overview"?"active":""} onClick={()=>setSection("overview")}>
         Jobs & worker queue</button>
-      {admin&&<button className={section==="manual"?"active":""} onClick={()=>setSection("manual")}>
+      {admin&&view==="setup"&&<button className={section==="manual"?"active":""} onClick={()=>setSection("manual")}>
         Create video jobs</button>}
-      {admin&&<button className={section==="automatic"?"active":""} onClick={()=>setSection("automatic")}>
+      {admin&&view==="setup"&&<button className={section==="automatic"?"active":""} onClick={()=>setSection("automatic")}>
         Automatic distribution</button>}
     </nav>
     {section==="overview"&&<div className="stat-grid compact">
@@ -257,7 +263,7 @@ export function CompetitionScreen({auth}:{auth:Auth}) {
       <div className="stat-card"><CheckCircle2 size={19}/><span className="muted small">Accepted</span><strong>{complete}</strong></div>
     </div>}
 
-    {admin&&section==="manual"&&<section className="panel manual-job-panel">
+    {admin&&view==="setup"&&section==="manual"&&<section className="panel manual-job-panel">
       <button className="btn secondary" disabled={busy} onClick={()=>void syncAssignees()}>
         <RefreshCw size={15}/> Refresh Supervisely accounts</button>
       <div className="panel-heading">
@@ -369,7 +375,7 @@ export function CompetitionScreen({auth}:{auth:Auth}) {
               {binding.native_status.replaceAll("_"," ")}</span>
           </div>)}
           {!selectedJob.native_submissions?.length&&<p className="muted small">No native job yet. If published, the worker will create it.</p>}
-          {admin&&selectedJob.assignee_person_id&&
+          {admin&&view==="setup"&&selectedJob.assignee_person_id&&
             !["on_review","completed","needs_correction"].includes(selectedJob.status)&&
             <div className="manual-reassignment">
               <h4>Change assigned annotator</h4>
@@ -382,7 +388,7 @@ export function CompetitionScreen({auth}:{auth:Auth}) {
               <button className="btn secondary" disabled={!reassignTo||busy}
                 onClick={()=>void reassignSelected()}>Reassign job</button>
             </div>}
-          {admin&&selectedJob.release_mode==="manual_hold"&&<button className="btn primary"
+          {admin&&view==="setup"&&selectedJob.release_mode==="manual_hold"&&<button className="btn primary"
             disabled={busy} onClick={()=>void nativeAction(
               "/labeling/manual/jobs/"+selectedJob.id+"/publish",
               "Publish this saved video assignment to Supervisely?")}>
@@ -427,7 +433,7 @@ export function CompetitionScreen({auth}:{auth:Auth}) {
     </section>}
 
     </>}
-    {admin&&section==="automatic"&&<section className="panel manual-automatic-panel">
+    {admin&&view==="setup"&&section==="automatic"&&<section className="panel manual-automatic-panel">
       <div className="panel-heading"><div><span className="eyebrow">AUTOMATIC PLANNING</span>
         <h3>Generate jobs from a video collection</h3>
         <p>Automatically distribute whole videos across eligible teams, with one job per person and video.</p>

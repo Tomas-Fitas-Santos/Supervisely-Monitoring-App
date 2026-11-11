@@ -9,7 +9,6 @@ import { NativeMembershipPanel } from "./native";
 import { InvitationBatches } from "./invitation_batches";
 import { MonitorAssignmentsPanel } from "./monitoring";
 import { MonitorPairPanel } from "./monitor_pairs";
-import { AttendanceScreen } from "./attendance";
 
 type PersonForm = {name:string;email:string;kind:"participant"|"monitor";team_name:string;
   date_of_birth:string;phone:string;under_18:string;image_consent:string;
@@ -104,7 +103,7 @@ function RosterImporter({auth,onComplete}:{auth:Auth;onComplete:()=>void}) {
 
 export function PeopleScreen({auth}:{auth:Auth}) {
   const admin=auth.staff.roles.includes("organiser");
-  const [mode,setMode]=useState<"teams"|"people"|"checkin"|"setup">("people");
+  const [mode,setMode]=useState<"teams"|"people"|"setup">("people");
   const [teams,setTeams]=useState<Team[]>([]);
   const [people,setPeople]=useState<PeopleResponse>({items:[],total:0,page:1,size:50});
   const [sort,setSort]=useState<"name"|"check_in"|"size">("name");
@@ -302,10 +301,8 @@ export function PeopleScreen({auth}:{auth:Auth}) {
     <nav className="workspace-subtabs" aria-label="People and teams sections">
       <button className={mode==="people"?"active":""} onClick={()=>setMode("people")}>People & monitors</button>
       <button className={mode==="teams"?"active":""} onClick={()=>setMode("teams")}>Teams</button>
-      <button className={mode==="checkin"?"active":""} onClick={()=>setMode("checkin")}>Check-in</button>
       {admin&&<button className={mode==="setup"?"active":""} onClick={()=>setMode("setup")}>Invitations & assignments</button>}
     </nav>
-    {mode==="checkin"&&<AttendanceScreen auth={auth}/>}
     {admin&&mode==="setup"&&<div className="toolbar-secondary">
       <button className="btn secondary" onClick={()=>setShowImporter(v=>!v)}><FileSpreadsheet size={17}/>
         {showImporter?"Close roster import":"Import CSV roster"}</button>
