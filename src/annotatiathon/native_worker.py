@@ -801,10 +801,11 @@ def process_export_once(db: Session, api) -> dict | None:
 
 
 def process_event_reset(db: Session, api, config: SuperviselyConfig) -> dict | None:
-    """Archive only event-prefixed Nightjar projects, then clear the local event.
+    """Delete owned native jobs, archive their datasets/projects, then reset.
 
-    Remote archiving is idempotent and retried explicitly after failures.
-    It cannot remove the Supervisely team, workspace or membership records.
+    Retries are idempotent by querying remote resources again. Standard team
+    tokens cannot permanently purge archived datasets or projects, but native
+    labeling jobs can be removed. Team and membership data are never touched.
     """
     op = db.scalar(select(NativeOperation).where(
         NativeOperation.kind == "reset_event",
@@ -825,40 +826,96 @@ def process_event_reset(db: Session, api, config: SuperviselyConfig) -> dict | N
     opid, event_id = op.id, event.id
     db.commit()
     try:
-        # Do not touch workspace assets not created under the exact event prefix.
-        scope = "Nightjar-" + event_id + "-"
+        # Reset only the precise event, not the Supervisely team or workspace.
         workspace = api.workspace.get_info_by_id(config.workspace_id)
         if workspace is None or workspace.team_id != config.team_id:
             raise NativeWorkerError("reset_workspace_team_mismatch")
-        projects = list(api.project.get_list(config.workspace_id))
-        matched = sorted((p for p in projects if p.name.startswith(scope)),
-                         key=lambda p: p.id)
-        linked = {
-            ds.native_project_id: scope + ds.id
-            for ds in db.scalars(select(MediaDataset).where(
-                MediaDataset.event_id == event_id,
-            )) if ds.native_project_id is not None
+        source_datasets = list(db.scalars(select(MediaDataset).where(
+            MediaDataset.event_id == event_id,
+        )))
+        expected_by_id = {
+            ds.native_project_id: {
+                legacy_project_name(ds),
+                project_name(event, ds),
+            }
+            for ds in source_datasets if ds.native_project_id is not None
         }
-        if linked.keys() - {p.id for p in matched}:
-            # Already archived projects can be absent from normal listings.
-            # Some SDK deployments still resolve archived projects by ID.
-            for pid in linked.keys() - {p.id for p in matched}:
-                remote = api.project.get_info_by_id(pid)
-                if remote is not None and (
-                    remote.name != linked[pid] or
-                    remote.workspace_id != config.workspace_id
-                ):
-                    # Never silently leave a moved/renamed project behind.
-                    raise NativeWorkerError("reset_linked_project_outside_scope")
-        # Check local file deletion targets before any remote change.
-        paths = safe_dataset_paths(db, event_id)
+        visible = list(api.project.get_list(config.workspace_id))
+        matched = sorted(
+            (p for p in visible if owned_project_event_id(p.name) == event_id),
+            key=lambda p: p.id,
+        )
+        found_ids = {p.id for p in matched}
         for project in matched:
+            expected = expected_by_id.get(project.id)
+            if expected is not None and project.name not in expected:
+                raise NativeWorkerError("reset_project_identity_conflict")
+        # Check stored references before touching anything. A project renamed
+        # or moved after publishing cannot be deleted by name guessing.
+        for pid, names in expected_by_id.items():
+            if pid in found_ids:
+                continue
+            remote = api.project.get_info_by_id(pid)
+            if remote is not None and (
+                remote.name not in names
+                or remote.workspace_id != config.workspace_id
+            ):
+                raise NativeWorkerError("reset_linked_project_outside_scope")
+            # A project previously archived is absent from active listings.
+            # Job IDs remain available in the local bindings for cleanup.
+        paths = safe_dataset_paths(db, event_id)
+        removed_jobs = 0
+        archived_datasets = 0
+        archived_projects = 0
+
+        # Native job IDs are stored locally even after their project is
+        # archived. Remove explicit bindings first to eliminate historical
+        # jobs that archive-only resets left in Supervisely's Jobs view.
+        bindings = list(db.scalars(select(NativeJobBinding).where(
+            NativeJobBinding.event_id == event_id,
+        )))
+        for binding in bindings:
+            remote = api.labeling_job.get_info_by_id(binding.native_job_id)
+            if remote is None:
+                continue
+            local = db.get(LabelingJob, binding.job_id)
+            if (local is None or local.native_dataset_id is None
+                    or remote.dataset_id != local.native_dataset_id):
+                raise NativeWorkerError("reset_native_job_identity_conflict")
+            api.labeling_job.remove(binding.native_job_id)
+            removed_jobs += 1
+            if api.labeling_job.get_info_by_id(binding.native_job_id) is not None:
+                raise NativeWorkerError("reset_native_job_still_visible")
+
+        for project in matched:
+            # This project is Nightjar-owned for the selected event, not a
+            # shared Supervisely workspace project. Remove all its jobs first
+            # so ordinary project archival does not retain live labeling jobs.
+            for dataset in list(api.dataset.get_list(project.id)):
+                if dataset.project_id != project.id:
+                    raise NativeWorkerError("reset_dataset_identity_conflict")
+                active_jobs = list(api.labeling_job.get_list(
+                    config.team_id, dataset_id=dataset.id, show_disabled=True,
+                ))
+                for native in active_jobs:
+                    if native.dataset_id != dataset.id:
+                        raise NativeWorkerError("reset_native_job_dataset_mismatch")
+                    api.labeling_job.remove(native.id)
+                    removed_jobs += 1
+                if api.labeling_job.get_list(
+                    config.team_id, dataset_id=dataset.id, show_disabled=True,
+                ):
+                    raise NativeWorkerError("reset_native_jobs_still_visible")
+                # Standard Supervisely token can archive datasets, not
+                # permanently erase them (root instance access required).
+                api.dataset.remove(dataset.id)
+                archived_datasets += 1
+            if api.dataset.get_list(project.id):
+                raise NativeWorkerError("reset_remote_datasets_still_visible")
             api.project.remove(project.id)
-        remaining = [
-            p.name for p in api.project.get_list(config.workspace_id)
-            if p.name.startswith(scope)
-        ]
-        if remaining:
+            archived_projects += 1
+        if any(owned_project_event_id(p.name) == event_id
+               for p in api.project.get_list(config.workspace_id)):
             raise NativeWorkerError("reset_remote_projects_still_visible")
         for path in paths:
             if path.exists():
@@ -890,12 +947,16 @@ def process_event_reset(db: Session, api, config: SuperviselyConfig) -> dict | N
         db.add(AuditEvent(
             event_id=event_id, action="event.reset.complete",
             target_type="event", target_id=event_id,
-            details={"archived_projects": len(matched),
+            details={"archived_projects": archived_projects,
+                     "archived_datasets": archived_datasets,
+                     "removed_native_jobs": removed_jobs,
                      "removed_dataset_directories": len(paths)},
         ))
         db.commit()
         return {"status": "done", "operation_id": opid,
-                "archived_projects": len(matched)}
+                "archived_projects": archived_projects,
+                "archived_datasets": archived_datasets,
+                "removed_native_jobs": removed_jobs}
     except Exception as exc:  # noqa: BLE001 - preserve safe retry state
         db.rollback()
         failed = db.get(NativeOperation, opid)
