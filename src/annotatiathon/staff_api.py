@@ -18,7 +18,7 @@ class RolesChange(BaseModel):
 
 @router.get("")
 def list_staff(
-    _ctx: AuthContext = Depends(requires("organiser", "monitor")),
+    _ctx: AuthContext = Depends(requires("organiser")),
     db: Session = Depends(get_db),
 ):
     staff = db.scalars(select(StaffAccount).order_by(StaffAccount.name)).all()

@@ -152,15 +152,17 @@ def test_no_secret_allowed_in_settings_payload(client):
     assert "api_token" not in http.get("/api/v1/settings/supervisely").json()["settings"]
 
 
-def test_monitor_reads_staff_and_reports_but_cannot_modify_privileges(client):
+def test_monitor_can_read_results_but_cannot_access_setup_or_modify_privileges(client):
     http, _maker = client
     csrf = sign_in(http, "monitor@example.org", "CorrectSecretPassword2!")
-    assert http.get("/api/v1/staff").status_code == 200
+    assert http.get("/api/v1/staff").status_code == 403
     assert http.get("/api/v1/closeout/report").status_code == 200
     assert http.get("/api/v1/native/export").status_code == 200
     assert http.get("/api/v1/closeout/exports/jobs").status_code == 200
     assert http.get("/api/v1/settings/supervisely").status_code == 200
-    staff_id = http.get("/api/v1/staff").json()["items"][0]["id"]
+    with _maker() as db:
+        staff_id = db.scalar(select(StaffAccount.id).where(
+            StaffAccount.email == "organiser@example.org"))
     assert http.put("/api/v1/staff/"+staff_id+"/roles",
         headers={"X-CSRF-Token": csrf}, json={"roles":["organiser"]}).status_code == 403
     assert http.post("/api/v1/closeout/finalize",
