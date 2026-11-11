@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from .config import get_settings
 from .db import get_db
-from .models import DEFAULT_EVENT_ID, AuditEvent, Event, Person, StaffAccount, StaffSession
+from .models import DEFAULT_EVENT_ID, AuditEvent, Event, StaffAccount, StaffSession
 from .security import DUMMY_HASH, password_matches, random_token, token_digest
 
 router = APIRouter(prefix="/api/v1/auth", tags=["authentication"])
@@ -69,32 +69,6 @@ def same_origin(request: Request) -> None:
         raise HTTPException(status_code=403, detail="Cross-origin action denied.")
 
 
-def monitor_roster_access(db: Session, staff: StaffAccount, event_id: str | None) -> bool:
-    """Require an active, approved SQL monitor roster record when present.
-
-    Nightjar access depends on its own roster, not on Supervisely team
-    membership. Linking Supervisely is a separate authenticated action.
-    Organisers retain protected access.
-    """
-    if "organiser" in staff.roles or "monitor" not in staff.roles:
-        return True
-    rows = list(db.scalars(select(Person).where(
-        Person.email == staff.email,
-        Person.event_id == (event_id or DEFAULT_EVENT_ID),
-    )))
-    if not rows:
-        return True
-    return any(
-        p.kind == "monitor" and p.active
-        and (p.source_fields or {}).get(
-            "monitor_registration_approved",
-            (p.source_fields or {}).get("source") != "supervisely_member_sync",
-        ) is True
-
-        for p in rows
-    )
-
-
 def get_context(request: Request, db: Session = Depends(get_db)) -> AuthContext:
     token = request.cookies.get("annotatiathon_session", "")
     if not token:
@@ -105,8 +79,6 @@ def get_context(request: Request, db: Session = Depends(get_db)) -> AuthContext:
     staff = db.get(StaffAccount, session.staff_id)
     if staff is None or not staff.active:
         raise HTTPException(status_code=401, detail="Account unavailable.")
-    if not monitor_roster_access(db, staff, session.event_id):
-        raise HTTPException(status_code=403, detail="Monitor access is not approved for this event.")
     return AuthContext(staff=staff, session=session)
 
 
@@ -155,8 +127,6 @@ def login(payload: Credentials, request: Request, response: Response, db: Sessio
     latest_event = db.scalar(select(Event).where(Event.status == "active").order_by(
         Event.created_at.desc(), Event.name.desc()
     ))
-    if not monitor_roster_access(db, staff, latest_event.id if latest_event else DEFAULT_EVENT_ID):
-        raise HTTPException(status_code=403, detail="Monitor access is not approved for this event.")
     db.add(StaffSession(
         id=token_digest(token), staff_id=staff.id,
         event_id=latest_event.id if latest_event is not None else DEFAULT_EVENT_ID,

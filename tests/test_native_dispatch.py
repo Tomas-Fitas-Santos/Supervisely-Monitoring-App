@@ -154,8 +154,16 @@ class MockSDK:
         self.datasets.append(item)
         return item
 
-    def images_list(self, dataset_id):
-        return list(self.images.get(dataset_id, []))
+    def images_list(self, dataset_id, filters=None):
+        images = list(self.images.get(dataset_id, []))
+        if filters is None:
+            return images
+        assert len(filters) == 1
+        assert filters[0]["field"] == "id"
+        assert filters[0]["operator"] == "in"
+        requested = set(filters[0]["value"])
+        # Simulate an API response in a different order than the job frames.
+        return [info for info in reversed(images) if info.id in requested]
 
     def upload_paths(self, dataset_id, names, paths, **kwargs):
         self.upload_history.append((dataset_id, list(names)))
@@ -180,20 +188,29 @@ class MockSDK:
         job = next(item for item in self.jobs if item.id == job_id)
         return self.project_metas[job.project_id]
 
-    def jobs_get_annotations(self, job_id, image_ids, project_meta):
+    def jobs_get_annotations(self, job_id, image_ids=None, project_meta=None,
+                             image_infos=None):
         job = next(item for item in self.jobs if item.id == job_id)
-        assert set(image_ids).issubset(set(job.image_ids))
+        assert image_ids is None and image_infos is not None
+        ids = [info.id for info in image_infos]
+        assert set(ids).issubset(set(job.image_ids))
         assert project_meta == self.project_metas[job.project_id]
-        return [Obj(to_json=lambda meta, iid=image_id: {
-            "name": str(iid) + ".jpg",
-            "size": {"width": 100, "height": 100},
-            "objects": [{
-                "classTitle": "bird", "geometryType": "rectangle",
-                "points": {"exterior": [[12, 12], [82, 88]], "interior": []},
-                "tags": [{"job_id": job_id, "image_id": iid}],
-            }],
-            "tags": [],
-        }) for image_id in image_ids]
+
+        def annotation_for(image_id):
+            def to_json():
+                return {
+                    "name": str(image_id) + ".jpg",
+                    "size": {"width": 100, "height": 100},
+                    "objects": [{
+                        "classTitle": "bird", "geometryType": "rectangle",
+                        "points": {"exterior": [[12, 12], [82, 88]], "interior": []},
+                        "tags": [{"job_id": job_id, "image_id": image_id}],
+                    }],
+                    "tags": [],
+                }
+            return Obj(to_json=to_json)
+
+        return [annotation_for(image_id) for image_id in ids]
 
     def jobs_set_assignees(self, job_id, annotator_id):
         job = next(item for item in self.jobs if item.id == job_id)
@@ -1028,6 +1045,56 @@ def test_manual_duplicate_jobs_use_independent_copies_and_annotator_mappings(con
             assert not (snapshot.parent / "images").exists()
             assert not (snapshot.parent / "videos").exists()
 
+
+
+def test_submitted_job_json_matches_source_frames_even_if_api_reorders(configured):
+    """One JSON per original frame; no images downloaded or frame mix-ups."""
+    http, maker, csrf, _plan, sdk = configured
+    with maker.begin() as db:
+        dataset = db.get(MediaDataset, "dataset01")
+        member = db.scalar(select(Person).where(Person.kind == "participant"))
+        video = "videos/sparrows/order-test"
+        for index in (1, 2):
+            relative = f"{video}/{index:04d}.jpg"
+            source = Path(dataset.root_path) / "media" / relative
+            source.parent.mkdir(parents=True, exist_ok=True)
+            source.write_bytes(b"bird frame")
+            db.add(MediaAsset(
+                event_id=DEFAULT_EVENT_ID, dataset_id=dataset.id,
+                relative_path=relative, morphology="sparrows",
+                kind="video_frame", video_group=video,
+                frame_index=index, size_bytes=10, sha256="a" * 64,
+            ))
+        person_id, team_id = member.id, member.team_id
+    result = call(http, csrf, "/labeling/manual/jobs", {
+        "dataset_id": "dataset01", "dispatch": "publish",
+        "assignments": [{"team_id": team_id, "assignee_person_id": person_id,
+                         "video_group": video}],
+    })
+    assert result.status_code == 201, result.text
+    job_id = result.json()["job_ids"][0]
+    with maker() as db:
+        conf = db.get(SuperviselyConfig, 1)
+        assert process_once(db, sdk, conf)["status"] == "done"
+        local_ids = list(db.get(LabelingJob, job_id).media_ids)
+        mapping = {
+            item.media_id: item.native_image_id
+            for item in db.scalars(select(NativeMediaInstance).where(
+                NativeMediaInstance.job_id == job_id,
+            ))
+        }
+    assert len(local_ids) == 2 and len(mapping) == 2
+    sdk.jobs[-1].status = "on_review"
+    with maker() as db:
+        synced = sync_all(db, sdk, db.get(SuperviselyConfig, 1))
+        assert synced["annotation_snapshots"] == 1, synced
+        assert synced["annotation_sync_errors"] == 0, synced
+    for media_id in local_ids:
+        response = http.get(f"/api/v1/review/jobs/{job_id}/annotations/{media_id}")
+        assert response.status_code == 200, response.text
+        snapshot = response.json()
+        assert snapshot["native_image_id"] == mapping[media_id]
+        assert snapshot["annotation"]["objects"][0]["tags"][0]["image_id"] == mapping[media_id]
 
 
 def test_live_reassignment_updates_supervisely_before_local_team(configured):

@@ -120,6 +120,46 @@ def test_monitor_signup_uses_only_approved_sql_roster_and_app_password(setup):
         )) is None
 
 
+def test_existing_monitor_credentials_survive_roster_and_event_changes(setup):
+    """A successful signup grants a persistent Nightjar account.
+
+    Later roster/event edits cannot invalidate its password or sign-in.
+    Explicit staff deactivation still revokes account access.
+    """
+    http, maker, _ = setup
+    email = "persistent@example.org"
+    password = "PersistentNightjarPassword2026!"
+    with maker.begin() as db:
+        db.add(Person(
+            event_id=DEFAULT_EVENT_ID, email=email,
+            name="Persistent Monitor", kind="monitor",
+        ))
+    created = http.post("/api/v1/auth/register", json={
+        "email": email, "password": password,
+    })
+    assert created.status_code == 201, created.text
+    with maker.begin() as db:
+        roster_person = db.scalar(select(Person).where(Person.email == email))
+        roster_person.source_fields = {"monitor_registration_approved": False}
+        roster_person.active = False
+        db.add(Event(name="Another active event"))
+    # Registration approval is checked when creating the account only.
+    # Staff account credentials and privileges remain database-backed.
+    response = http.post("/api/v1/auth/login", json={
+        "email": email, "password": password,
+    })
+    assert response.status_code == 200, response.text
+    assert response.json()["staff"]["roles"] == ["monitor"]
+    assert http.get("/api/v1/auth/me").status_code == 200
+    with maker.begin() as db:
+        account = db.scalar(select(StaffAccount).where(StaffAccount.email == email))
+        account.active = False
+    assert http.get("/api/v1/auth/me").status_code == 401
+    assert http.post("/api/v1/auth/login", json={
+        "email": email, "password": password,
+    }).status_code == 401
+
+
 def test_account_claim_is_single_use_and_signup_requires_strong_password(setup):
     http, maker, _ = setup
     with maker.begin() as db:

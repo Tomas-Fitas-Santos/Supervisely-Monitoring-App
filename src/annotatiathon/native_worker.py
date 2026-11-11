@@ -594,13 +594,26 @@ def capture_job_annotations(db: Session, api, job: LabelingJob) -> bool:
         if len(bindings) != 1 or bindings[0].person_id != job.assignee_person_id:
             raise NativeWorkerError("submitted_job_binding_not_unique")
         native_job_id = bindings[0].native_job_id
+        # Keep the returned annotation objects in local source-frame order.
+        # get_annotations() follows image_infos ordering, and a filtered
+        # ImageApi.get_list() does not guarantee the order of requested IDs.
+        image_infos = api.image.get_list(
+            job.native_dataset_id,
+            filters=[{"field": "id", "operator": "in", "value": ordered_ids}],
+        )
+        infos_by_id = {info.id: info for info in image_infos}
+        if len(infos_by_id) != len(ordered_ids) or set(infos_by_id) != set(ordered_ids):
+            raise NativeWorkerError("job_annotation_images_missing")
         project_meta = api.labeling_job.get_project_meta(native_job_id)
         downloaded = api.labeling_job.get_annotations(
-            native_job_id, image_ids=ordered_ids, project_meta=project_meta,
+            native_job_id,
+            image_infos=[infos_by_id[image_id] for image_id in ordered_ids],
+            project_meta=project_meta,
         )
         if len(downloaded) != len(ordered_ids):
             raise NativeWorkerError("job_annotation_count_mismatch")
-        annotation_json = [ann.to_json(project_meta) for ann in downloaded]
+        # Supervisely Annotation.to_json() has no project-meta argument.
+        annotation_json = [ann.to_json() for ann in downloaded]
     if any(not isinstance(ann, dict) for ann in annotation_json):
         raise NativeWorkerError("job_annotation_invalid")
     destination.parent.mkdir(parents=True, exist_ok=True)

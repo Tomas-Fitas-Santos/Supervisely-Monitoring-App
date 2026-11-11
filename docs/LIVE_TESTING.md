@@ -102,9 +102,18 @@ If startup fails, inspect the logs:
 docker compose --env-file .env.live -f compose.live.yaml logs --tail=100 migrate api web db
 ```
 
-This live stack has its **own empty database**. Existing local staff logins,
-rosters and datasets are deliberately not copied automatically, and your
-existing `compose.local.yaml` data remains untouched.
+This live stack has its **own PostgreSQL volume**. Existing local-development staff
+logins, rosters and datasets are deliberately not copied automatically.
+**All live-test monitor and organiser accounts (including their password
+hashes) persist across rebuilding the containers, PC restarts, and using a
+different Cloudflare URL as long as this same PostgreSQL volume is retained.**
+They simply sign in again with their existing Nightjar email and password;
+do not register a second time. Passwords are never stored as plaintext.
+Account access is controlled by the persistent staff-account roles/active flag,
+not re-checked against another event's registration roster after signup.
+Changing the PostgreSQL volume, explicitly deleting/resetting staff records, or
+deleting the stack with `down -v` would break this continuity.
+The existing `compose.local.yaml` data remains untouched.
 
 ## 4. Create the first organiser account
 
