@@ -19,11 +19,13 @@ from .models import (
     CompetitionTeam,
     LabelingJob,
     LabelingPlan,
+    MediaDataset,
     NativeJobBinding,
     NativeOperation,
     Person,
     SuperviselyConfig,
 )
+from .native_media_pool import MirrorError, assert_mirror_complete
 from .pair_members import pair_members
 
 router = APIRouter(prefix="/api/v1/native", tags=["Supervisely dispatch"])
@@ -148,6 +150,18 @@ def launch_event(
         raise HTTPException(status_code=404, detail="Labeling plan not found.")
     if plan.status not in {"approved", "running"}:
         raise HTTPException(status_code=409, detail="Approve the labeling plan first.")
+    dataset = db.get(MediaDataset, plan.dataset_id)
+    if dataset is None or dataset.event_id != event.id:
+        raise HTTPException(status_code=409, detail="Source dataset is missing.")
+    if plan.jobs_per_team > 0:
+        try:
+            assert_mirror_complete(db, dataset)
+        except MirrorError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail="Complete the full dataset replication to Supervisely "
+                       "before launching automatic jobs.",
+            ) from exc
     jobs = list(db.scalars(select(LabelingJob).where(
         LabelingJob.event_id == event.id, LabelingJob.plan_id == plan.id,
     ).order_by(LabelingJob.team_id, LabelingJob.sequence)))
