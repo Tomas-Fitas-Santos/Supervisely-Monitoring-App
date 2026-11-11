@@ -26,6 +26,7 @@ from annotatiathon.models import (
     NativeJobRevision,
     NativeMediaInstance,
     NativeOperation,
+    NativeSourceMedia,
     Person,
     StaffAccount,
     SuperviselyConfig,
@@ -34,10 +35,13 @@ from annotatiathon.models import (
 from annotatiathon.native_worker import (
     process_correction_once,
     process_event_reset,
+    process_mirror_once,
+    process_reassignment_once,
     process_export_once,
     process_once,
     sync_all,
 )
+from annotatiathon.native_media_pool import enqueue_mirror
 from annotatiathon.security import password_hash
 
 
@@ -56,6 +60,7 @@ class MockSDK:
         self.images = {}
         self.jobs = []
         self.nextid = 100
+        self.upload_history = []
         self.fail_job_create_once = False
         self.project = Obj(
             get_list=self.projects_list,
@@ -89,6 +94,7 @@ class MockSDK:
         })
         self.labeling_job = Obj(
             get_list=self.jobs_list,
+            set_assignees=self.jobs_set_assignees,
             create=self.jobs_create,
             remove=self.jobs_remove,
             restart=self.jobs_restart,
@@ -150,6 +156,7 @@ class MockSDK:
         return list(self.images.get(dataset_id, []))
 
     def upload_paths(self, dataset_id, names, paths, **kwargs):
+        self.upload_history.append((dataset_id, list(names)))
         assert kwargs["conflict_resolution"] == "skip"
         assert len(names) == len(paths)
         for path in paths:
@@ -167,13 +174,19 @@ class MockSDK:
                 (dataset_id is None or j.dataset_id == dataset_id) and
                 (project_id is None or j.project_id == project_id)]
 
+    def jobs_set_assignees(self, job_id, annotator_id):
+        job = next(item for item in self.jobs if item.id == job_id)
+        job.assigned_to_id = annotator_id
+        return job
+
     def jobs_remove(self, job_id):
         self.removed_jobs.append(job_id)
         self.jobs = [j for j in self.jobs if j.id != job_id]
 
     def jobs_create(self, name, dataset_id, user_ids, images_ids,
                     classes_to_label, readme):
-        assert len(images_ids) == len(self.images[dataset_id])
+        assert images_ids
+        assert set(images_ids).issubset({item.id for item in self.images[dataset_id]})
         assert classes_to_label == [
             "bird", "left_eye", "left_eye_occ", "right_eye", "right_eye_occ",
             "beak", "beak_occ", "crown", "crown_occ",
@@ -272,6 +285,7 @@ def configured(monkeypatch, tmp_path):
             upload_kind="folder", status="ready", root_path=str(root),
             created_by=staff.id,
         )
+        dataset.image_count = len(assets)
         db.add(dataset)
         db.add_all(assets)
         db.flush()
@@ -322,7 +336,16 @@ def configured(monkeypatch, tmp_path):
             "email": "organiser@example.org", "password": "SafeTestingPassword!",
         })
         assert login.status_code == 200
-        yield http, maker, login.json()["csrf_token"], plan_id, MockSDK()
+        sdk = MockSDK()
+        with maker() as db:
+            dataset = db.get(MediaDataset, "dataset01")
+            enqueue_mirror(db, dataset)
+            db.commit()
+            result = process_mirror_once(
+                db, sdk, db.get(SuperviselyConfig, 1),
+            )
+            assert result["status"] == "done", result
+        yield http, maker, login.json()["csrf_token"], plan_id, sdk
     app.dependency_overrides.clear()
     engine.dispose()
 
@@ -406,7 +429,7 @@ def test_initial_release_and_next_after_both_submit(configured):
         assert len(db.scalars(select(NativeOperation)).all()) == 2
         next_run = process_once(db, sdk, config)
         assert next_run["status"] == "done"
-        assert len(sdk.datasets) == 2
+        assert len(sdk.datasets) == 1
         assert len(sdk.jobs) == 4
         assert len(sdk.meta_updates) == 1  # No redundant metadata write per job.
         images_by_dataset = [{i.id for i in sdk.images[d.id]} for d in sdk.datasets]
