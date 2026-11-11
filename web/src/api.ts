@@ -6,7 +6,8 @@ export type Person = {
   id: string; name: string; email: string; kind: "monitor" | "participant";
   team_id: string | null; team_name: string | null; active: boolean;
   membership_status: string; monitor_registration_approved: boolean;
-  native_auto_imported: boolean; supervisely_login: string | null;
+  native_auto_imported: boolean; supervisely_user_id: number | null;
+  supervisely_login: string | null;
   supervisely_role: string | null; native_verified_at: number | null;
   check_in_at: number | null; table_number: number | null;
   date_of_birth?: string; phone?: string; under_18?: string;
