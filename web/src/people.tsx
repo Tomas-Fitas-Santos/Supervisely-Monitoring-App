@@ -274,7 +274,11 @@ export function PeopleScreen({auth}:{auth:Auth}) {
         <td><span className="soft-pill">{p.kind==="monitor"?"Monitor":"Participant"}</span></td>
         <td>{p.team_name||"—"}</td>
         <td><span className={"membership "+(p.membership_status==="joined"?"joined":"")}>
-          {statusName(p.membership_status)}</span>{p.supervisely_role&&<span className="native-role-chip">{p.supervisely_role}</span>}</td>
+          {statusName(p.membership_status)}</span>{p.supervisely_user_id&&p.native_verified_at?
+          <span className="native-role-chip" title={"Supervisely "+(p.supervisely_login||"")+" · User ID "+p.supervisely_user_id}>
+            Linked #{p.supervisely_user_id}</span>:
+          p.membership_status==="joined"&&<span className="native-role-chip">ID missing</span>}
+          {p.supervisely_role&&<span className="native-role-chip">{p.supervisely_role}</span>}</td>
         <td>{p.check_in_at?new Date(p.check_in_at*1000).toLocaleTimeString():"Not arrived"}</td>
         {admin&&<td><button className="link-button" onClick={()=>openEdit(p)}>Edit</button></td>}
       </tr>)}</tbody>
