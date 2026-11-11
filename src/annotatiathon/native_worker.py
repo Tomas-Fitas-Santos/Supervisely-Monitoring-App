@@ -846,6 +846,21 @@ def process_event_reset(db: Session, api, config: SuperviselyConfig) -> dict | N
             key=lambda p: p.id,
         )
         found_ids = {p.id for p in matched}
+        # Previous Nightjar resets only archived projects. Include those
+        # projects so their old native jobs are actually deleted now, even
+        # if the local rows were already cleared by an older reset.
+        all_projects = list(api.project.get_list_all(
+            filters=[{"field": "workspaceId", "operator": "eq",
+                      "value": config.workspace_id}],
+            skip_exported=False,
+        ))
+        archived = sorted(
+            (p for p in all_projects
+             if p.id not in found_ids
+             and p.workspace_id == config.workspace_id
+             and owned_project_event_id(p.name) == event_id),
+            key=lambda p: p.id,
+        )
         for project in matched:
             expected = expected_by_id.get(project.id)
             if expected is not None and project.name not in expected:
@@ -886,6 +901,21 @@ def process_event_reset(db: Session, api, config: SuperviselyConfig) -> dict | N
             removed_jobs += 1
             if api.labeling_job.get_info_by_id(binding.native_job_id) is not None:
                 raise NativeWorkerError("reset_native_job_still_visible")
+
+        # Archived projects are not present in the active workspace listing,
+        # but their old labeling jobs can remain in the team jobs view.
+        for project in archived:
+            for native in list(api.labeling_job.get_list(
+                config.team_id, project_id=project.id, show_disabled=True,
+            )):
+                if native.project_id != project.id:
+                    raise NativeWorkerError("reset_archived_job_identity_conflict")
+                api.labeling_job.remove(native.id)
+                removed_jobs += 1
+            if api.labeling_job.get_list(
+                config.team_id, project_id=project.id, show_disabled=True,
+            ):
+                raise NativeWorkerError("reset_archived_native_jobs_still_visible")
 
         for project in matched:
             # This project is Nightjar-owned for the selected event, not a
