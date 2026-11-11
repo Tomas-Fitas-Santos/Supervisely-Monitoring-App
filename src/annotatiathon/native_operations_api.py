@@ -54,6 +54,19 @@ def native_ready(db: Session) -> SuperviselyConfig:
     return config
 
 
+def native_identity_assignable(person: Person) -> bool:
+    """A verified team member may annotate regardless of their event staff role.
+
+    A local Monitor may temporarily have the native annotator role while
+    role synchronization is pending; this must not hide their verified ID.
+    """
+    return bool(person.supervisely_user_id and
+                person.membership_status == "joined" and
+                person.native_verified_at is not None and
+                (person.supervisely_role or "").lower()
+                in {"annotator", "manager", "admin", "developer"})
+
+
 def team_members(db: Session, job: LabelingJob) -> list[Person]:
     people, kind = pair_members(db, job.event_id, job.team_id)
     if len(people) != 2:
@@ -62,15 +75,10 @@ def team_members(db: Session, job: LabelingJob) -> list[Person]:
             detail="Each team must contain exactly two active roster members.",
         )
     for person in people:
-        role = (person.supervisely_role or "").lower()
-        allowed = (role == "annotator" if kind == "participants"
-                   else role in {"admin", "manager", "developer"})
-        if (not person.supervisely_user_id or person.membership_status != "joined"
-                or person.native_verified_at is None or not allowed):
+        if not native_identity_assignable(person):
             raise HTTPException(
                 status_code=409,
-                detail="Both people must have verified native memberships with "
-                       "roles appropriate to their pair type.",
+                detail="Both people must be verified members of the Supervisely team.",
             )
     ids = [p.supervisely_user_id for p in people]
     if len(set(ids)) != 2:
