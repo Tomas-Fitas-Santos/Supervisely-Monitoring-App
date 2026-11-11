@@ -96,6 +96,8 @@ class MockSDK:
             get_list=self.jobs_list,
             set_assignees=self.jobs_set_assignees,
             create=self.jobs_create,
+            get_project_meta=self.jobs_project_meta,
+            get_annotations=self.jobs_annotations,
             remove=self.jobs_remove,
             restart=self.jobs_restart,
             get_info_by_id=lambda ident: next((j for j in self.jobs if j.id == ident), None),
@@ -174,6 +176,28 @@ class MockSDK:
                 (dataset_id is None or j.dataset_id == dataset_id) and
                 (project_id is None or j.project_id == project_id)]
 
+    def jobs_project_meta(self, job_id):
+        job = next(j for j in self.jobs if j.id == job_id)
+        return {"native_job_id": job_id, "project_id": job.project_id}
+
+    def jobs_annotations(self, job_id, image_ids, project_meta):
+        assert project_meta["native_job_id"] == job_id
+        job = next(j for j in self.jobs if j.id == job_id)
+        assert set(image_ids).issubset(set(job.image_ids))
+        # Each annotator's JSON is independently attributable to their job,
+        # even when they share source image IDs in the pre-uploaded pool.
+        def annotation(image_id):
+            return Obj(to_json=lambda _meta: {
+                "size": {"width": 100, "height": 100},
+                "objects": [{
+                    "classTitle": "bird", "geometryType": "rectangle",
+                    "points": {"exterior": [[12, 12], [82, 88]], "interior": []},
+                    "tags": [{"job_id": job_id, "image_id": image_id}],
+                }],
+                "tags": [],
+            })
+        return [annotation(image_id) for image_id in image_ids]
+
     def jobs_set_assignees(self, job_id, annotator_id):
         job = next(item for item in self.jobs if item.id == job_id)
         job.assigned_to_id = annotator_id
@@ -210,6 +234,7 @@ class MockSDK:
                 id=self.new_id(), name=name, dataset_id=dataset_id,
                 project_id=dataset.project_id,
                 classes_to_label=list(classes_to_label),
+                image_ids=list(images_ids),
                 assigned_to_id=uid, status="pending",
                 images_count=len(images_ids), finished_images_count=0,
             )
@@ -229,6 +254,7 @@ class MockSDK:
             id=self.new_id(), name=title, dataset_id=old.dataset_id,
             project_id=old.project_id,
             assigned_to_id=assignee_ids[0], status="pending",
+            image_ids=list(old.image_ids),
             images_count=old.images_count, finished_images_count=0,
         )
         self.jobs.append(new)
