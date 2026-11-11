@@ -98,8 +98,6 @@ class MockSDK:
             get_annotations=self.jobs_get_annotations,
             get_project_meta=self.jobs_get_project_meta,
             create=self.jobs_create,
-            get_project_meta=self.jobs_project_meta,
-            get_annotations=self.jobs_annotations,
             remove=self.jobs_remove,
             restart=self.jobs_restart,
             get_info_by_id=lambda ident: next((j for j in self.jobs if j.id == ident), None),
@@ -256,7 +254,6 @@ class MockSDK:
                 classes_to_label=list(classes_to_label),
                 image_ids=list(images_ids),
                 assigned_to_id=uid, status="pending",
-                image_ids=list(images_ids),
                 images_count=len(images_ids), finished_images_count=0,
             )
             self.jobs.append(j)
@@ -275,7 +272,6 @@ class MockSDK:
             id=self.new_id(), name=title, dataset_id=old.dataset_id,
             project_id=old.project_id,
             assigned_to_id=assignee_ids[0], status="pending",
-            image_ids=list(old.image_ids),
             image_ids=list(old.image_ids),
             images_count=old.images_count, finished_images_count=0,
         )
