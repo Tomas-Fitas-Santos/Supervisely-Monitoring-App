@@ -22,7 +22,12 @@ from .models import (
     LabelingJob,
     LabelingPlan,
     MediaAsset,
+    MonitorAssignment,
+    MonitorPairMember,
+    NativeJobBinding,
+    NativeOperation,
     Person,
+    epoch,
 )
 from .native_operations_api import native_ready, queue_publish
 from .pair_members import pair_members
@@ -276,3 +281,169 @@ def publish_manual_job(
     db.commit()
     return {"job_id": job.id, "status": "queued_for_supervisely",
             "operation_id": task.id}
+
+
+class ReassignJobRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    person_id: str
+
+
+def target_team(db: Session, event_id: str, person: Person) -> CompetitionTeam:
+    team_id = person.team_id
+    if not team_id:
+        team_id = db.scalar(select(MonitorPairMember.team_id).where(
+            MonitorPairMember.event_id == event_id,
+            MonitorPairMember.person_id == person.id,
+            MonitorPairMember.active.is_(True),
+        ))
+    team = db.scalar(select(CompetitionTeam).where(
+        CompetitionTeam.event_id == event_id,
+        CompetitionTeam.id == team_id,
+        CompetitionTeam.active.is_(True),
+    ))
+    if team is None:
+        raise HTTPException(
+            status_code=409, detail="New annotator must belong to an active team."
+        )
+    return team
+
+
+def apply_local_reassignment(db: Session, job: LabelingJob,
+                             person: Person, team: CompetitionTeam) -> None:
+    if job.team_id != team.id:
+        # Sequence is only unique within a team's labeling plan. Carry the
+        # job into the recipient team without overwriting historical jobs.
+        used = list(db.scalars(select(LabelingJob.sequence).where(
+            LabelingJob.event_id == job.event_id,
+            LabelingJob.plan_id == job.plan_id,
+            LabelingJob.team_id == team.id,
+        )))
+        job.sequence = max(used, default=0) + 1
+        job.team_id = team.id
+    job.assignee_person_id = person.id
+    job.assigned_monitor_id = db.scalar(select(
+        MonitorAssignment.monitor_person_id,
+    ).where(
+        MonitorAssignment.event_id == job.event_id,
+        MonitorAssignment.team_id == team.id,
+        MonitorAssignment.active.is_(True),
+    ))
+
+
+@router.get("/assignees")
+def reassignment_options(
+    ctx: AuthContext = Depends(requires("organiser", "monitor")),
+    db: Session = Depends(get_db),
+):
+    event = current_event(db, ctx)
+    people = list(db.scalars(select(Person).where(
+        Person.event_id == event.id, Person.active.is_(True),
+    ).order_by(Person.name, Person.email)))
+    options = []
+    for person in people:
+        try:
+            team = target_team(db, event.id, person)
+        except HTTPException:
+            continue
+        allowed = ({"annotator"} if person.kind == "participant"
+                   else {"admin", "manager", "developer"})
+        options.append({
+            "id": person.id, "name": person.name, "team_id": team.id,
+            "team_name": team.name,
+            "native_ready": bool(
+                person.supervisely_user_id
+                and person.membership_status == "joined"
+                and person.native_verified_at
+                and (person.supervisely_role or "").lower() in allowed
+            ),
+        })
+    return {"items": options}
+
+
+@router.post("/jobs/{job_id}/reassign", status_code=202)
+def reassign_job(
+    job_id: str,
+    payload: ReassignJobRequest,
+    ctx: AuthContext = Depends(requires("organiser", mutation=True)),
+    db: Session = Depends(get_db),
+):
+    event = current_event(db, ctx, writable=True)
+    db.scalar(select(Event).where(Event.id == event.id).with_for_update())
+    job = db.scalar(select(LabelingJob).where(
+        LabelingJob.event_id == event.id,
+        LabelingJob.id == job_id,
+    ).with_for_update())
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    if job.assignee_person_id is None:
+        raise HTTPException(status_code=409, detail="Legacy shared jobs cannot be reassigned.")
+    if job.status in {"on_review", "completed", "needs_correction"}:
+        raise HTTPException(
+            status_code=409,
+            detail="A submitted or reviewed job cannot be reassigned. "
+                   "Use a new manual job for another annotation attempt.",
+        )
+    person = db.scalar(select(Person).where(
+        Person.event_id == event.id, Person.id == payload.person_id,
+        Person.active.is_(True),
+    ))
+    if person is None:
+        raise HTTPException(status_code=404, detail="New annotator not found.")
+    team = target_team(db, event.id, person)
+    allowed = ({"annotator"} if person.kind == "participant"
+               else {"admin", "manager", "developer"})
+    if not (person.supervisely_user_id and person.membership_status == "joined"
+            and person.native_verified_at and
+            (person.supervisely_role or "").lower() in allowed):
+        raise HTTPException(
+            status_code=409, detail="New annotator must be verified in Supervisely.",
+        )
+    if person.id == job.assignee_person_id:
+        return {"status": "unchanged", "job_id": job.id}
+    has_native = db.scalar(select(NativeJobBinding.id).where(
+        NativeJobBinding.event_id == event.id,
+        NativeJobBinding.job_id == job.id,
+    )) is not None
+    if not has_native and job.status == "queued":
+        old = {"team_id": job.team_id, "person_id": job.assignee_person_id}
+        apply_local_reassignment(db, job, person, team)
+        db.add(AuditEvent(
+            staff_id=ctx.staff.id, event_id=event.id,
+            action="labeling.job.reassign.local",
+            target_type="labeling_job", target_id=job.id,
+            details={"previous": old, "person_id": person.id,
+                     "team_id": team.id},
+        ))
+        db.commit()
+        return {"status": "updated", "job_id": job.id}
+    native_ready(db)
+    op = db.scalar(select(NativeOperation).where(
+        NativeOperation.kind == "reassign_job",
+        NativeOperation.target_id == job.id,
+    ))
+    if op is not None and op.status in {"pending", "running", "attention"}:
+        raise HTTPException(
+            status_code=409, detail="Previous reassignment still requires processing.",
+        )
+    if op is None:
+        op = NativeOperation(
+            event_id=event.id, kind="reassign_job", target_id=job.id,
+            priority=100,
+        )
+        db.add(op)
+    else:
+        op.status = "pending"
+        op.claimed_at = None
+        op.completed_at = None
+        op.error_code = None
+        op.created_at = epoch()
+    op.payload = {"person_id": person.id, "team_id": team.id,
+                  "requested_by": ctx.staff.id}
+    db.add(AuditEvent(
+        staff_id=ctx.staff.id, event_id=event.id,
+        action="labeling.job.reassign.requested",
+        target_type="labeling_job", target_id=job.id,
+        details={"person_id": person.id, "team_id": team.id},
+    ))
+    db.commit()
+    return {"status": "pending", "job_id": job.id, "operation_id": op.id}
