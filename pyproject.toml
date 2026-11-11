@@ -17,6 +17,7 @@ dependencies = [
   "argon2-cffi>=23.1,<26",
   "httpx>=0.27,<1",
   "cryptography>=43,<48",
+  "Pillow>=11,<14",
 ]
 
 [project.optional-dependencies]

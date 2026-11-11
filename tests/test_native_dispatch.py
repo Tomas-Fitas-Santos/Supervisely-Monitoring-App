@@ -689,6 +689,12 @@ def test_manual_assignments_publish_independent_videos(configured):
             dataset = db.get(MediaDataset, job.dataset_id)
             manifest = Path(dataset.root_path) / "annotations" / jobid / "round-0" / "manifest.json"
             assert json.loads(manifest.read_text(encoding="utf-8"))["annotated_frames"] == 1
+            assert job.annotation_snapshot_round == 0
+            # A media restore may have an older copy than the database counters.
+            manifest.parent.rename(manifest.parent.with_name("round-0-before-restore"))
+            from annotatiathon.native_worker import capture_job_annotations
+            assert capture_job_annotations(db, sdk, job)
+            assert json.loads(manifest.read_text(encoding="utf-8"))["annotated_frames"] == 1
 
 
 def test_confirmed_reset_archives_only_event_projects_and_keeps_members(configured):

@@ -202,7 +202,7 @@ def build_summary(db: Session, dataset_id: str, event_id: str):
         "reference": {
             "groups": list(GROUPS),
             "movements": [{"type": key, "label": label} for key, label in MOVEMENT_TYPES],
-            "frame_order": "1-based, lexicographically sorted frame filenames within each video",
+            "frame_order": "1-based display positions, ordered by frame ordinal with filename fallback",
             "taxonomy_source": "Annotatiathon Bird Morphology & Head Motion workbook",
             "movement_policy": "Observed primary movement only; no species-speed inference",
         },
@@ -266,7 +266,7 @@ def inspect_video_frames(
     ctx: AuthContext = Depends(requires(*VIEWERS)),
     db: Session = Depends(get_db),
 ):
-    """Paginated inspectable frames with stable 1-based lexical frame order."""
+    """Paginated inspectable frames ordered by ordinal with a legacy filename fallback."""
     event = current_event(db, ctx)
     dataset = get_dataset(db, event.id, dataset_id)
     criteria = (
@@ -279,8 +279,8 @@ def inspect_video_frames(
     if total == 0:
         raise HTTPException(status_code=404, detail="Video not found in this dataset.")
     records = list(db.execute(
-        select(MediaAsset.id, MediaAsset.relative_path)
-        .where(*criteria).order_by(MediaAsset.relative_path)
+        select(MediaAsset.id, MediaAsset.relative_path, MediaAsset.frame_index)
+        .where(*criteria).order_by(MediaAsset.frame_index.nulls_last(), MediaAsset.relative_path, MediaAsset.id)
         .limit(size).offset((page - 1) * size)
     ))
     return {
@@ -288,7 +288,8 @@ def inspect_video_frames(
         "items": [{
             "id": media_id, "relative_path": path,
             "frame": (page - 1) * size + index + 1,
-        } for index, (media_id, path) in enumerate(records)],
+            "source_frame_index": source_index,
+        } for index, (media_id, path, source_index) in enumerate(records)],
     }
 
 

@@ -82,7 +82,8 @@ export function validateDatasetSources(files: File[], kind: UploadKind): void {
       const extension = parts[parts.length - 1].split(".").pop()?.toLowerCase() || "";
       const rawVideo = VIDEO_EXTENSIONS.has(extension) && parts.length >= 2;
       const frameFolder = FRAME_EXTENSIONS.has(extension) && parts.length >= 3;
-      if (!rawVideo && !frameFolder) {
+      const frameManifest = parts.at(-1) === "frames.json" && parts.length >= 3;
+      if (!rawVideo && !frameFolder && !frameManifest) {
         throw new Error("Only videos or frames inside video folders are supported. " +
           "Use dataset/species/video.mp4 or dataset/species/video-title/frame.jpg.");
       }

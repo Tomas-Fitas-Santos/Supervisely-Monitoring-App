@@ -26,6 +26,7 @@ export function TeamReviewOverview({auth,mode}:{auth:Auth;mode:"dashboard"|"rank
   const [busy,setBusy]=useState("");
   const [error,setError]=useState("");
   const [notice,setNotice]=useState("");
+  const [rankingPage,setRankingPage]=useState(0);
   const refresh=useCallback(async()=>{
     try{
       const [m,a]=await Promise.all([
@@ -33,6 +34,7 @@ export function TeamReviewOverview({auth,mode}:{auth:Auth;mode:"dashboard"|"rank
         api<Monitors>("/monitoring/assignments")
       ]);
       setMetrics(m);setAssignment(a);
+      setRankingPage(current=>Math.min(current,Math.max(0,Math.ceil(m.teams.length/25)-1)));
       setTeam(old=>m.teams.some(row=>row.team_id===old)?old:(m.teams[0]?.team_id||""));
       setError("");
     }catch(e){setError((e as Error).message);}
@@ -40,7 +42,14 @@ export function TeamReviewOverview({auth,mode}:{auth:Auth;mode:"dashboard"|"rank
   useEffect(()=>{
     void refresh();
     const timer=window.setInterval(()=>{if(!document.hidden)void refresh();},15000);
-    return()=>window.clearInterval(timer);
+    const reconnect=()=>{if(!document.hidden)void refresh();};
+    window.addEventListener("online",reconnect);
+    document.addEventListener("visibilitychange",reconnect);
+    return()=>{
+      window.clearInterval(timer);
+      window.removeEventListener("online",reconnect);
+      document.removeEventListener("visibilitychange",reconnect);
+    };
   },[refresh]);
   const selected=useMemo(()=>metrics?.teams.find(row=>row.team_id===team),[metrics,team]);
   async function reassign(monitorPersonId:string){
@@ -106,7 +115,7 @@ export function TeamReviewOverview({auth,mode}:{auth:Auth;mode:"dashboard"|"rank
         <div className="table-scroll"><table className="data-table leaderboard-table">
           <thead><tr><th>Rank</th><th>Team</th><th>Keypoint accuracy</th><th>Reviewed points</th>
             <th>Completed jobs</th><th>Frames reviewed</th><th>Frames submitted</th><th>Elapsed per frame</th></tr></thead>
-          <tbody>{metrics.teams.map(row=><tr key={row.team_id}>
+          <tbody>{metrics.teams.slice(rankingPage*25,(rankingPage+1)*25).map(row=><tr key={row.team_id}>
             <td><strong>{row.rank===null?"—":row.rank===1?"🥇 1":row.rank===2?"🥈 2":row.rank===3?"🥉 3":"#"+row.rank}</strong></td>
             <td><strong>{row.team_name}</strong></td>
             <td><strong>{accuracy(row.keypoint_accuracy_pct)}</strong></td>
@@ -115,6 +124,12 @@ export function TeamReviewOverview({auth,mode}:{auth:Auth;mode:"dashboard"|"rank
             <td>{integer(row.frames_submitted)}</td>
             <td>{time(row.average_seconds_per_frame)}</td>
           </tr>)}</tbody></table></div>
+        <div className="settings-action-row">
+          <button className="btn secondary" disabled={rankingPage===0}
+            onClick={()=>setRankingPage(current=>Math.max(0,current-1))}>Previous teams</button>
+          <button className="btn secondary" disabled={(rankingPage+1)*25>=metrics.teams.length}
+            onClick={()=>setRankingPage(current=>current+1)}>Next teams</button>
+        </div>
         {!metrics.teams.length&&<p className="muted">No competition teams yet.</p>}
       </section>
       <div className="settings-note"><ShieldCheck size={18}/><p>{metrics.accuracy_definition}. Rankings update when monitors save reviews. Equal accuracy, completed jobs and reviewed frames share a rank. Do not announce winners until all relevant work is reviewed.</p></div>

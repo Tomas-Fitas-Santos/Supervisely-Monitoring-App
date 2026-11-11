@@ -9,6 +9,7 @@ import subprocess
 import zipfile
 from collections import Counter
 from pathlib import Path, PurePosixPath
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
@@ -26,6 +27,7 @@ from .models import (
     LabelingPlan,
     MediaAsset,
     MediaDataset,
+    MediaVideo,
     epoch,
 )
 from .native_media_pool import enqueue_mirror, mirror_status
@@ -43,6 +45,7 @@ class DatasetCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str = Field(min_length=2, max_length=200)
     upload_kind: str = Field(pattern="^(zip|folder)$")
+    extraction_policy: Literal["sample_1fps", "all_frames"] = "sample_1fps"
 
 
 def dataset_view(ds: MediaDataset) -> dict:
@@ -54,6 +57,7 @@ def dataset_view(ds: MediaDataset) -> dict:
     return {
         "id": ds.id, "name": ds.name, "event_id": ds.event_id,
         "upload_kind": ds.upload_kind, "status": status,
+        "extraction_policy": ds.extraction_policy,
         "source_bytes": ds.source_bytes, "image_count": ds.image_count,
         "frame_count": ds.frame_count, "video_count": ds.video_count,
         "native_project_id": ds.native_project_id,
@@ -116,6 +120,7 @@ def create_upload(
     root = Path(get_settings().local_data_dir).resolve() / event.id
     ds = MediaDataset(
         event_id=event.id, name=payload.name.strip(), upload_kind=payload.upload_kind,
+        extraction_policy=payload.extraction_policy,
         root_path="", created_by=ctx.staff.id, last_activity_at=epoch(),
     )
     db.add(ds)
@@ -356,7 +361,7 @@ def canonical_name(raw: str, root_name: str | None) -> str:
             )
         return str(path)
     if parts[0] == "videos":
-        if ((len(parts) == 4 and extension in IMAGE_EXTENSIONS)
+        if ((len(parts) == 4 and (extension in IMAGE_EXTENSIONS or parts[-1] == "frames.json"))
                 or (len(parts) == 3 and extension in VIDEO_EXTENSIONS)):
             return str(path)
         raise HTTPException(
@@ -365,7 +370,7 @@ def canonical_name(raw: str, root_name: str | None) -> str:
         )
     if len(parts) == 2 and extension in VIDEO_EXTENSIONS:
         return str(PurePosixPath("videos", *parts))
-    if len(parts) == 3 and extension in IMAGE_EXTENSIONS:
+    if len(parts) == 3 and (extension in IMAGE_EXTENSIONS or parts[-1] == "frames.json"):
         return str(PurePosixPath("videos", *parts))
     raise HTTPException(
         status_code=422,
@@ -585,17 +590,36 @@ def finalize_dataset(
     source_videos = root_dir(ds) / "source_videos"
     source_group_names: set[str] = set()
     frame_group_names: set[str] = set()
+    video_records: dict[str, MediaVideo] = {}
+    manifests: dict[str, Path] = {}
+
+    def get_video(group: str, policy: str) -> MediaVideo:
+        if group not in video_records:
+            video = MediaVideo(event_id=event.id, dataset_id=ds.id,
+                               video_group=group, extraction_policy=policy)
+            db.add(video)
+            db.flush()
+            video_records[group] = video
+        return video_records[group]
 
     def register_asset(rel: str, morph: str, group: str | None,
-                       kind: str, digest: str, size: int) -> None:
+                       kind: str, digest: str, size: int, *, ordinal: int | None = None,
+                       pts: int | None = None, width: int | None = None,
+                       height: int | None = None) -> None:
         counts[kind] += 1
         morph_counts[morph] += 1
         if group:
             videos.add(group)
+        video = video_records.get(group)
+        if video:
+            video.frame_count += 1
+            video.extracted_bytes += size
         assets.append(MediaAsset(
             event_id=event.id, dataset_id=ds.id,
             relative_path=rel, morphology=morph, kind=kind,
             video_group=group, size_bytes=size, sha256=digest,
+            video_id=video.id if video else None, frame_index=ordinal,
+            presentation_timestamp=pts, frame_width=width, frame_height=height,
         ))
         if sum(counts.values()) > get_settings().max_dataset_assets:
             raise HTTPException(status_code=413, detail="Too many extracted video frames.")
@@ -612,18 +636,46 @@ def finalize_dataset(
             if extension in VIDEO_EXTENSIONS:
                 # A direct species/video.mp4 input becomes a video frame folder.
                 name = PurePosixPath(parts[2]).stem
+                if name in {"", ".", ".."}:
+                    raise HTTPException(status_code=422, detail="Video title must identify a source file.")
                 group = f"{morph}/{name}"
                 if group in source_group_names or group in frame_group_names:
                     raise HTTPException(status_code=422, detail="Duplicate video title.")
                 source_group_names.add(group)
                 original = source_videos / morph / parts[2]
-                copy_and_hash(stream, original)
+                digest, _source_size = copy_and_hash(stream, original)
+                video = get_video(group, ds.extraction_policy)
+                video.source_sha256 = digest
+                video.source_relative_path = original.relative_to(root_dir(ds)).as_posix()
+                video.identity_status = "complete"
+                video.missing_frame_count = 0
                 output = media_dir / "videos" / morph / name
-                frames = extract_video_frames(original, output)
-                for frame in frames:
-                    digest, size = sha256_file(frame)
-                    path = frame.relative_to(media_dir).as_posix()
-                    register_asset(path, morph, group, "video_frame", digest, size)
+                if ds.extraction_policy == "all_frames":
+                    from .frame_extraction import extract_full_video
+                    extraction = extract_full_video(
+                        original, output,
+                        max_frames=get_settings().max_dataset_assets - sum(counts.values()),
+                    )
+                    video.density = "full"
+                    video.time_base = extraction.time_base
+                    video.frame_rate = extraction.frame_rate
+                    video.source_frame_count = len(extraction.frames)
+                    if extraction.time_base is None or any(frame.pts is None for frame in extraction.frames):
+                        video.identity_notes = ["Some source presentation timestamps are unavailable; decoded ordinals remain authoritative."]
+                    for frame in extraction.frames:
+                        digest, size = sha256_file(frame.path)
+                        register_asset(frame.path.relative_to(media_dir).as_posix(), morph, group,
+                                       "video_frame", digest, size, ordinal=frame.ordinal,
+                                       pts=frame.pts, width=frame.width, height=frame.height)
+                else:
+                    video.density = "sampled"
+                    video.identity_status = "unknown"
+                    video.missing_frame_count = None
+                    video.identity_notes = ["Source ordinals are unavailable for one-frame-per-second sampling."]
+                    for frame in extract_video_frames(original, output):
+                        digest, size = sha256_file(frame)
+                        register_asset(frame.relative_to(media_dir).as_posix(), morph, group,
+                                       "video_frame", digest, size)
             else:
                 kind = "image" if parts[0] == "images" else "video_frame"
                 group = f"{morph}/{parts[2]}" if kind == "video_frame" else None
@@ -631,12 +683,23 @@ def finalize_dataset(
                     if group in source_group_names:
                         raise HTTPException(status_code=422, detail="Duplicate video title.")
                     frame_group_names.add(group)
+                    video = get_video(group, "supplied_unknown")
+                    if parts[-1] == "frames.json":
+                        path = root_dir(ds) / "provenance" / video.id / "frames.json"
+                        copy_and_hash(stream, path)
+                        manifests[group] = path
+                        continue
                 digest, size = copy_and_hash(stream, media_dir / rel)
                 register_asset(rel, morph, group, kind, digest, size)
         db.add_all(assets)
         db.flush()
         if not counts:
             raise HTTPException(status_code=422, detail="No usable video frames found.")
+        from .frame_import import index_supplied_frames
+        for group, video in video_records.items():
+            if video.extraction_policy == "supplied_unknown":
+                index_supplied_frames(db, video, media_dir, manifests.get(group),
+                                      strict=ds.extraction_policy == "all_frames")
         ds.image_count = counts["image"]
         ds.frame_count = counts["video_frame"]
         ds.video_count = len(videos)
@@ -658,6 +721,9 @@ def finalize_dataset(
         db.rollback()
         shutil.rmtree(media_dir, ignore_errors=True)
         shutil.rmtree(source_videos, ignore_errors=True)
+        provenance = root_dir(ds) / "provenance"
+        if provenance.resolve().parent == root_dir(ds):
+            shutil.rmtree(provenance, ignore_errors=True)
         media_dir.mkdir(exist_ok=True)
         raise
     # Media stays on disk; upload staging no longer needed.
@@ -683,7 +749,8 @@ def list_assets(
     if kind:
         query = query.where(MediaAsset.kind == kind)
     total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
-    records = db.scalars(query.order_by(MediaAsset.relative_path)
+    records = db.scalars(query.order_by(MediaAsset.video_group, MediaAsset.frame_index.nulls_last(),
+                                          MediaAsset.relative_path, MediaAsset.id)
                          .limit(size).offset((page-1)*size)).all()
     return {
         "dataset": dataset_view(ds),
@@ -692,9 +759,34 @@ def list_assets(
             "id": x.id, "relative_path": x.relative_path,
             "morphology": x.morphology, "kind": x.kind,
             "video_group": x.video_group, "size_bytes": x.size_bytes,
+            "video_id": x.video_id, "frame_index": x.frame_index,
+            "presentation_timestamp": x.presentation_timestamp,
+            "frame_width": x.frame_width, "frame_height": x.frame_height,
             "native_image_id": x.native_image_id,
         } for x in records],
     }
+
+
+@router.get("/{dataset_id}/videos")
+def list_videos(
+    dataset_id: str,
+    ctx: AuthContext = Depends(requires(*VIEWERS)),
+    db: Session = Depends(get_db),
+):
+    event = current_event(db, ctx)
+    dataset = get_dataset(db, event.id, dataset_id)
+    videos = db.scalars(select(MediaVideo).where(
+        MediaVideo.dataset_id == dataset.id, MediaVideo.event_id == event.id,
+    ).order_by(MediaVideo.video_group, MediaVideo.id))
+    return {"items": [{
+        "id": video.id, "video_group": video.video_group,
+        "extraction_policy": video.extraction_policy, "density": video.density,
+        "source_sha256": video.source_sha256, "source_relative_path": video.source_relative_path,
+        "frame_count": video.frame_count, "source_frame_count": video.source_frame_count,
+        "extracted_bytes": video.extracted_bytes, "time_base": video.time_base,
+        "frame_rate": video.frame_rate, "identity_status": video.identity_status,
+        "missing_frame_count": video.missing_frame_count, "identity_notes": video.identity_notes,
+    } for video in videos]}
 
 
 @router.get("/{dataset_id}/summary")

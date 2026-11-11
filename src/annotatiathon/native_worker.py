@@ -546,7 +546,12 @@ def capture_job_annotations(db: Session, api, job: LabelingJob) -> bool:
         Path(dataset.root_path) / "annotations" / job.id /
         ("round-" + str(job.correction_round))
     )
-    if (destination / "manifest.json").is_file():
+    manifest = destination / "manifest.json"
+    if manifest.is_file():
+        if (job.annotation_snapshot_round != job.correction_round
+                or job.annotation_snapshot_frames != job.frame_count):
+            from .snapshot_metrics import cache_snapshot_counts
+            cache_snapshot_counts(db, job, manifest)
         return False
     if destination.exists():
         raise NativeWorkerError("annotation_snapshot_incomplete")
@@ -661,6 +666,8 @@ def capture_job_annotations(db: Session, api, job: LabelingJob) -> bool:
                 "annotation_state": "current_supervisely_snapshot",
             }, stream, ensure_ascii=False, separators=(",", ":"))
         os.replace(temporary, destination)
+        from .snapshot_metrics import cache_snapshot_counts
+        cache_snapshot_counts(db, job, destination / "manifest.json")
     except BaseException:
         shutil.rmtree(temporary, ignore_errors=True)
         raise
@@ -719,6 +726,7 @@ def sync_all(db: Session, api, config: SuperviselyConfig) -> dict:
                 if capture_job_annotations(db, api, candidate):
                     snapshots += 1
             except Exception as exc:  # noqa: BLE001 - retried next worker poll
+                db.rollback()
                 failures += 1
                 code = exc.code if isinstance(exc, (NativeWorkerError, NativeAPIError)) else type(exc).__name__
                 logger.warning("Annotation snapshot pending retry for job %s (%s)", candidate.id, code)

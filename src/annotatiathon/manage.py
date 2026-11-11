@@ -30,7 +30,14 @@ def main() -> None:
         help="Securely reset an existing staff password and revoke sessions",
     )
     reset.add_argument("--email", required=True)
+    backfill = cmd.add_parser("backfill-snapshots", help="Cache existing snapshot counts for dashboard SQL")
+    backfill.add_argument("--event-id")
     args = parser.parse_args()
+    if args.action == "backfill-snapshots":
+        from .snapshot_metrics import backfill_snapshot_counts
+        with session_factory()() as db:
+            print(backfill_snapshot_counts(db, args.event_id))
+        return
     try:
         email = normalized_email(args.email)
     except ValueError as exc:
