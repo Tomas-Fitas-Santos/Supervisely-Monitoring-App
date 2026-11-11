@@ -543,6 +543,8 @@ class WorkBlock(Base):
     __table_args__ = (
         UniqueConstraint("plan_id", "video_id", "ordinal", name="uq_work_block_ordinal"),
         CheckConstraint("frame_count BETWEEN 1 AND 30", name="ck_work_block_size"),
+        Index("ix_work_block_repeat_queue", "plan_id", "repeat_team_id", "id",
+              postgresql_where=text("repeat_job_id IS NULL")),
         Index("ix_work_block_available", "plan_id", "video_id", "ordinal",
               postgresql_where=text("job_id IS NULL"), sqlite_where=text("job_id IS NULL")),
     )
@@ -555,6 +557,8 @@ class WorkBlock(Base):
     media_ids: Mapped[list[str]] = mapped_column(JSON)
     repeat_media_ids: Mapped[list[str]] = mapped_column(JSON)
     job_id: Mapped[str | None] = mapped_column(ForeignKey("labeling_jobs.id"), unique=True)
+    repeat_team_id: Mapped[str | None] = mapped_column(ForeignKey("competition_teams.id"))
+    repeat_job_id: Mapped[str | None] = mapped_column(ForeignKey("labeling_jobs.id"))
 
 
 class WorkPacket(Base):

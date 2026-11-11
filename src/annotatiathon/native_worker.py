@@ -134,7 +134,7 @@ def remote_project(api, config: SuperviselyConfig,
 
 
 def job_video_group(db: Session, job: LabelingJob) -> str | None:
-    if not job.media_ids:
+    if not job.media_ids or job.release_mode == "shared_repeat":
         return None
     return db.scalar(select(MediaAsset.video_group).where(
         MediaAsset.event_id == job.event_id,
@@ -525,7 +525,7 @@ def sync_one(db: Session, api, job: LabelingJob) -> str:
         ))
         for info in statuses
     ):
-        if job.release_mode == "shared_primary":
+        if job.release_mode in {"shared_primary", "shared_repeat"}:
             from .models import WorkPacket
 
             packet = db.get(WorkPacket, job.id)
@@ -723,23 +723,31 @@ def sync_all(db: Session, api, config: SuperviselyConfig) -> dict:
                 continue
             if before != after:
                 changed += 1
-                if job.release_mode == "shared_primary" and after == "on_review":
+                if job.release_mode in {"shared_primary", "shared_repeat"} and after == "on_review":
                     ready_for_next.append((job.team_id, job.assignee_person_id))
         if plan.status == "running" and plan.queue_seed:
             from .pair_members import pair_members
-            from .work_queue import claim_primary_block
+            from .work_queue import claim_primary_block, reserve_repeats
 
             teams = list(db.scalars(select(CompetitionTeam.id).where(
                 CompetitionTeam.event_id == plan.event_id, CompetitionTeam.active.is_(True),
             ).order_by(CompetitionTeam.id)))
+            eligible_teams = []
             for team_id in teams:
                 people, _ = pair_members(db, plan.event_id, team_id)
-                ready_for_next.extend((team_id, person.id) for person in people)
+                eligible = [person for person in people if native_identity_assignable(person)]
+                if eligible:
+                    eligible_teams.append(team_id)
+                ready_for_next.extend((team_id, person.id) for person in eligible)
+            reserve_repeats(db, plan, eligible_teams)
+            db.commit()
             for team_id, person_id in dict.fromkeys(ready_for_next):
                 if person_id is None:
                     continue
                 try:
-                    claimed = claim_primary_block(db, plan.id, team_id, person_id) is not None
+                    claimed = claim_primary_block(
+                        db, plan.id, team_id, person_id, include_repeats=True,
+                    ) is not None
                     db.commit()
                     queued += int(claimed)
                 except Exception:

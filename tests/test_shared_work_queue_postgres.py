@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from annotatiathon import models as m
 from annotatiathon.native_worker import sync_all
-from annotatiathon.work_queue import claim_primary_block
+from annotatiathon.work_queue import claim_primary_block, reserve_repeats
 
 
 @pytest.mark.skipif(not os.getenv("NIGHTJAR_QUEUE_TEST_URL"), reason="requires disposable PostgreSQL")
@@ -44,7 +44,7 @@ def test_distinct_claims_and_duplicate_person_requests():
         for i in range(3):
             ids = [f"frame-{30 * i + j}" for j in range(30)]
             db.add(m.WorkBlock(event_id=event, plan_id=plan, video_id=video, ordinal=i + 1,
-                               frame_count=len(ids), media_ids=ids, repeat_media_ids=ids[:2]))
+                               frame_count=len(ids), media_ids=ids, repeat_media_ids=[]))
     barrier = Barrier(4)
 
     def claim(i):
@@ -74,7 +74,7 @@ def test_distinct_claims_and_duplicate_person_requests():
         db.add(m.NativeJobBinding(event_id=event, job_id=job_id, person_id=person, native_job_id=101))
         ids = [f"next-{i}" for i in range(30)]
         db.add(m.WorkBlock(event_id=event, plan_id=plan, video_id=video, ordinal=4,
-                           frame_count=30, media_ids=ids, repeat_media_ids=ids[:2]))
+                           frame_count=30, media_ids=ids, repeat_media_ids=[]))
     native = SimpleNamespace(id=101, dataset_id=100, status="on_review",
                              images_count=30, finished_images_count=15)
     api = SimpleNamespace(labeling_job=SimpleNamespace(get_info_by_id=lambda _: native))
@@ -99,4 +99,49 @@ def test_distinct_claims_and_duplicate_person_requests():
         ))
         assert successor.media_ids == ids
         assert sync_all(db, api, m.SuperviselyConfig())["pending_operations"] == 0
+    primary_team = f"team-{suffix}-0"
+    repeat_team = f"team-{suffix}-1"
+    with Session(engine) as db, db.begin():
+        for ordinal in range(5, 21):
+            frames = [f"repeat-{ordinal}-{i}" for i in range(2)]
+            primary = m.LabelingJob(
+                event_id=event, plan_id=plan, dataset_id=dataset, team_id=primary_team,
+                sequence=ordinal, assignee_person_id=person, media_ids=frames,
+                frame_count=2, video_count=1, morphology_counts={"bird": 2},
+                release_mode="shared_primary", status="completed",
+            )
+            db.add(primary)
+            db.flush()
+            db.add(m.WorkBlock(event_id=event, plan_id=plan, video_id=video,
+                               ordinal=ordinal, frame_count=2, media_ids=frames,
+                               repeat_media_ids=frames, job_id=primary.id))
+        db.flush()
+        reserve_repeats(db, db.get(m.LabelingPlan, plan), [primary_team, repeat_team])
+        for packet in db.scalars(select(m.WorkPacket).where(m.WorkPacket.event_id == event)):
+            packet.submitted_at = 1
+
+    repeat_barrier = Barrier(2)
+
+    def claim_repeat(i):
+        with Session(engine) as db, db.begin():
+            repeat_barrier.wait(timeout=10)
+            job = claim_primary_block(db, plan, repeat_team, f"person-{suffix}-{i}",
+                                      include_repeats=True)
+            assert job.release_mode == "shared_repeat"
+            return job.id, set(job.media_ids)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first, second = list(pool.map(claim_repeat, [2, 3]))
+    assert sorted([len(first[1]), len(second[1])]) == [2, 30]
+    assert not first[1].intersection(second[1])
+    with Session(engine) as db:
+        assigned = db.scalars(select(m.WorkBlock).where(
+            m.WorkBlock.plan_id == plan, m.WorkBlock.ordinal >= 5,
+        )).all()
+        assert len(assigned) == 16
+        packets = dict([first, second])
+        for block in assigned:
+            assert block.repeat_team_id == repeat_team
+            assert set(block.repeat_media_ids) <= packets[block.repeat_job_id]
+        assert claim_primary_block(db, plan, primary_team, person, include_repeats=True) is None
     engine.dispose()

@@ -361,7 +361,7 @@ def reassign_job(
     ).with_for_update())
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found.")
-    if job.release_mode == "shared_primary":
+    if job.release_mode in {"shared_primary", "shared_repeat"}:
         raise HTTPException(status_code=409, detail="Shared queue jobs retain their original claim.")
     if job.assignee_person_id is None:
         raise HTTPException(status_code=409, detail="Legacy shared jobs cannot be reassigned.")

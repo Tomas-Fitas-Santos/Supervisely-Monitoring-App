@@ -976,7 +976,10 @@ def test_pre_event_mirror_is_complete_and_job_publish_uploads_zero_frames(config
     assert len(sdk.images[sdk.datasets[0].id]) == 3
 
 
-def test_manual_duplicate_jobs_use_independent_copies_and_annotator_mappings(configured):
+@pytest.mark.parametrize("repeat", [False, True])
+def test_manual_duplicate_jobs_use_independent_copies_and_annotator_mappings(configured, repeat):
+    from annotatiathon.models import WorkPacket
+
     http, maker, csrf, _plan_id, sdk = configured
     with maker.begin() as db:
         ds = db.get(MediaDataset, "dataset01")
@@ -1012,6 +1015,11 @@ def test_manual_duplicate_jobs_use_independent_copies_and_annotator_mappings(con
             NativeOperation.kind == "publish_job",
             NativeOperation.target_id.in_(response.json()["job_ids"]),
         )))
+        if repeat:
+            job = db.get(LabelingJob, response.json()["job_ids"][1])
+            job.release_mode = "shared_repeat"
+            db.add(WorkPacket(job_id=job.id, event_id=job.event_id, person_id=job.assignee_person_id))
+            db.commit()
         assert len(ops) == 2
         assert all(op.priority == 100 for op in ops)
         assert process_once(db, sdk, db.get(SuperviselyConfig, 1))["status"] == "done"
@@ -1030,9 +1038,12 @@ def test_manual_duplicate_jobs_use_independent_copies_and_annotator_mappings(con
     assert len(sdk.upload_history) == 3  # source upload + two manual copies
     for native_job in sdk.jobs:
         native_job.status = "on_review"
+        native_job.finished_images_count = native_job.images_count
     with maker() as db:
         result = sync_all(db, sdk, db.get(SuperviselyConfig, 1))
         assert result["changed_jobs"] == 2
+        if repeat:
+            assert db.get(WorkPacket, response.json()["job_ids"][1]).submitted_at is not None
         dataset = db.get(MediaDataset, "dataset01")
         original_path = (Path(dataset.root_path) / "media" /
                          "videos/sparrows/flight01/0001.jpg")

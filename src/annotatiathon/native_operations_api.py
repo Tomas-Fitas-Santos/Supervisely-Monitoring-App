@@ -107,7 +107,7 @@ def queue_publish(db: Session, job: LabelingJob, *,
 
 def can_queue_next(db: Session, job: LabelingJob) -> bool:
     """Release automatic jobs sequentially per annotator, not per team."""
-    if job.release_mode in {"manual_released", "shared_primary"}:
+    if job.release_mode in {"manual_released", "shared_primary", "shared_repeat"}:
         return True
     if job.release_mode == "manual_hold":
         return False
