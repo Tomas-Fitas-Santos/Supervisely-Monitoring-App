@@ -76,16 +76,19 @@ def team_members(db: Session, job: LabelingJob) -> list[Person]:
     return people
 
 
-def queue_publish(db: Session, job: LabelingJob) -> NativeOperation:
+def queue_publish(db: Session, job: LabelingJob, *,
+                  high_priority: bool = False) -> NativeOperation:
     existing = db.scalar(select(NativeOperation).where(
         NativeOperation.kind == "publish_job",
         NativeOperation.target_id == job.id,
     ))
     if existing:
+        if high_priority and existing.status == "pending":
+            existing.priority = 100
         return existing
     op = NativeOperation(
         event_id=job.event_id, kind="publish_job", target_id=job.id,
-        status="pending",
+        status="pending", priority=100 if high_priority else 0,
     )
     db.add(op)
     db.flush()
