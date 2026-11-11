@@ -171,8 +171,14 @@ class MockSDK:
         self.removed_jobs.append(job_id)
         self.jobs = [j for j in self.jobs if j.id != job_id]
 
-    def jobs_create(self, name, dataset_id, user_ids, images_ids):
+    def jobs_create(self, name, dataset_id, user_ids, images_ids,
+                    classes_to_label, readme):
         assert len(images_ids) == len(self.images[dataset_id])
+        assert classes_to_label == [
+            "bird", "left_eye", "left_eye_occ", "right_eye", "right_eye_occ",
+            "beak", "beak_occ", "crown", "crown_occ",
+        ]
+        assert "bounding box" in readme and "occluded" in readme
         dataset = next(d for d in self.datasets if d.id == dataset_id)
         classes = {
             cls["title"]: cls
@@ -190,6 +196,7 @@ class MockSDK:
             j = Obj(
                 id=self.new_id(), name=name, dataset_id=dataset_id,
                 project_id=dataset.project_id,
+                classes_to_label=list(classes_to_label),
                 assigned_to_id=uid, status="pending",
                 images_count=len(images_ids), finished_images_count=0,
             )
