@@ -11,6 +11,7 @@ type Summary={registered:number;present:number;not_arrived:number};
 type TableDialog={person:Person;mode:"assign"|"edit"};
 
 export function AttendanceScreen({auth}:{auth:Auth}) {
+  const organiser=auth.staff.roles.includes("organiser");
   const allowed=auth.staff.roles.some(r=>["organiser","monitor","reception"].includes(r));
   const [search,setSearch]=useState("");
   const [filter,setFilter]=useState<"all"|"present"|"missing">("all");
@@ -118,8 +119,12 @@ export function AttendanceScreen({auth}:{auth:Auth}) {
       <h2>Attendance & Check-in</h2>
       <p className="muted">Participants only. Check in directly when a team table is known;
         teammates inherit the assigned table. Check-out is one click.</p>
-    </div><button className="btn secondary" onClick={()=>void syncNative()}>
-      <RefreshCw size={15}/> Refresh from Supervisely</button></div>
+    </div><div className="heading-actions">
+      <button className="btn secondary" onClick={()=>void refresh()}>
+        <RefreshCw size={15}/> Refresh check-in list</button>
+      {organiser&&<button className="btn secondary" onClick={()=>void syncNative()}>
+        <RefreshCw size={15}/> Sync Supervisely membership</button>}
+    </div></div>
 
     {error&&<div role="alert" className="alert danger">{error}</div>}
     {notice&&<div role="status" className="alert success">{notice}</div>}
