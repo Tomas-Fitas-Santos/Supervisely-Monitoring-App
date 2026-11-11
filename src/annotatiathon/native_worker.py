@@ -1288,10 +1288,18 @@ def run_worker(*, once: bool, poll_seconds: int) -> None:
                         return
                     time.sleep(poll_seconds)
                     continue
-                mirror = process_mirror_once(db, api, config)
                 reassignment = process_reassignment_once(db, api, config)
                 correction = process_correction_once(db, api, config)
+                # A large pre-event mirror can take substantial time. When an
+                # organiser adds higher-priority manual jobs during the event,
+                # publish those before doing another lengthy mirror cycle.
                 operation = process_once(db, api, config)
+                high_pending = db.scalar(select(NativeOperation.id).where(
+                    NativeOperation.kind == "publish_job",
+                    NativeOperation.status == "pending",
+                    NativeOperation.priority > 0,
+                ).limit(1))
+                mirror = None if high_pending else process_mirror_once(db, api, config)
                 export = process_export_once(db, api)
                 sync_result = sync_all(db, api, config)
                 if mirror or reassignment or correction or operation or export or sync_result["changed_jobs"] or sync_result["annotation_snapshots"]:
