@@ -32,8 +32,8 @@ def legacy_project_name(dataset: MediaDataset) -> str:
 def owned_project_event_id(name: str) -> str | None:
     """Only exact Nightjar identifiers authorize a reset to touch a project."""
     old = re.fullmatch(
-        r"Nightjar-([a-zA-Z0-9_-]{1,60})-"
-        r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})",
+        r"Nightjar-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})-"
+        r"([a-zA-Z0-9_-]{1,60})",
         name,
     )
     if old:
