@@ -25,6 +25,7 @@ from .models import (
     SuperviselyConfig,
 )
 from .supervisely_client import NativeAPIError, change_member_role
+from .registration_api import monitor_can_register
 
 router = APIRouter(prefix="/api/v1", tags=["people"])
 VIEWER = ("organiser", "monitor", "reception", "activity", "distribution", "observer")
@@ -166,14 +167,7 @@ def person_record(p: Person, team: str | None = None,
         "id": p.id, "name": p.name, "email": p.email, "kind": p.kind,
         "team_id": p.team_id, "team_name": team, "active": p.active,
         "membership_status": p.membership_status,
-        "monitor_registration_approved": bool(
-            p.kind == "monitor" and p.active and (
-                (p.source_fields or {}).get(
-                    "monitor_registration_approved",
-                    (p.source_fields or {}).get("source") != "supervisely_member_sync",
-                ) is True
-            )
-        ),
+        "monitor_registration_approved": monitor_can_register(p),
         "native_auto_imported": (p.source_fields or {}).get("source") == "supervisely_member_sync",
         "supervisely_login": p.supervisely_login,
         "supervisely_role": p.supervisely_role,

@@ -312,7 +312,12 @@ def test_auto_sync_imports_participant_and_monitor_then_organiser_can_approve(
     native = people["monitorbird@example.org"]
     assert native["kind"] == "monitor"
     assert native["native_auto_imported"] is True
-    assert native["monitor_registration_approved"] is False
+    assert native["monitor_registration_approved"] is True
+    # Explicit organiser denial overrides verified team membership.
+    blocked = http.put("/api/v1/people/"+native["id"]+"/monitor-registration",
+        headers={"X-CSRF-Token": csrf}, json={"approved": False})
+    assert blocked.status_code == 200
+    assert blocked.json()["monitor_registration_approved"] is False
     denied = http.post("/api/v1/auth/register", json={
         "email": "monitorbird@example.org",
         "password": "SafeMonitorPassword_123",
@@ -333,6 +338,32 @@ def test_auto_sync_imports_participant_and_monitor_then_organiser_can_approve(
     assert participant_denied.status_code == 403
     with maker() as db:
         assert len(list(db.scalars(select(Person)))) == 2
+
+
+def test_native_verified_manager_can_register_without_extra_approval(setup, monkeypatch):
+    http, _maker, _ = setup
+    csrf = login(http)
+    source = NativeTeamSnapshot(
+        **{**native_snapshot().__dict__, "members": (
+            NativeMember(id=556, login="verified_manager",
+                         email="verifiedmanager@example.org", role="manager"),
+        )}
+    )
+    monkeypatch.setattr(
+        "annotatiathon.native_sync_api.read_team_snapshot",
+        lambda config: source,
+    )
+    synced = http.post("/api/v1/people/supervisely/refresh",
+                       headers={"X-CSRF-Token": csrf})
+    assert synced.status_code == 200, synced.text
+    people = http.get("/api/v1/people").json()["items"]
+    entry = next(p for p in people if p["email"] == "verifiedmanager@example.org")
+    assert entry["monitor_registration_approved"] is True
+    created = http.post("/api/v1/auth/register", json={
+        "email": entry["email"], "password": "PersistentNativePassword_2026!",
+    })
+    assert created.status_code == 201, created.text
+    assert login(http, entry["email"], "PersistentNativePassword_2026!")
 
 
 def test_organiser_can_revoke_signup_for_approved_monitor(setup):

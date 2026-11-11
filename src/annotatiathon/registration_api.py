@@ -29,12 +29,33 @@ class MonitorAccountRegistration(BaseModel):
         return normalized_email(value)
 
 
-def eligible_monitor(db: Session, email: str) -> Person | None:
-    """Only approved, active monitor emails from the active SQL event roster.
+def monitor_can_register(person: Person) -> bool:
+    """Allow roster monitors and verified native managers unless denied explicitly.
 
-    A Supervisely team role is intentionally NOT a prerequisite for making
-    a Nightjar account. Native verification is a separate Settings workflow.
-    Native-only people discovered by sync are not implicitly approved.
+    A verified Supervisely member must already be an active SQL roster
+    monitor and a confirmed member of the organiser's team. Registration
+    still creates ONLY a Nightjar account, not a Supervisely identity.
+    """
+    if person.kind != "monitor" or not person.active:
+        return False
+    fields = person.source_fields or {}
+    if "monitor_registration_approved" in fields:
+        return fields["monitor_registration_approved"] is True
+    if fields.get("source") != "supervisely_member_sync":
+        return True
+    return (
+        person.membership_status == "joined"
+        and person.supervisely_user_id is not None
+        and person.native_verified_at is not None
+        and person.supervisely_role in {"admin", "manager"}
+    )
+
+
+def eligible_monitor(db: Session, email: str) -> Person | None:
+    """Find an active SQL monitor, including verified native team managers.
+
+    Password login for existing staff never calls this function. This
+    allowlist applies only to *initial creation* of a Nightjar account.
     """
     records = db.scalars(
         select(Person).join(Event, Person.event_id == Event.id).where(
@@ -47,10 +68,7 @@ def eligible_monitor(db: Session, email: str) -> Person | None:
     return next(
         (
             person for person in records
-            if (person.source_fields or {}).get(
-                "monitor_registration_approved",
-                (person.source_fields or {}).get("source") != "supervisely_member_sync",
-            ) is True
+            if monitor_can_register(person)
         ), None,
     )
 
@@ -67,14 +85,16 @@ def create_monitor_account(
     email ownership: possession of a known roster email is not verification.
     """
     same_origin(request)
+    # Previously created accounts are never re-registered when event/roster
+    # configuration changes. Direct people to their existing login.
+    if db.scalar(select(StaffAccount.id).where(StaffAccount.email == payload.email)):
+        raise HTTPException(status_code=409, detail="A Nightjar account already exists. Sign in.")
     person = eligible_monitor(db, payload.email)
     if person is None:
         raise HTTPException(
             status_code=403,
             detail="This email is not on the approved monitor roster. Contact the organiser.",
         )
-    if db.scalar(select(StaffAccount.id).where(StaffAccount.email == payload.email)):
-        raise HTTPException(status_code=409, detail="A Nightjar account already exists. Sign in.")
     staff = StaffAccount(
         email=payload.email,
         name=person.name,

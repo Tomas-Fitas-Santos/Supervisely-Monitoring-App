@@ -146,9 +146,10 @@ is no extra username/password pop-up or Cloudflare email challenge.
 - **Approved new monitor:** click **Create monitor account**, enter the
   email already approved in the active event SQL roster, and choose/confirm
   a Nightjar-only password. No email verification or SMTP is required.
-- **Unlisted or unapproved person:** cannot self-register. Participants
-  cannot create monitor accounts. Organisation administrators must review
-  and approve auto-discovered native monitors before they can sign up.
+- **Unlisted or ineligible person:** cannot self-register. Participants
+  cannot create monitor accounts. Unverified native records require
+  organiser approval; verified joined native managers/admins on the active
+  SQL monitor roster can register unless explicitly denied.
 
 The temporary tunnel URL is *publicly reachable*, though Nightjar's
 application data and operational endpoints remain protected by its own
@@ -168,8 +169,9 @@ Inside the **HTTPS tunnel**:
    The backend encrypts the shared token; monitors only see read-only IDs.
 4. Import the official monitor/participant registration roster as CSV.
 5. Have one approved monitor choose **Create monitor account** and set a
-   Nightjar-only password. If they were auto-discovered from Supervisely,
-   approve their Nightjar registration in People & Teams first.
+   Nightjar-only password. An active monitor **already verified as a joined
+   Supervisely manager/admin in the SQL roster** can register directly without
+   another manual approval, unless the organiser explicitly denied registration.
 6. The monitor logs into Nightjar independently and can optionally verify
    their own Supervisely identity in personal Settings.
 7. In People & Teams, use **Refresh from Supervisely** to reconcile actual
@@ -184,9 +186,10 @@ A signed-in organiser account alone does not prove Supervisely permissions.
 1. Import the event CSV using `event_role` for the Role mapping. Monitors
    must have active, approved `monitor` entries with matching email addresses
    in the current SQL event roster. Participants are ineligible.
-2. For records auto-created only from Supervisely, explicitly approve the
-   monitor in **People & Teams → Edit → Approve for Nightjar registration**.
-   CSV-imported monitors are eligible unless the organiser has disabled them.
+2. CSV-imported monitors are eligible unless the organiser has disabled them.
+   Verified joined Supervisely team managers/admins auto-imported into the
+   current event's SQL monitor roster are also eligible unless explicitly
+   denied by the organiser. Other auto-discovered records need manual approval.
 3. Send the current HTTPS link to a trusted monitor. They choose
    **Create monitor account**, enter their listed email and their own
    12+-character app password twice, then click **Create account and sign in**.
