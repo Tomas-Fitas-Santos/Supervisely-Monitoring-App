@@ -1,4 +1,5 @@
 import { confirmAction, promptText } from "./dialogs";
+import { formatLisbonInput, formatLisbonTime, parseLisbonTime } from "./event_time";
 import { useCallback, useEffect, useState } from "react";
 import type React from "react";
 import {
@@ -8,7 +9,8 @@ import {
 import { api, type Auth } from "./api";
 
 type EventRecord = {id:string;name:string;status:"active"|"archived";
-  created_at:number;archived_at:number|null;reset_from_id:string|null};
+  created_at:number;archived_at:number|null;reset_from_id:string|null;
+  start_at?:number|null;end_at?:number|null;timezone?:string;};
 type EventList={items:EventRecord[];current_event_id:string};
 type ResetMode="selected"|"fresh";
 type ResetArea="attendance"|"invitations"|"tickets"|"roster"|"activities"|"assignments";
@@ -60,6 +62,8 @@ export function EventManagement({auth}:{auth:Auth}) {
   const [data,setData]=useState<EventList|null>(null);
   const [snapshots,setSnapshots]=useState<Snapshot[]>([]);
   const [newName,setNewName]=useState("");
+  const [scheduleStart,setScheduleStart]=useState("");
+  const [scheduleEnd,setScheduleEnd]=useState("");
   const [mode,setMode]=useState<ResetMode>("selected");
   const [areas,setAreas]=useState<ResetArea[]>(["attendance"]);
   const [preview,setPreview]=useState<ResetPreview|null>(null);
@@ -76,6 +80,31 @@ export function EventManagement({auth}:{auth:Auth}) {
   useEffect(()=>{void refresh().catch(e=>setError((e as Error).message));},[refresh]);
   const selected=data?.items.find(e=>e.id===data.current_event_id);
   const canReset=selected?.status==="active";
+  const scheduleAvailable=Boolean(selected&&("start_at" in selected)&&("end_at" in selected));
+  useEffect(()=>{
+    setScheduleStart(formatLisbonInput(selected?.start_at));
+    setScheduleEnd(formatLisbonInput(selected?.end_at));
+  },[selected?.id,selected?.start_at,selected?.end_at]);
+  async function saveSchedule(e:React.FormEvent){
+    e.preventDefault();
+    if(!selected||!canReset||!scheduleAvailable||busy)return;
+    setError("");setNotice("");
+    let startAt:number|null,endAt:number|null;
+    try{
+      startAt=parseLisbonTime(scheduleStart);
+      endAt=parseLisbonTime(scheduleEnd);
+      if(startAt===null||endAt===null||startAt>=endAt)
+        throw new Error("Set a valid start time before the end time.");
+    }catch(exc){setError((exc as Error).message);return;}
+    setBusy(true);
+    try{
+      await api("/events/"+selected.id+"/schedule","PUT",
+        {start_at:startAt,end_at:endAt,timezone:"Europe/Lisbon"},auth.csrf_token);
+      setNotice("Event schedule saved. Activities must remain inside this interval.");
+      await refresh();
+    }catch(exc){setError((exc as Error).message);}
+    finally{setBusy(false);}
+  }
   function resetDraft(){
     setPreview(null);setTyped("");setNotice("");
   }
@@ -164,6 +193,41 @@ export function EventManagement({auth}:{auth:Auth}) {
         onChange={e=>setNewName(e.target.value)}/></label>
       <button type="submit" className="btn primary" disabled={busy}><Plus size={16}/> Create & switch</button>
     </form>
+    <section className="event-schedule-section" aria-label="Event start and end time">
+      <div className="event-reset-heading"><div>
+        <span className="eyebrow">EVENT SCHEDULE · EUROPE/LISBON</span>
+        <h3>Event start and end</h3>
+        <p className="muted small">Set the actual event dates and hours in Lisbon.
+          Activities are scheduled inside this interval. Times are stored in UTC.</p>
+      </div><CalendarDays size={22}/></div>
+      {scheduleAvailable?<>
+        {selected?.start_at!=null&&selected.end_at!=null&&
+          <p className="muted small">Current window:
+            {" "+formatLisbonTime(selected.start_at)+" to "+formatLisbonTime(selected.end_at)}</p>}
+        <form className="form-stack" onSubmit={e=>void saveSchedule(e)}>
+          <div className="form-grid">
+            <label>Start (Lisbon)<input type="datetime-local" required
+              value={scheduleStart} disabled={busy||!canReset}
+              onChange={e=>setScheduleStart(e.target.value)}/></label>
+            <label>End (Lisbon)<input type="datetime-local" required
+              value={scheduleEnd} min={scheduleStart||undefined}
+              disabled={busy||!canReset}
+              onChange={e=>setScheduleEnd(e.target.value)}/></label>
+          </div>
+          <p className="muted small">If a daylight-saving transition makes a time
+            nonexistent or ambiguous, choose an unambiguous local time.</p>
+          <div className="actions-right">
+            <button className="btn primary" type="submit"
+              disabled={busy||!canReset||!scheduleStart||!scheduleEnd}>
+              Save event schedule</button>
+          </div>
+        </form>
+      </>:<div className="settings-note" role="status">
+        <CalendarDays size={18}/>
+        <p>Event time settings will become available when the server's event-schedule
+          update is installed. No dates are stored locally or assumed.</p>
+      </div>}
+    </section>
     <div className="event-reset-section">
       <div className="event-reset-heading"><div><span className="eyebrow">CONTROLLED RESET</span>
         <h3>Reset the current event</h3>

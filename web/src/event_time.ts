@@ -43,3 +43,8 @@ export function parseLisbonTime(value:string):number|null{
       "This local time occurs twice in Lisbon when the clocks change. Choose an unambiguous time.");
   return Math.floor(candidates[0]/1000);
 }
+
+// Suitable for datetime-local inputs; never converts via the browser's local zone.
+export function formatLisbonInput(epochSeconds:number|null|undefined):string{
+  return epochSeconds==null?"":wallTime(epochSeconds*1000);
+}
