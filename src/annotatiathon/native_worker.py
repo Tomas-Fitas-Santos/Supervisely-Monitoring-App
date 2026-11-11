@@ -22,7 +22,9 @@ import os
 import shutil
 import time
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path, PurePosixPath
+from threading import local
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -50,6 +52,7 @@ from .models import (
     NativeOperation,
     NativeSourceMedia,
     Person,
+    ReviewSample,
     SuperviselyConfig,
     epoch,
 )
@@ -562,6 +565,8 @@ def capture_job_annotations(db: Session, api, job: LabelingJob) -> bool:
     )
     manifest = destination / "manifest.json"
     if manifest.is_file():
+        from .review_queue_api import ingest_sample
+        ingest_sample(db, job, destination)
         if (job.annotation_snapshot_round != job.correction_round
                 or job.annotation_snapshot_frames != job.frame_count):
             from .snapshot_metrics import cache_snapshot_counts
@@ -682,6 +687,8 @@ def capture_job_annotations(db: Session, api, job: LabelingJob) -> bool:
         os.replace(temporary, destination)
         from .snapshot_metrics import cache_snapshot_counts
         cache_snapshot_counts(db, job, destination / "manifest.json")
+        from .review_queue_api import ingest_sample
+        ingest_sample(db, job, destination)
     except BaseException:
         shutil.rmtree(temporary, ignore_errors=True)
         raise
@@ -755,13 +762,19 @@ def sync_all(db: Session, api, config: SuperviselyConfig) -> dict:
             LabelingJob.plan_id == plan.id,
             LabelingJob.event_id == plan.event_id,
             LabelingJob.status.in_(["on_review", "completed"]),
-        )))
+            (LabelingJob.annotation_snapshot_round.is_distinct_from(LabelingJob.correction_round))
+            | ((LabelingJob.release_mode == "shared_primary") & ~select(ReviewSample.id).where(
+                ReviewSample.job_id == LabelingJob.id,
+                ReviewSample.correction_round == LabelingJob.correction_round,
+            ).exists()),
+        ).order_by(LabelingJob.id).limit(10)))
         for candidate in candidates:
             if snapshots >= 5:
                 break
             try:
                 if capture_job_annotations(db, api, candidate):
                     snapshots += 1
+                db.commit()
             except Exception as exc:  # noqa: BLE001 - retried next worker poll
                 db.rollback()
                 failures += 1
@@ -1312,66 +1325,83 @@ def process_event_reset(db: Session, api, config: SuperviselyConfig) -> dict | N
         return {"status": "attention", "operation_id": opid}
 
 
-def run_worker(*, once: bool, poll_seconds: int) -> None:
-    if not once and not 3 <= poll_seconds <= 300:
-        raise ValueError("Polling interval must be 3-300 seconds.")
-    config_isolation: tuple[int, int, str, str | None] | None = None
-    api = None
-    while True:
-        with session_factory()() as db:
+def reset_pending(db: Session) -> bool:
+    return db.scalar(select(NativeOperation.id).where(
+        NativeOperation.kind == "reset_event",
+        NativeOperation.status.in_(["pending", "running", "attention"]),
+    ).limit(1)) is not None
+
+
+_worker_clients = local()
+
+
+def worker_cycle(lane: str) -> bool:
+    """Use independent sessions and SDK clients for each lane."""
+    with session_factory()() as db:
+        try:
+            pending_reset = reset_pending(db)
+            if pending_reset and lane != "reset":
+                return False
+            if lane == "reset" and not pending_reset:
+                return False
             config = db.get(SuperviselyConfig, 1)
             if (config is None or not config.verified or config.team_id is None
                     or config.workspace_id is None):
                 raise NativeWorkerError("verified_team_workspace_required")
-            identifier = (config.team_id, config.workspace_id, config.server_url,
+            connection = (config.team_id, config.workspace_id, config.server_url,
                           config.token_ciphertext)
-            if api is None or config_isolation != identifier:
-                api = connect_native(config)
-                config_isolation = identifier
-            try:
-                # A resetting event may still have queued publishing tasks;
-                # execute the reset exclusively until it has finished.
-                active_reset = db.scalar(select(NativeOperation.id).where(
-                    NativeOperation.kind == "reset_event",
-                    NativeOperation.status.in_(["pending", "running", "attention"]),
-                ))
-                if active_reset is not None:
-                    reset_result = process_event_reset(db, api, config)
-                    if reset_result:
-                        logger.info("Nightjar reset worker: %s", reset_result)
-                    if once:
-                        return
-                    time.sleep(poll_seconds)
-                    continue
-                reassignment = process_reassignment_once(db, api, config)
-                correction = process_correction_once(db, api, config)
-                # An organiser's urgent manual publication should not wait
-                # behind another entire pre-event media mirror.
-                operation = process_once(db, api, config)
-                high_pending = db.scalar(select(NativeOperation.id)
-                    .join(LabelingJob, LabelingJob.id == NativeOperation.target_id)
-                    .join(LabelingPlan, LabelingPlan.id == LabelingJob.plan_id)
-                    .join(Event, Event.id == NativeOperation.event_id)
-                    .where(
-                        NativeOperation.kind == "publish_job",
-                        NativeOperation.status == "pending",
-                        NativeOperation.priority > 0,
-                        LabelingPlan.status == "running",
-                        Event.status == "active",
-                    ).limit(1))
-                mirror = None if high_pending else process_mirror_once(db, api, config)
-                export = process_export_once(db, api)
-                sync_result = sync_all(db, api, config)
-                if mirror or reassignment or correction or operation or export or sync_result["changed_jobs"] or sync_result["annotation_snapshots"]:
-                    logger.info("Nightjar worker: mirror=%s reassign=%s correction=%s publish=%s export=%s sync=%s",
-                                mirror, reassignment, correction, operation, export, sync_result)
-            except Exception as exc:  # noqa: BLE001 - keep long-lived worker alive
-                db.rollback()
-                logger.warning("Supervisely worker cycle failed (type %s); "
-                               "no exception details logged.", type(exc).__name__)
-        if once:
-            return
-        time.sleep(poll_seconds)
+            if getattr(_worker_clients, "connection", None) != connection:
+                _worker_clients.api = connect_native(config)
+                _worker_clients.connection = connection
+            api = _worker_clients.api
+            if lane == "reset":
+                result = process_event_reset(db, api, config)
+            elif lane == "publish":
+                result = process_once(db, api, config)
+            else:
+                process_reassignment_once(db, api, config)
+                process_correction_once(db, api, config)
+                result = sync_all(db, api, config)
+                if not reset_pending(db):
+                    process_mirror_once(db, api, config)
+                    process_export_once(db, api)
+            if result:
+                logger.info("Nightjar %s worker: %s", lane, result)
+            return bool(result)
+        except Exception as exc:  # keep each lane available after a failed cycle
+            db.rollback()
+            logger.warning("Supervisely %s worker cycle failed (%s).", lane, type(exc).__name__)
+            return False
+
+
+def run_worker(*, once: bool, poll_seconds: int) -> None:
+    if not once and not 3 <= poll_seconds <= 300:
+        raise ValueError("Polling interval must be 3-300 seconds.")
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="nightjar-background") as pool:
+        background = None
+        next_background = 0.0
+        while True:
+            if background is not None and background.done():
+                background.result()
+                background = None
+            with session_factory()() as db:
+                resetting = reset_pending(db)
+            if resetting:
+                if background is None:
+                    worker_cycle("reset")
+                if once:
+                    return
+                time.sleep(poll_seconds)
+                continue
+            if once:
+                worker_cycle("publish")
+                worker_cycle("background")
+                return
+            if background is None and time.monotonic() >= next_background:
+                background = pool.submit(worker_cycle, "background")
+                next_background = time.monotonic() + poll_seconds
+            if not worker_cycle("publish"):
+                time.sleep(min(1, poll_seconds))
 
 
 def main() -> None:

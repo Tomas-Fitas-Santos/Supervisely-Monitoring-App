@@ -1,0 +1,263 @@
+"""Submission based sampling and event-wide monitor leases."""
+import hashlib
+import json
+from collections import Counter
+from pathlib import Path
+from secrets import choice
+from typing import Literal
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse
+from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import case, func, or_, select
+from sqlalchemy.orm import Session
+
+from .annotation_schema import annotation_class_view
+from .auth import AuthContext, requires
+from .db import get_db
+from .events_api import current_event
+from .models import (CompetitionTeam, LabelingJob, MediaAsset, MediaDataset,
+                     Person, ReviewRubric, ReviewSample, epoch, identifier)
+from .scoring_api import Weights, latest_rubric
+
+router = APIRouter(prefix="/api/v1/review-queue", tags=["sampled review"])
+LEASE_SECONDS = 180
+read_access = requires("organiser", "monitor")
+write_access = requires("organiser", "monitor", mutation=True)
+
+
+def ingest_sample(db: Session, job: LabelingJob, root: Path) -> None:
+    if job.release_mode != "shared_primary" or not job.media_ids:
+        return
+    exists = db.scalar(select(ReviewSample.id).where(
+        ReviewSample.job_id == job.id, ReviewSample.correction_round == job.correction_round,
+    ))
+    if exists:
+        return
+    previous_job = db.scalar(select(LabelingJob.id).where(
+        LabelingJob.event_id == job.event_id,
+        LabelingJob.assignee_person_id == job.assignee_person_id,
+        LabelingJob.release_mode == "shared_primary",
+        LabelingJob.created_at <= job.created_at, LabelingJob.id != job.id,
+        LabelingJob.submitted_at.is_not(None),
+        LabelingJob.sequence < job.sequence,
+    ).limit(1))
+    media_id = job.media_ids[0] if previous_job is None else min(
+        job.media_ids, key=lambda value: hashlib.sha256(f"{job.id}:{value}".encode()).digest(),
+    )
+    raw = (root / f"{media_id}.json").read_bytes()
+    snapshot = json.loads(raw)
+    if snapshot["source_media_id"] != media_id:
+        raise ValueError("Sample source does not match its snapshot")
+    snapshot["sha256"] = hashlib.sha256(raw).hexdigest()
+    snapshot["selection_reason"] = "onboarding" if previous_job is None else "routine"
+    db.add(ReviewSample(event_id=job.event_id, job_id=job.id, team_id=job.team_id,
+                        media_id=media_id, correction_round=job.correction_round, snapshot=snapshot))
+
+
+class Lease(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    claim_token: UUID
+
+
+class Verdict(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    object_index: int = Field(ge=0)
+    correct: bool
+    reason: Literal["wrong_class", "wrong_placement", "sabotage"] | None = None
+    corrected_class: str | None = None
+
+
+class Completion(Lease):
+    verdicts: list[Verdict]
+    missing_classes: list[str] = Field(default_factory=list, max_length=1000)
+    action: Literal["next", "pause"] = "pause"
+
+
+def lock_event(db, ctx):
+    return current_event(db, ctx, writable=True)
+
+
+def claim_view(db, sample):
+    job = db.get(LabelingJob, sample.job_id)
+    person = db.get(Person, job.assignee_person_id)
+    rubric = db.get(ReviewRubric, sample.rubric_id) if sample.rubric_id else None
+    return {
+        "review_id": sample.id, "claim_token": sample.claim_token,
+        "expires_at": sample.expires_at, "source_media_id": sample.media_id,
+        "annotation_snapshot_id": sample.id, "snapshot_revision": sample.snapshot["sha256"],
+        "source_filename": Path(sample.snapshot["source_relative_path"]).name,
+        "team_name": db.get(CompetitionTeam, sample.team_id).name,
+        "annotator_name": person.name, "correction_round": sample.correction_round,
+        "selection_reason": sample.snapshot["selection_reason"],
+        "image_url": f"/api/v1/review-queue/{sample.id}/image",
+        "annotation": sample.snapshot["annotation"], "classes": annotation_class_view(),
+        "rubric_version": rubric.version if rubric else 0,
+    }
+
+
+def claim(db, event_id, reviewer_id):
+    now = epoch()
+    rows = ReviewSample
+    scope = rows.event_id == event_id
+    active = (rows.completed_at.is_(None), rows.expires_at > now)
+    existing = db.scalar(select(rows).where(scope, rows.reviewer_id == reviewer_id, *active))
+    if existing:
+        return claim_view(db, existing)
+    available = rows.completed_at.is_(None) & or_(rows.expires_at.is_(None), rows.expires_at <= now)
+    load = func.sum(case((or_(rows.completed_at.is_not(None), rows.expires_at > now), 1), else_=0))
+    teams = db.execute(select(rows.team_id, load.label("load")).where(scope)
+                       .group_by(rows.team_id).having(func.sum(case((available, 1), else_=0)) > 0)
+                       .order_by(load)).all()
+    if not teams:
+        return None
+    team_id = choice([row.team_id for row in teams if row.load == teams[0].load])
+    pivot = identifier()
+    query = select(rows).where(scope, rows.team_id == team_id, available)
+    sample = db.scalar(query.where(rows.random_key >= pivot).order_by(rows.random_key).limit(1))
+    if sample is None:
+        sample = db.scalar(query.order_by(rows.random_key).limit(1))
+    rubric = latest_rubric(db, event_id)
+    sample.rubric_id = rubric.id if rubric else None
+    sample.reviewer_id = reviewer_id
+    sample.claim_token = identifier()
+    sample.expires_at = now + LEASE_SECONDS
+    db.flush()
+    return claim_view(db, sample)
+
+
+def owned(db, event_id, review_id, reviewer_id, token=None, *, allow_expired=False):
+    sample = db.get(ReviewSample, review_id)
+    if sample is None or sample.event_id != event_id:
+        raise HTTPException(404, "Review sample not found.")
+    if sample.reviewer_id != reviewer_id or (token is not None and sample.claim_token != str(token)):
+        raise HTTPException(409, "Review is not owned by this claim.")
+    if not allow_expired and sample.completed_at is None and (sample.expires_at or 0) <= epoch():
+        raise HTTPException(409, "Review claim expired.")
+    return sample
+
+
+@router.post("/claim-next")
+def claim_next(ctx: AuthContext = Depends(write_access), db: Session = Depends(get_db)):
+    event = lock_event(db, ctx)
+    review = claim(db, event.id, ctx.staff.id)
+    db.commit()
+    return {"review": review}
+
+
+@router.post("/{review_id}/heartbeat")
+def heartbeat(review_id: str, payload: Lease,
+              ctx: AuthContext = Depends(write_access), db: Session = Depends(get_db)):
+    event = lock_event(db, ctx)
+    sample = owned(db, event.id, review_id, ctx.staff.id, payload.claim_token)
+    if sample.completed_at is not None:
+        raise HTTPException(409, "Review already completed.")
+    sample.expires_at = epoch() + LEASE_SECONDS
+    db.commit()
+    return {"expires_at": sample.expires_at}
+
+
+@router.post("/{review_id}/release")
+def release(review_id: str, payload: Lease,
+            ctx: AuthContext = Depends(write_access), db: Session = Depends(get_db)):
+    event = lock_event(db, ctx)
+    sample = owned(db, event.id, review_id, ctx.staff.id, payload.claim_token, allow_expired=True)
+    if sample.completed_at is None:
+        sample.expires_at = 0
+    db.commit()
+    return {"released": True}
+
+
+@router.post("/{review_id}/complete")
+def complete(review_id: str, payload: Completion,
+             ctx: AuthContext = Depends(write_access), db: Session = Depends(get_db)):
+    event = lock_event(db, ctx)
+    sample = owned(db, event.id, review_id, ctx.staff.id, payload.claim_token)
+    if sample.completed_at is not None:
+        successor_id = sample.decision.get("next_review_id")
+        successor = db.get(ReviewSample, successor_id) if successor_id else None
+        if (successor is not None and successor.reviewer_id == ctx.staff.id
+                and successor.claim_token == sample.decision.get("next_claim_token")
+                and successor.completed_at is None and successor.expires_at > epoch()):
+            return {"completed": True, "review": claim_view(db, successor)}
+        return {"completed": True, "review": None}
+    annotation = sample.snapshot["annotation"]
+    objects = annotation.get("objects", annotation.get("labels", []))
+    if sorted(item.object_index for item in payload.verdicts) != list(range(len(objects))):
+        raise HTTPException(422, "Supply exactly one verdict for every annotation object.")
+    classes = {item["name"]: item["shape"] for item in annotation_class_view()}
+    if any(name not in classes for name in payload.missing_classes):
+        raise HTTPException(422, "Missing items must use a known annotation class.")
+    rubric = db.get(ReviewRubric, sample.rubric_id) if sample.rubric_id else None
+    weights = rubric.weights if rubric else Weights().model_dump()
+    correct = Counter()
+    errors = Counter()
+    for verdict in payload.verdicts:
+        obj = objects[verdict.object_index]
+        shape = obj.get("geometryType") or classes.get(obj.get("classTitle"))
+        if shape not in {"rectangle", "point"}:
+            raise HTTPException(422, "Unsupported object geometry.")
+        if verdict.correct:
+            if verdict.reason or verdict.corrected_class:
+                raise HTTPException(422, "Correct objects cannot include correction details.")
+            correct[shape] += 1
+        else:
+            if verdict.reason == "wrong_class":
+                if (classes.get(verdict.corrected_class) != shape
+                        or verdict.corrected_class == obj.get("classTitle")):
+                    raise HTTPException(422, "Choose a different class with the same geometry.")
+            elif verdict.corrected_class or (shape == "point" and not verdict.reason):
+                raise HTTPException(422, "Invalid or missing correction reason.")
+            errors[verdict.reason or "incorrect_box"] += 1
+    sample.decision = {
+        "verdicts": [item.model_dump() for item in payload.verdicts],
+        "missing_classes": payload.missing_classes,
+        "correct_keypoints": correct["point"], "correct_boxes": correct["rectangle"],
+        "errors": dict(errors), "weighted_score": (
+            correct["point"] * weights["keypoint"] + correct["rectangle"] * weights["box"]
+            - sum(count * weights.get(reason, 0) for reason, count in errors.items())
+        ),
+    }
+    sample.completed_at = epoch()
+    db.flush()
+    next_review = claim(db, event.id, ctx.staff.id) if payload.action == "next" else None
+    if next_review:
+        sample.decision = {**sample.decision, "next_review_id": next_review["review_id"],
+                           "next_claim_token": next_review["claim_token"]}
+    db.commit()
+    return {"completed": True, "review": next_review}
+
+
+@router.get("/status")
+def status(ctx: AuthContext = Depends(read_access), db: Session = Depends(get_db)):
+    now = epoch()
+    event = current_event(db, ctx)
+    state = case((ReviewSample.completed_at.is_not(None), "completed"),
+                 (ReviewSample.expires_at > now, "active"), else_="pending").label("state")
+    counts = Counter()
+    teams = {}
+    for team, name, key, count in db.execute(
+        select(ReviewSample.team_id, CompetitionTeam.name, state, func.count())
+        .join(CompetitionTeam, CompetitionTeam.id == ReviewSample.team_id)
+        .where(ReviewSample.event_id == event.id)
+        .group_by(ReviewSample.team_id, CompetitionTeam.name, state)
+    ):
+        counts[key] += count
+        teams.setdefault(team, {"team_id": team, "team_name": name,
+                                "pending": 0, "active": 0, "completed": 0})[key] = count
+    return {**{key: counts[key] for key in ("pending", "active", "completed")},
+            "teams": list(teams.values())}
+
+
+@router.get("/{review_id}/image")
+def image(review_id: str, ctx: AuthContext = Depends(read_access), db: Session = Depends(get_db)):
+    event = current_event(db, ctx)
+    sample = owned(db, event.id, review_id, ctx.staff.id)
+    asset = db.get(MediaAsset, sample.media_id)
+    dataset = db.get(MediaDataset, asset.dataset_id)
+    root = (Path(dataset.root_path) / "media").resolve()
+    path = (root / asset.relative_path).resolve()
+    if not path.is_relative_to(root) or not path.is_file():
+        raise HTTPException(404, "Local image missing.")
+    return FileResponse(path, headers={"Cache-Control": "private, no-store"})

@@ -707,3 +707,33 @@ class NativeJobRevision(Base):
     native_job_id: Mapped[int] = mapped_column(Integer)
     correction_round: Mapped[int] = mapped_column(Integer)
     created_at: Mapped[int] = mapped_column(Integer, default=epoch)
+
+class ReviewRubric(Base):
+    __tablename__ = "review_rubrics"
+    __table_args__ = (UniqueConstraint("event_id", "version"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=identifier)
+    event_id: Mapped[str] = mapped_column(ForeignKey("events.id"), index=True)
+    version: Mapped[int] = mapped_column(Integer)
+    weights: Mapped[dict] = mapped_column(JSON)
+
+
+class ReviewSample(Base):
+    __tablename__ = "review_samples"
+    __table_args__ = (
+        UniqueConstraint("job_id", "correction_round"),
+        Index("ix_review_sample_claim", "event_id", "team_id", "random_key"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=identifier)
+    event_id: Mapped[str] = mapped_column(ForeignKey("events.id"), index=True)
+    job_id: Mapped[str] = mapped_column(ForeignKey("labeling_jobs.id"))
+    team_id: Mapped[str] = mapped_column(ForeignKey("competition_teams.id"))
+    media_id: Mapped[str] = mapped_column(ForeignKey("media_assets.id"))
+    correction_round: Mapped[int] = mapped_column(Integer)
+    random_key: Mapped[str] = mapped_column(String(36), default=identifier)
+    snapshot: Mapped[dict] = mapped_column(JSON)
+    reviewer_id: Mapped[str | None] = mapped_column(ForeignKey("staff_accounts.id"))
+    claim_token: Mapped[str | None] = mapped_column(String(36))
+    expires_at: Mapped[int | None] = mapped_column(Integer)
+    completed_at: Mapped[int | None] = mapped_column(Integer)
+    rubric_id: Mapped[str | None] = mapped_column(ForeignKey("review_rubrics.id"))
+    decision: Mapped[dict | None] = mapped_column(JSON)
