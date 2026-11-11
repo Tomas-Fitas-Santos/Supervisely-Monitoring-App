@@ -570,6 +570,27 @@ def capture_job_annotations(db: Session, api, job: LabelingJob) -> bool:
         raise NativeWorkerError("annotation_media_mapping_incomplete")
     if any(m.native_dataset_id != job.native_dataset_id for m in mappings.values()):
         raise NativeWorkerError("annotation_dataset_mapping_changed")
+    # With a shared pre-uploaded image pool, annotations must be requested
+    # from the *submitted labeling job*, not from the project's image API.
+    # The latter could include a different annotator's work on the same ID.
+    bindings = list(db.scalars(select(NativeJobBinding).where(
+        NativeJobBinding.job_id == job.id,
+        NativeJobBinding.event_id == job.event_id,
+    )))
+    if len(bindings) != 1 or bindings[0].person_id != job.assignee_person_id:
+        raise NativeWorkerError("submitted_job_binding_not_unique")
+    native_job_id = bindings[0].native_job_id
+    ordered_ids = [mappings[media_id].native_image_id for media_id in job.media_ids]
+    project_meta = api.labeling_job.get_project_meta(native_job_id)
+    downloaded = api.labeling_job.get_annotations(
+        native_job_id, image_ids=ordered_ids, project_meta=project_meta,
+    )
+    if len(downloaded) != len(ordered_ids):
+        raise NativeWorkerError("job_annotation_count_mismatch")
+    # Return image pixels are never requested, decoded or downloaded.
+    annotation_json = [ann.to_json(project_meta) for ann in downloaded]
+    if any(not isinstance(ann, dict) for ann in annotation_json):
+        raise NativeWorkerError("job_annotation_invalid")
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_name(destination.name + ".partial")
     if temporary.exists():
@@ -579,12 +600,9 @@ def capture_job_annotations(db: Session, api, job: LabelingJob) -> bool:
     try:
         rows = []
         annotated_frames = 0
-        for media_id in job.media_ids:
+        for media_id, annotation in zip(job.media_ids, annotation_json):
             asset = assets[media_id]
             native = mappings[media_id]
-            annotation = api.annotation.download_json(native.native_image_id)
-            if not isinstance(annotation, dict):
-                raise NativeWorkerError("native_annotation_invalid")
             # Supervisely JSON uses "objects"; accept the legacy "labels"
             # field as well for snapshots created by earlier SDK versions.
             objects = annotation.get("objects")
@@ -598,6 +616,7 @@ def capture_job_annotations(db: Session, api, job: LabelingJob) -> bool:
                 "source_sha256": asset.sha256,
                 "native_dataset_id": native.native_dataset_id,
                 "native_image_id": native.native_image_id,
+                "native_job_id": native_job_id,
                 "annotation": annotation,
             }
             with (temporary / (media_id + ".json")).open(
@@ -614,6 +633,7 @@ def capture_job_annotations(db: Session, api, job: LabelingJob) -> bool:
                 "schema": "nightjar-annotation-snapshot-v1",
                 "event_id": job.event_id, "dataset_id": dataset.id,
                 "job_id": job.id, "correction_round": job.correction_round,
+                "native_job_id": native_job_id,
                 "captured_at": captured, "media": rows,
                 "annotated_frames": annotated_frames,
                 "annotation_state": "current_supervisely_snapshot",
