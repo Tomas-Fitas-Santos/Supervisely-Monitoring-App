@@ -1,3 +1,4 @@
+import { confirmAction } from "./dialogs";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   CheckCircle2, ClipboardCheck, Layers3, PlayCircle, RefreshCw,
@@ -170,7 +171,7 @@ export function CompetitionScreen({auth,view="progress"}:{
     finally{setBusy(false);}
   }
   async function approve(plan:Plan){
-    if(!window.confirm("Approve this automatic distribution? Approval does not publish jobs."))return;
+    if(!await confirmAction("Approve this automatic distribution? Approval does not publish jobs."))return;
     setBusy(true);setError("");setNotice("");
     try {
       await api("/labeling/plans/"+plan.id+"/approve","POST",undefined,auth.csrf_token);
@@ -180,7 +181,7 @@ export function CompetitionScreen({auth,view="progress"}:{
     finally{setBusy(false);}
   }
   async function nativeAction(endpoint:string,description:string,body?:unknown){
-    if(!window.confirm(description))return;
+    if(!await confirmAction(description))return;
     setBusy(true);setError("");setNotice("");
     try {
       const result=await api<{status?:string;pending_operations?:number}>(
@@ -197,7 +198,7 @@ export function CompetitionScreen({auth,view="progress"}:{
     if(drafts.some(item=>!item.assignee_person_id)){
       setError("Select an annotator for each chosen video before creating jobs.");return;
     }
-    if(dispatch==="publish"&&!window.confirm(
+    if(dispatch==="publish"&&!await confirmAction(
       "Queue "+drafts.length+" job(s) for the live Supervisely worker? "+
       "Every row is one video assigned to one person."))return;
     setBusy(true);setError("");setNotice("");
@@ -216,7 +217,7 @@ export function CompetitionScreen({auth,view="progress"}:{
   }
   async function reassignSelected(){
     if(!selectedJob||!reassignTo||busy)return;
-    if(!window.confirm("Reassign this job to the selected annotator? The recipient may belong to another team."))return;
+    if(!await confirmAction("Reassign this job to the selected annotator? The recipient may belong to another team."))return;
     setBusy(true);setError("");setNotice("");
     try{
       const result=await api<{status:string}>(

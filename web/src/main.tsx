@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { AppDialogHost } from "./dialogs";
 import {
   Activity, Award, ArrowRight, Bird, CalendarDays, CheckCircle2, ChevronDown,
   CircleHelp, ClipboardCheck, Cloud, Database, LayoutDashboard, LogOut,
@@ -239,6 +240,7 @@ function App() {
   const navigation=[...eventNavigation,...setupNavigation,...accountNavigation];
   const accessibleTab=navigation.some(item=>item.id===tab)?tab:"overview";
   return <div className="app-shell">
+    <AppDialogHost/>
     <aside className="sidebar">
       <div className="sidebar-logo"><div className="brand-mark"><Bird size={23}/></div>
         <div><strong>NIGHTJAR</strong><span>ANNOTATIATHON</span></div></div>

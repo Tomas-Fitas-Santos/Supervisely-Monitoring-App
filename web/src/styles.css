@@ -404,3 +404,15 @@ input,select{border:1px solid #dfe5ed;border-radius:9px;background:white;padding
   .shared-review-zoom-viewport{max-height:60vh}
   .shared-review-object-label{min-width:0}
 }
+
+
+/* App-owned confirmations replace browser-native prompts. */
+.app-confirm-overlay{z-index:2000}
+.app-confirm-modal{width:min(540px,100%);padding:28px}
+.app-confirm-modal .modal-heading{margin-bottom:15px}
+.app-confirm-message{display:flex;align-items:flex-start;gap:13px;margin:12px 0 24px;color:#324950;line-height:1.65;white-space:pre-wrap}
+.app-confirm-message svg{flex:none;color:#397862}
+.app-confirm-message p{margin:0;font-size:13px;overflow-wrap:anywhere}
+.app-confirm-modal label{display:flex;flex-direction:column;gap:9px;margin-bottom:20px;font-size:12px;font-weight:700}
+.app-confirm-modal input{width:100%}
+.app-confirm-modal .modal-actions{margin-top:20px}

@@ -1,3 +1,4 @@
+import { confirmAction } from "./dialogs";
 import { useCallback, useEffect, useState } from "react";
 import type React from "react";
 import {
@@ -116,17 +117,17 @@ export function ActivitiesScreen({auth}:{auth:Auth}) {
     },auth.csrf_token),"Prize rule saved.");
   }
   async function removeResult(result:Result){
-    if(!selected||!window.confirm("Delete ranked result for "+result.subject_name+"?"))return;
+    if(!selected||!await confirmAction("Delete ranked result for "+result.subject_name+"?"))return;
     await execute(()=>api("/activities/"+selected+"/results/"+result.id,"DELETE",undefined,
       auth.csrf_token),"Result removed.");
   }
   async function removePrize(prize:Prize){
-    if(!selected||!window.confirm("Remove this prize rule?"))return;
+    if(!selected||!await confirmAction("Remove this prize rule?"))return;
     await execute(()=>api("/activities/"+selected+"/prizes/"+prize.id,"DELETE",undefined,
       auth.csrf_token),"Prize rule removed.");
   }
   async function finalise(){
-    if(!selected||!window.confirm(
+    if(!selected||!await confirmAction(
       "Finalise the activity's results and allocate all matching prize entitlements? "+
       "Prize allocations will be recorded in Tickets & Rewards and results will be locked. "+
       "This does NOT physically issue tickets."

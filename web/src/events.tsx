@@ -1,3 +1,4 @@
+import { confirmAction, promptText } from "./dialogs";
 import { useCallback, useEffect, useState } from "react";
 import type React from "react";
 import {
@@ -89,7 +90,7 @@ export function EventManagement({auth}:{auth:Auth}) {
   }
   async function archiveOrReopen(action:"archive"|"reopen"){
     if(!selected)return;
-    const answer=window.prompt(
+    const answer=await promptText(
       (action==="archive"?"Archive":"Reopen")+" '"+selected.name+
       "'? Enter the full event name to confirm:");
     if(answer!==selected.name)return;
@@ -110,7 +111,7 @@ export function EventManagement({auth}:{auth:Auth}) {
   }
   async function execute(){
     if(!preview||typed!==preview.confirmation_phrase)return;
-    if(!window.confirm("Final confirmation: perform this event reset now?"))return;
+    if(!await confirmAction("Final confirmation: perform this event reset now?"))return;
     setBusy(true);setError("");setNotice("");
     try{
       const result=await api<{mode:ResetMode;snapshot_id:string}>(
