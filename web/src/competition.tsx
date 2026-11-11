@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  CheckCircle2, ClipboardCheck, Layers3, PlayCircle, Plus, RefreshCw,
+  CheckCircle2, ClipboardCheck, Layers3, PlayCircle, RefreshCw,
   Send, Trash2, UsersRound, Video
 } from "lucide-react";
 import { api, type Auth } from "./api";
