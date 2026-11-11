@@ -234,3 +234,5 @@ def test_activity_permissions_and_validation(ctx):
         "category_id": cat, "min_rank": 1, "max_rank": 1, "quantity": 1,
     }).status_code == 403
     assert call(http, activity_csrf, "/activities/" + activity + "/finalise").status_code == 403
+    assert call(http, activity_csrf, "/activities/" + activity,
+                {"status": "cancelled"}, "PATCH").status_code == 403

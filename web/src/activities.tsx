@@ -205,7 +205,8 @@ export function ActivitiesScreen({auth}:{auth:Auth}) {
             <p className="muted small">{localDate(detail.activity.start_at)} · {detail.activity.location||"Location not assigned"}</p>
           </div>{active?.awards_finalised_at&&<CheckCircle2 size={24}/>}</div>
           {canEdit&&!frozen&&<div className="activity-status-actions"><span className="muted small">Set status:</span>
-            {(["scheduled","live","completed","cancelled"] as const).map(state=>
+            {(["scheduled","live","completed","cancelled"] as const)
+              .filter(state=>organiser||state!=="cancelled").map(state=>
               <button key={state} className={"btn "+(active?.status===state?"primary":"secondary")}
                 disabled={busy||active?.status===state}
                 onClick={()=>void changeStatus(state)}>{state}</button>)}

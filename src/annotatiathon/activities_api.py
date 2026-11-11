@@ -161,6 +161,8 @@ def edit_activity(
     event = current_event(db, ctx, writable=True)
     activity = get_activity(db, event.id, activity_id, locked=True)
     ensure_editable(activity)
+    if payload.status == "cancelled" and "organiser" not in ctx.staff.roles:
+        raise HTTPException(status_code=403, detail="Only organisers can cancel activities.")
     fields = payload.model_fields_set
     for field in fields:
         value = getattr(payload, field)
