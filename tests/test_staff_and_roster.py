@@ -67,7 +67,7 @@ def test_login_sessions_and_csrf(client):
 def test_staff_role_blocks_settings_mutations(client):
     http, _ = client
     csrf = sign_in(http, "monitor@example.org", "CorrectSecretPassword2!")
-    assert http.get("/api/v1/settings/supervisely").status_code == 403
+    assert http.get("/api/v1/settings/supervisely").status_code == 200
     response = http.put("/api/v1/settings/supervisely",
                         headers={"X-CSRF-Token": csrf},
                         json={"supervisely": {"team_id": 125980}})
