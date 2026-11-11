@@ -577,18 +577,30 @@ def capture_job_annotations(db: Session, api, job: LabelingJob) -> bool:
         NativeJobBinding.job_id == job.id,
         NativeJobBinding.event_id == job.event_id,
     )))
-    if len(bindings) != 1 or bindings[0].person_id != job.assignee_person_id:
-        raise NativeWorkerError("submitted_job_binding_not_unique")
-    native_job_id = bindings[0].native_job_id
     ordered_ids = [mappings[media_id].native_image_id for media_id in job.media_ids]
-    project_meta = api.labeling_job.get_project_meta(native_job_id)
-    downloaded = api.labeling_job.get_annotations(
-        native_job_id, image_ids=ordered_ids, project_meta=project_meta,
-    )
-    if len(downloaded) != len(ordered_ids):
-        raise NativeWorkerError("job_annotation_count_mismatch")
-    # Return image pixels are never requested, decoded or downloaded.
-    annotation_json = [ann.to_json(project_meta) for ann in downloaded]
+    if job.assignee_person_id is None:
+        # Historical pair jobs predate single-assignee frames. Their legacy
+        # per-job dataset owns these images; preserve old read behavior only
+        # for those records, never for shared source-frame jobs.
+        if len(bindings) != 2:
+            raise NativeWorkerError("legacy_job_binding_count_mismatch")
+        native_job_id = None
+        annotation_json = [
+            api.annotation.download_json(image_id) for image_id in ordered_ids
+        ]
+    else:
+        # Job-scoped annotations are essential when multiple jobs share the
+        # same immutable source frame in one pre-uploaded dataset.
+        if len(bindings) != 1 or bindings[0].person_id != job.assignee_person_id:
+            raise NativeWorkerError("submitted_job_binding_not_unique")
+        native_job_id = bindings[0].native_job_id
+        project_meta = api.labeling_job.get_project_meta(native_job_id)
+        downloaded = api.labeling_job.get_annotations(
+            native_job_id, image_ids=ordered_ids, project_meta=project_meta,
+        )
+        if len(downloaded) != len(ordered_ids):
+            raise NativeWorkerError("job_annotation_count_mismatch")
+        annotation_json = [ann.to_json(project_meta) for ann in downloaded]
     if any(not isinstance(ann, dict) for ann in annotation_json):
         raise NativeWorkerError("job_annotation_invalid")
     destination.parent.mkdir(parents=True, exist_ok=True)
