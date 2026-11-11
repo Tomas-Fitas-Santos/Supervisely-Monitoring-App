@@ -1,3 +1,4 @@
+import { confirmAction } from "./dialogs";
 import { useState } from "react";
 import { AlertTriangle, CheckCircle2, Cloud, RefreshCw, ShieldCheck } from "lucide-react";
 import { api, type Auth } from "./api";
@@ -36,7 +37,7 @@ export function NativeMembershipPanel({auth,onApplied}:{auth:Auth;onApplied:()=>
   }
   async function apply(){
     if(!preview || dirty || preview.conflicts.length)return;
-    if(!window.confirm(
+    if(!await confirmAction(
       "Apply "+preview.matched.length+" verified team membership record(s) to Nightjar? "+
       "This updates only the selected event's LOCAL roster, not Supervisely."
     ))return;

@@ -1,3 +1,4 @@
+import { confirmAction } from "./dialogs";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   CheckCircle2, ClipboardCheck, Image, RefreshCw, RotateCcw, ShieldCheck
@@ -171,7 +172,7 @@ export function QualityScreen({auth}:{auth:Auth}) {
   }
   async function decide(choice:"accept"|"return_for_correction"){
     if(!selected||!reviewable||!reviews?.annotation_snapshot_ready||formKey!==frameKey)return;
-    if(!window.confirm(choice==="accept"?
+    if(!await confirmAction(choice==="accept"?
       "Accept this annotator's video job in Nightjar?":"Return this video job for correction in Nightjar?"))return;
     setBusy(true);setError("");setNotice("");
     try{

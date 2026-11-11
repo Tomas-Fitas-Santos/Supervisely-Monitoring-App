@@ -1,3 +1,4 @@
+import { confirmAction } from "./dialogs";
 import { useCallback, useEffect, useState } from "react";
 import { CheckCircle2, RefreshCw, ShieldCheck, UsersRound } from "lucide-react";
 import { api, type Auth } from "./api";
@@ -56,7 +57,7 @@ export function MonitorAssignmentsPanel({auth,onApplied}:{
     finally{setBusy(false);}
   }
   async function apply() {
-    if(!plan||!window.confirm(
+    if(!plan||!await confirmAction(
       "Apply "+plan.changes+" local team-monitor assignment(s)? "+
       "This does not assign or change any native Supervisely labeling job."
     ))return;

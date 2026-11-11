@@ -1,3 +1,4 @@
+import { confirmAction } from "./dialogs";
 import { useCallback, useEffect, useState } from "react";
 import { Archive, BarChart3, CheckCircle2, Download, RefreshCw, ShieldAlert } from "lucide-react";
 import { api, type Auth } from "./api";
@@ -40,7 +41,7 @@ export function CloseoutScreen({auth}:{auth:Auth}) {
   },[refresh]);
   async function finalize(){
     if(!report||confirmation!=="CLOSE "+report.event_name)return;
-    if(!window.confirm(
+    if(!await confirmAction(
       "Final confirmation: archive this event and freeze operational data? "+
       "Existing annotations and native Supervisely jobs will not be deleted."
     ))return;
@@ -53,7 +54,7 @@ export function CloseoutScreen({auth}:{auth:Auth}) {
     finally{setBusy(false);}
   }
   async function nativeExportAction(retry:boolean){
-    if(!report||!window.confirm(retry?
+    if(!report||!await confirmAction(retry?
       "Retry an interrupted read-only native annotation export?":
       "Queue a read-only native annotation snapshot? This can take considerable time "+
       "for a large dataset and requires the separate SDK worker."))return;

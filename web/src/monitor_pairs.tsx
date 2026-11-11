@@ -1,3 +1,4 @@
+import { confirmAction } from "./dialogs";
 import { useCallback, useEffect, useState } from "react";
 import { Plus, RefreshCw, ShieldCheck, UsersRound, X } from "lucide-react";
 import { api, type Auth, type TeamResponse } from "./api";
@@ -34,7 +35,7 @@ export function MonitorPairPanel({auth,onChanged}:{auth:Auth;onChanged:()=>void}
   async function create(e:React.FormEvent) {
     e.preventDefault();
     if(!name.trim()||!first||!second||first===second)return;
-    if(!window.confirm(
+    if(!await confirmAction(
       "Create a two-monitor competition pair? Both remain monitoring staff. "+
       "No native Supervisely memberships or roles will be changed."
     ))return;
@@ -50,7 +51,7 @@ export function MonitorPairPanel({auth,onChanged}:{auth:Auth;onChanged:()=>void}
     finally{setBusy(false);}
   }
   async function disband(teamId:string,teamName:string){
-    if(!window.confirm("Disband "+teamName+"? This is allowed before "+
+    if(!await confirmAction("Disband "+teamName+"? This is allowed before "+
       "any job is planned OR after all jobs are accepted. Monitor staff and native accounts are retained."))return;
     setBusy(true);setError("");setNotice("");
     try{

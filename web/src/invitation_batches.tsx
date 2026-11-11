@@ -1,3 +1,4 @@
+import { confirmAction } from "./dialogs";
 import { useCallback, useEffect, useState } from "react";
 import { ClipboardCopy, RefreshCw, ShieldCheck, UsersRound } from "lucide-react";
 import { api, type Auth } from "./api";
@@ -41,7 +42,7 @@ function InvitationGroup({auth,kind,version,onComplete}:{
   }
   async function markInvited(){
     if(!batch||!sameBatch||busy)return;
-    if(!window.confirm("Have you actually submitted this batch of "+batch.items.length+
+    if(!await confirmAction("Have you actually submitted this batch of "+batch.items.length+
       " "+label.toLowerCase()+" invitations in Supervisely as "+nativeRole+
       "? Copying addresses is not the same as sending invitations."))return;
     setBusy(true);setError("");setMessage("");
