@@ -130,7 +130,7 @@ def list_activities(
 @router.post("", status_code=201)
 def create_activity(
     payload: ActivityCreate,
-    ctx: AuthContext = Depends(requires(*EDIT_ROLES, mutation=True)),
+    ctx: AuthContext = Depends(requires("organiser", mutation=True)),
     db: Session = Depends(get_db),
 ):
     event = current_event(db, ctx, writable=True)
@@ -161,6 +161,13 @@ def edit_activity(
     event = current_event(db, ctx, writable=True)
     activity = get_activity(db, event.id, activity_id, locked=True)
     ensure_editable(activity)
+    if "organiser" not in ctx.staff.roles and (
+        payload.model_fields_set - {"status"}
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Only organisers can change activity setup and scheduling.",
+        )
     if payload.status == "cancelled" and "organiser" not in ctx.staff.roles:
         raise HTTPException(status_code=403, detail="Only organisers can cancel activities.")
     fields = payload.model_fields_set

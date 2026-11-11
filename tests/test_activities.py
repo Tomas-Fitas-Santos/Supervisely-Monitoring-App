@@ -227,6 +227,18 @@ def test_activity_permissions_and_validation(ctx):
     assert login.status_code == 200
     activity_csrf = login.json()["csrf_token"]
     assert http.get("/api/v1/activities").status_code == 200
+    assert call(http, activity_csrf, "/activities", {
+        "name": "Unauthorised session",
+    }).status_code == 403
+    assert call(http, activity_csrf, "/activities/" + activity, {
+        "name": "Changed without organiser approval",
+    }, "PATCH").status_code == 403
+    assert call(http, activity_csrf, "/activities/" + activity, {
+        "start_at": 1795000300,
+    }, "PATCH").status_code == 403
+    assert call(http, activity_csrf, "/activities/" + activity, {
+        "status": "live",
+    }, "PATCH").status_code == 200
     assert call(http, activity_csrf, "/activities/" + activity + "/results", {
         "subject_type": "person", "subject_id": people[0], "rank": 1,
     }, "PUT").status_code == 200

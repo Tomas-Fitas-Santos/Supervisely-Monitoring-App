@@ -156,7 +156,7 @@ export function ActivitiesScreen({auth}:{auth:Auth}) {
       <p className="muted">Plan sessions, record individual or team results and award trackable ticket entitlements.</p>
       </div><div className="heading-actions"><button className="btn secondary" onClick={()=>void refresh()}>
         <RefreshCw size={15}/> Refresh</button>
-        {canEdit&&<button className="btn primary" onClick={()=>{setSection("schedule");setAddOpen(x=>!x);}}>
+        {organiser&&<button className="btn primary" onClick={()=>{setSection("schedule");setAddOpen(x=>!x);}}>
           <Plus size={15}/> New activity</button>}</div></div>
     {error&&<div className="alert danger" role="alert">{error}</div>}
     {notice&&<div className="alert success" role="status">{notice}</div>}
@@ -172,7 +172,7 @@ export function ActivitiesScreen({auth}:{auth:Auth}) {
       <div className="stat-card"><Trophy size={19}/><span className="muted small">Completed</span>
         <strong>{count("completed")}</strong></div>
     </div>
-    {addOpen&&canEdit&&section==="schedule"&&<section className="panel activities-create">
+    {addOpen&&organiser&&section==="schedule"&&<section className="panel activities-create">
       <span className="eyebrow">SCHEDULE AN ACTIVITY</span><h3>New event activity</h3>
       {eventWindow&&<p className="muted small">Event window: {formatLisbonTime(eventWindow.start_at)}
         {" – "+formatLisbonTime(eventWindow.end_at)}.</p>}
