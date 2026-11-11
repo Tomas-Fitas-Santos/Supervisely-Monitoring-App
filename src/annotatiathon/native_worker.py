@@ -383,7 +383,7 @@ def publish_job(db: Session, job: LabelingJob, api, config: SuperviselyConfig) -
         # recoverable; do not attempt to move an in-progress native job.
         remote_ds_id = remote_dataset(api, db, project_id, job, team)
         native_media = upload_media(db, api, job, dataset, remote_ds_id)
-    elif job.release_mode == "automatic":
+    elif job.release_mode in {"automatic", "shared_primary"}:
         try:
             assert_mirror_complete(db, dataset)
         except MirrorError as exc:
@@ -522,8 +522,22 @@ def sync_one(db: Session, api, job: LabelingJob) -> str:
         ))
         for info in statuses
     ):
-        # New single-annotator jobs trust Supervisely's submitted status.
-        # Preserve the historical completion rule for old two-annotator jobs.
+        if job.release_mode == "shared_primary":
+            from .models import WorkPacket
+
+            packet = db.get(WorkPacket, job.id)
+            if packet is None or packet.person_id != job.assignee_person_id:
+                raise NativeWorkerError("shared_packet_missing")
+            native = statuses[0]
+            # The native count is a completion gate, not a list of which frames
+            # can safely be restarted. Preserve ownership on any ambiguity.
+            if native.images_count != job.frame_count or native.finished_images_count != job.frame_count:
+                job.review_status = "incomplete_submission"
+                db.commit()
+                return job.status
+            packet.submitted_at = packet.submitted_at or epoch()
+            if job.review_status == "incomplete_submission":
+                job.review_status = "unreviewed"
         job.status = "on_review"
         job.submitted_at = job.submitted_at or epoch()
     db.commit()
@@ -688,6 +702,7 @@ def sync_all(db: Session, api, config: SuperviselyConfig) -> dict:
             LabelingJob.plan_id == plan.id,
             LabelingJob.event_id == plan.event_id,
         )))
+        ready_for_next = []
         for job in jobs:
             if job.status not in {"in_progress", "on_review", "needs_correction"}:
                 continue
@@ -701,7 +716,29 @@ def sync_all(db: Session, api, config: SuperviselyConfig) -> dict:
                 continue
             if before != after:
                 changed += 1
-        if plan.status == "running":
+                if job.release_mode == "shared_primary" and after == "on_review":
+                    ready_for_next.append((job.team_id, job.assignee_person_id))
+        if plan.status == "running" and plan.queue_seed:
+            from .pair_members import pair_members
+            from .work_queue import claim_primary_block
+
+            teams = list(db.scalars(select(CompetitionTeam.id).where(
+                CompetitionTeam.event_id == plan.event_id, CompetitionTeam.active.is_(True),
+            ).order_by(CompetitionTeam.id)))
+            for team_id in teams:
+                people, _ = pair_members(db, plan.event_id, team_id)
+                ready_for_next.extend((team_id, person.id) for person in people)
+            for team_id, person_id in dict.fromkeys(ready_for_next):
+                if person_id is None:
+                    continue
+                try:
+                    claimed = claim_primary_block(db, plan.id, team_id, person_id) is not None
+                    db.commit()
+                    queued += int(claimed)
+                except Exception:
+                    db.rollback()
+                    logger.exception("Shared queue claim failed for plan %s", plan.id)
+        elif plan.status == "running":
             for next_job in next_eligible(db, plan):
                 if queue_publish(db, next_job).status == "pending":
                     queued += 1

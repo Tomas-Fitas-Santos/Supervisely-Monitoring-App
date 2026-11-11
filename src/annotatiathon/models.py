@@ -496,6 +496,7 @@ class LabelingPlan(Base):
     created_by: Mapped[str] = mapped_column(ForeignKey("staff_accounts.id"))
     created_at: Mapped[int] = mapped_column(Integer, default=epoch)
     approved_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    queue_seed: Mapped[str | None] = mapped_column(String(64))
 
 
 class LabelingJob(Base):
@@ -535,6 +536,38 @@ class LabelingJob(Base):
     annotation_snapshot_round: Mapped[int | None] = mapped_column(Integer, nullable=True)
     annotation_snapshot_frames: Mapped[int | None] = mapped_column(Integer, nullable=True)
     annotation_snapshot_annotated_frames: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
+class WorkBlock(Base):
+    __tablename__ = "work_blocks"
+    __table_args__ = (
+        UniqueConstraint("plan_id", "video_id", "ordinal", name="uq_work_block_ordinal"),
+        CheckConstraint("frame_count BETWEEN 1 AND 30", name="ck_work_block_size"),
+        Index("ix_work_block_available", "plan_id", "video_id", "ordinal",
+              postgresql_where=text("job_id IS NULL"), sqlite_where=text("job_id IS NULL")),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=identifier)
+    event_id: Mapped[str] = mapped_column(ForeignKey("events.id"), index=True)
+    plan_id: Mapped[str] = mapped_column(ForeignKey("labeling_plans.id"))
+    video_id: Mapped[str] = mapped_column(ForeignKey("media_videos.id"))
+    ordinal: Mapped[int] = mapped_column(Integer)
+    frame_count: Mapped[int] = mapped_column(Integer)
+    media_ids: Mapped[list[str]] = mapped_column(JSON)
+    repeat_media_ids: Mapped[list[str]] = mapped_column(JSON)
+    job_id: Mapped[str | None] = mapped_column(ForeignKey("labeling_jobs.id"), unique=True)
+
+
+class WorkPacket(Base):
+    __tablename__ = "work_packets"
+    __table_args__ = (
+        Index("uq_open_work_packet", "event_id", "person_id", unique=True,
+              postgresql_where=text("submitted_at IS NULL"),
+              sqlite_where=text("submitted_at IS NULL")),
+    )
+    job_id: Mapped[str] = mapped_column(ForeignKey("labeling_jobs.id"), primary_key=True)
+    event_id: Mapped[str] = mapped_column(ForeignKey("events.id"), index=True)
+    person_id: Mapped[str] = mapped_column(ForeignKey("people.id"))
+    submitted_at: Mapped[int | None] = mapped_column(Integer)
 
 
 class NativeJobBinding(Base):

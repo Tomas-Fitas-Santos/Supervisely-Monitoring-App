@@ -44,6 +44,17 @@ Compare at inspection: **diverged: 2 ahead, 24 behind**; refresh before integrat
 
 Luís publishes versioned Pydantic/JSON contracts and database migration proposal **before** new UI is connected. Tomas accepts contract names/example payloads before editing the review UI.
 
+### Outbound job queue contract proposal
+
+- An organiser opts in at plan creation with `{"dataset_id":"dataset-id","mode":"shared_30_v1"}`. The existing plan request keeps its current defaults. The draft freezes the selected source IDs and sampling seed and reports primary blocks, unique frames, short tails and repeat obligations. The mode requires full-density footage with complete frame identity.
+- Migration `0018_shared_work_queue` stores the primary block inventory and its repeat samples. The primary claim ties a block to a single job, and a PostgreSQL partial unique index enforces one open packet per annotator per event. Repeat assignment and checkout epochs are later work.
+- Launch and verified submission trigger dispatch. In one short transaction, lock annotator eligibility, claim available rows with PostgreSQL `FOR UPDATE SKIP LOCKED`, create one `LabelingJob`, and write one `publish_job` operation. Commit before contacting Supervisely. The new mode advances on native submission; the legacy scheduler continues to wait for acceptance.
+- Prefer finishing started videos. Keep primary jobs contiguous and within one video. Reserve both repeat frames for one different eligible team, and batch repeats from multiple blocks into independent jobs of up to 30 images. A one-frame tail contributes one repeat. Repeat jobs require their own native image IDs even when uploads reuse source bytes.
+- A paused event stops new claims. A publish with an uncertain remote outcome keeps its assignment until reconciliation. The shared queue advances only when the submitted job reports the expected total and finished counts. An incomplete submission keeps its packet open and is reported as `incomplete_submission`. Rehearse this with a 15-of-30 job and a confirmed empty frame before enabling automatic recovery or relying on the counts for a live event.
+- Acceptance tests should show distinct concurrent claims, an idempotent launch, a successor after submission while review is pending, durable ownership after worker restart, and repeat packets whose annotators belong to a different team from the primary assignment.
+
+### Shared review and ranking contracts
+
 - `POST /api/v1/review-queue/claim-next`: returns `review_id`, claim token/expiry, `source_media_id`, `annotation_snapshot_id`, `source_filename`, `team_name`, `annotator_name`, image URL, immutable annotation JSON, geometry/classes, rubric version. Empty queue is a normal no-work result.
 - `POST /api/v1/review-queue/{id}/complete`: claim token, per-object verdicts, incorrect reason and corrected-class candidate when applicable, action `next|pause`; saves once and optionally atomically attempts next claim.
 - `POST /api/v1/review-queue/{id}/release`: authenticated release for pause/navigation; safe concurrency and lease expiry.

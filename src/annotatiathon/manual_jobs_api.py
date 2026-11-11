@@ -22,11 +22,13 @@ from .models import (
     LabelingJob,
     LabelingPlan,
     MediaAsset,
+    MediaVideo,
     MonitorAssignment,
     MonitorPairMember,
     NativeJobBinding,
     NativeOperation,
     Person,
+    WorkBlock,
     epoch,
 )
 from .native_operations_api import native_identity_assignable, native_ready, queue_publish
@@ -146,7 +148,12 @@ def create_manual_jobs(
     all_existing = list(db.scalars(select(LabelingJob).where(
         LabelingJob.event_id == event.id,
     )))
-    used: set[str] = set()
+    used = set(db.scalars(select(MediaVideo.video_group).join(
+        WorkBlock, WorkBlock.video_id == MediaVideo.id,
+    ).join(LabelingPlan, LabelingPlan.id == WorkBlock.plan_id).where(
+        WorkBlock.event_id == event.id, LabelingPlan.dataset_id == dataset.id,
+        LabelingPlan.status.in_(["planned", "approved", "running", "paused"]),
+    ).distinct()))
     for job in all_existing:
         if job.dataset_id != dataset.id:
             continue
@@ -182,6 +189,7 @@ def create_manual_jobs(
         LabelingPlan.event_id == event.id,
         LabelingPlan.dataset_id == dataset.id,
         LabelingPlan.status == "running",
+        LabelingPlan.queue_seed.is_(None),
     ).order_by(LabelingPlan.created_at.desc()).limit(1))
     if plan is None:
         plan = LabelingPlan(
@@ -353,6 +361,8 @@ def reassign_job(
     ).with_for_update())
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found.")
+    if job.release_mode == "shared_primary":
+        raise HTTPException(status_code=409, detail="Shared queue jobs retain their original claim.")
     if job.assignee_person_id is None:
         raise HTTPException(status_code=409, detail="Legacy shared jobs cannot be reassigned.")
     if job.status in {"on_review", "completed", "needs_correction"}:

@@ -107,7 +107,7 @@ def queue_publish(db: Session, job: LabelingJob, *,
 
 def can_queue_next(db: Session, job: LabelingJob) -> bool:
     """Release automatic jobs sequentially per annotator, not per team."""
-    if job.release_mode == "manual_released":
+    if job.release_mode in {"manual_released", "shared_primary"}:
         return True
     if job.release_mode == "manual_hold":
         return False
@@ -161,7 +161,7 @@ def launch_event(
     dataset = db.get(MediaDataset, plan.dataset_id)
     if dataset is None or dataset.event_id != event.id:
         raise HTTPException(status_code=409, detail="Source dataset is missing.")
-    if plan.jobs_per_team > 0:
+    if plan.jobs_per_team > 0 or plan.queue_seed:
         try:
             assert_mirror_complete(db, dataset)
         except MirrorError as exc:
@@ -170,6 +170,15 @@ def launch_event(
                 detail="Complete the full dataset replication to Supervisely "
                        "before launching automatic jobs.",
             ) from exc
+    if plan.queue_seed:
+        plan.status = "running"
+        db.add(AuditEvent(staff_id=ctx.staff.id, event_id=event.id, action="labeling.plan.launch",
+                          target_type="labeling_plan", target_id=plan.id,
+                          details={"mode": "shared_30_v1"}))
+        db.commit()
+        return {"status": "running", "plan_id": plan.id, "first_jobs": 0,
+                "pending_operations": 0, "remote_writes_queued": False,
+                "note": "The worker will claim available blocks on its next poll."}
     jobs = list(db.scalars(select(LabelingJob).where(
         LabelingJob.event_id == event.id, LabelingJob.plan_id == plan.id,
     ).order_by(LabelingJob.team_id, LabelingJob.sequence)))

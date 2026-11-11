@@ -5,10 +5,11 @@ supports two annotators editing the same native answer simultaneously.
 """
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from .annotation_schema import annotation_class_view
@@ -22,8 +23,11 @@ from .models import (
     LabelingJob,
     LabelingPlan,
     MediaAsset,
+    MediaVideo,
     MonitorAssignment,
+    WorkBlock,
     epoch,
+    identifier,
 )
 from .pair_members import pair_members
 
@@ -43,6 +47,7 @@ def list_annotation_classes(
 class PlanInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     dataset_id: str
+    mode: Literal["legacy", "shared_30_v1"] = "legacy"
     jobs_per_team: int = Field(default=4, ge=1, le=100)
     redundancy: int = Field(default=1, ge=1, le=1)
     video_limit: int | None = Field(default=None, ge=0, le=100000)
@@ -193,6 +198,13 @@ def create_plan(
     dataset = get_dataset(db, event.id, payload.dataset_id)
     if dataset.status != "ready":
         raise HTTPException(status_code=409, detail="Finalize local dataset before planning.")
+    shared_pool = db.scalar(select(LabelingPlan.id).where(
+        LabelingPlan.event_id == event.id, LabelingPlan.dataset_id == dataset.id,
+        LabelingPlan.queue_seed.is_not(None),
+        LabelingPlan.status.in_(["planned", "approved", "running", "paused"]),
+    ).limit(1))
+    if shared_pool:
+        raise HTTPException(status_code=409, detail="This dataset is already reserved by a shared queue plan.")
     existing = db.scalar(select(LabelingPlan.id).where(
         LabelingPlan.event_id == event.id, LabelingPlan.status == "approved"
     ))
@@ -226,6 +238,44 @@ def create_plan(
         LabelingJob.dataset_id == dataset.id,
     )))
     reserved = {mid for job in prior_jobs for mid in job.media_ids}
+    if payload.mode == "shared_30_v1":
+        from .work_queue import sample_repeat_frames, split_video
+
+        if reserved or payload.video_limit is not None:
+            raise HTTPException(status_code=409, detail="Use an unassigned dataset without a video limit for the shared queue.")
+        videos = {video.id: video for video in db.scalars(select(MediaVideo).where(
+            MediaVideo.event_id == event.id, MediaVideo.dataset_id == dataset.id,
+        ))}
+        by_video = defaultdict(list)
+        for asset in assets:
+            video = videos.get(asset.video_id)
+            if (not video or video.density not in {"full", "declared_full"}
+                    or video.identity_status != "complete" or asset.frame_index is None):
+                raise HTTPException(status_code=422, detail="Shared queue requires complete source-frame identity and full-density footage.")
+            by_video[video.id].append(asset.id)
+        plan = LabelingPlan(event_id=event.id, dataset_id=dataset.id, jobs_per_team=0,
+                            redundancy=1, created_by=ctx.staff.id, queue_seed=identifier())
+        db.add(plan)
+        db.flush()
+        blocks = []
+        for video_id, media_ids in by_video.items():
+            for ordinal, block in enumerate(split_video(media_ids), start=1):
+                blocks.append(WorkBlock(
+                    event_id=event.id, plan_id=plan.id, video_id=video_id, ordinal=ordinal,
+                    frame_count=len(block), media_ids=block,
+                    repeat_media_ids=sample_repeat_frames(
+                        block, seed=plan.queue_seed, block_key=f"{video_id}:{ordinal}",
+                    ),
+                ))
+        db.add_all(blocks)
+        summary = {"primary_blocks": len(blocks), "unique_frames": len(assets),
+                   "short_tails": sum(block.frame_count < 30 for block in blocks),
+                   "repeat_frames": sum(len(block.repeat_media_ids) for block in blocks)}
+        db.add(AuditEvent(staff_id=ctx.staff.id, event_id=event.id, action="labeling.plan.create",
+                          target_type="labeling_plan", target_id=plan.id,
+                          details={"mode": "shared_30_v1", **summary}))
+        db.commit()
+        return {"plan_id": plan.id, "status": plan.status, "mode": payload.mode, **summary}
     assets = [item for item in assets if item.id not in reserved]
     whole_video_groups = {asset.video_group for asset in assets if asset.video_group}
     if assets and all(item.video_group for item in assets):
@@ -299,6 +349,7 @@ def list_plans(
     ).order_by(LabelingPlan.created_at.desc())).all()
     return {"items": [{
         "id": p.id, "dataset_id": p.dataset_id, "status": p.status,
+        "mode": "shared_30_v1" if p.queue_seed else "legacy",
         "jobs_per_team": p.jobs_per_team, "redundancy": p.redundancy,
         "video_limit": p.video_limit, "created_at": p.created_at,
         "approved_at": p.approved_at,
@@ -321,11 +372,17 @@ def approve_plan(
         return {"id": plan.id, "status": "approved", "already_approved": True}
     if plan.status != "planned":
         raise HTTPException(status_code=409, detail="Plan is not approvable.")
-    active = db.scalar(select(LabelingPlan.id).where(
-        LabelingPlan.event_id == event.id, LabelingPlan.status == "approved",
-    ))
+    conflicts = select(LabelingPlan.id).where(
+        LabelingPlan.event_id == event.id,
+        LabelingPlan.status.in_(["approved", "running", "paused"]),
+    )
+    if plan.queue_seed:
+        conflicts = conflicts.where(or_(LabelingPlan.jobs_per_team > 0, LabelingPlan.queue_seed.is_not(None)))
+    else:
+        conflicts = conflicts.where(or_(LabelingPlan.status == "approved", LabelingPlan.queue_seed.is_not(None)))
+    active = db.scalar(conflicts.limit(1))
     if active:
-        raise HTTPException(status_code=409, detail="Another plan is already approved.")
+        raise HTTPException(status_code=409, detail="Another automatic plan is already approved or active.")
     dataset = get_dataset(db, event.id, plan.dataset_id)
     if dataset.status != "ready":
         raise HTTPException(status_code=409, detail="Dataset is not ready.")

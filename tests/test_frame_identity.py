@@ -6,9 +6,9 @@ import pytest
 from PIL import Image
 from sqlalchemy import select
 
-from test_dataset_workflows import act, upload_archive
+from test_dataset_workflows import act, teams, upload_archive
 from test_dataset_workflows import ctx as ctx
-from annotatiathon.models import MediaAsset
+from annotatiathon.models import MediaAsset, WorkBlock
 
 
 def test_event_import_decodes_all_thirty_frames_with_timestamps(ctx, tmp_path):
@@ -44,6 +44,26 @@ def test_event_import_decodes_all_thirty_frames_with_timestamps(ctx, tmp_path):
     assert len(videos[0]["source_sha256"]) == 64
     assert videos[0]["time_base"]
     assert videos[0]["identity_status"] == "complete"
+    teams(client, csrf)
+    plan = act(client, csrf, "/labeling/plans", {
+        "dataset_id": dataset_id, "mode": "shared_30_v1",
+    })
+    assert plan.status_code == 201, plan.text
+    assert plan.json()["primary_blocks"] == 1
+    assert plan.json()["repeat_frames"] == 2
+    with maker() as db:
+        block = db.scalar(select(WorkBlock).where(WorkBlock.plan_id == plan.json()["plan_id"]))
+        assert block.media_ids == [frame.id for frame in frames]
+        assert len(set(block.repeat_media_ids)) == 2
+        assert set(block.repeat_media_ids).issubset(block.media_ids)
+    team = client.get("/api/v1/labeling/manual/options", params={"dataset_id": dataset_id}).json()["teams"][0]
+    manual = act(client, csrf, "/labeling/manual/jobs", {
+        "dataset_id": dataset_id, "dispatch": "hold",
+        "assignments": [{"team_id": team["id"], "assignee_person_id": team["members"][0]["id"],
+                         "video_group": videos[0]["video_group"]}],
+    })
+    assert manual.status_code == 409
+    assert act(client, csrf, "/labeling/plans", {"dataset_id": dataset_id}).status_code == 409
 
 
 def test_supplied_numeric_frames_keep_indices_and_unknown_density(ctx):
