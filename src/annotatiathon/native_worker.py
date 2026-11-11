@@ -1293,11 +1293,17 @@ def run_worker(*, once: bool, poll_seconds: int) -> None:
                 # An organiser's urgent manual publication should not wait
                 # behind another entire pre-event media mirror.
                 operation = process_once(db, api, config)
-                high_pending = db.scalar(select(NativeOperation.id).where(
-                    NativeOperation.kind == "publish_job",
-                    NativeOperation.status == "pending",
-                    NativeOperation.priority > 0,
-                ).limit(1))
+                high_pending = db.scalar(select(NativeOperation.id)
+                    .join(LabelingJob, LabelingJob.id == NativeOperation.target_id)
+                    .join(LabelingPlan, LabelingPlan.id == LabelingJob.plan_id)
+                    .join(Event, Event.id == NativeOperation.event_id)
+                    .where(
+                        NativeOperation.kind == "publish_job",
+                        NativeOperation.status == "pending",
+                        NativeOperation.priority > 0,
+                        LabelingPlan.status == "running",
+                        Event.status == "active",
+                    ).limit(1))
                 mirror = None if high_pending else process_mirror_once(db, api, config)
                 export = process_export_once(db, api)
                 sync_result = sync_all(db, api, config)
