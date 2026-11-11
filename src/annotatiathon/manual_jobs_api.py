@@ -113,7 +113,9 @@ class ManualJobRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     dataset_id: str
     assignments: list[ManualAssignment] = Field(min_length=1, max_length=100)
-    dispatch: Literal["hold", "publish"] = "hold"
+    dispatch: Literal["hold", "publish"] = "publish"
+    high_priority: bool = False
+    allow_duplicates: bool = False
 
 
 @router.post("/jobs", status_code=201)
@@ -130,6 +132,10 @@ def create_manual_jobs(
         raise HTTPException(status_code=409, detail="Dataset must be finalized.")
     if payload.dispatch == "publish":
         native_ready(db)
+    if payload.dispatch == "hold" and payload.high_priority:
+        raise HTTPException(
+            status_code=422, detail="Priority applies only to queued jobs.",
+        )
     videos = videos_for_dataset(db, event.id, dataset.id)
     if not videos:
         raise HTTPException(status_code=422, detail="Dataset contains no videos.")
@@ -138,12 +144,19 @@ def create_manual_jobs(
         LabelingJob.event_id == event.id,
         LabelingJob.dataset_id == dataset.id,
     )))
-    used: set[tuple[str, str]] = set()
-    for job in existing:
-        frames_in_job = set(job.media_ids)
+    # Never allow accidental overlaps. Deliberate manual repeats require
+    # allow_duplicates=True; an automatic plan can never create overlaps.
+    all_existing = list(db.scalars(select(LabelingJob).where(
+        LabelingJob.event_id == event.id,
+    )))
+    used: set[str] = set()
+    for job in all_existing:
+        if job.dataset_id != dataset.id:
+            continue
+        frame_ids = set(job.media_ids)
         for group, frames in videos.items():
-            if any(frame.id in frames_in_job for frame in frames):
-                used.add((job.team_id, group))
+            if frames and frames[0].id in frame_ids:
+                used.add(group)
     validated: list[tuple[ManualAssignment, list[MediaAsset]]] = []
     for assignment in payload.assignments:
         frames = videos.get(assignment.video_group)
@@ -166,13 +179,13 @@ def create_manual_jobs(
                 status_code=409,
                 detail="The selected annotator must have a verified Supervisely account.",
             )
-        key = (assignment.team_id, assignment.video_group)
-        if key in used:
+        if assignment.video_group in used and not payload.allow_duplicates:
             raise HTTPException(
                 status_code=409,
-                detail="This team already has an assignment for the selected video.",
+                detail="This video is already assigned. Enable Allow duplicate "
+                       "assignments explicitly to repeat a video manually.",
             )
-        used.add(key)
+        used.add(assignment.video_group)
         validated.append((assignment, frames))
     plan = db.scalar(select(LabelingPlan).where(
         LabelingPlan.event_id == event.id,
@@ -210,18 +223,21 @@ def create_manual_jobs(
         db.add(job)
         db.flush()
         if payload.dispatch == "publish":
-            queue_publish(db, job)
+            queue_publish(db, job, high_priority=payload.high_priority)
         ids.append(job.id)
     db.add(AuditEvent(
         staff_id=ctx.staff.id, event_id=event.id,
         action="labeling.jobs.manual.create",
         target_type="labeling_plan", target_id=plan.id,
         details={"job_ids": ids, "dispatch": payload.dispatch,
+                 "high_priority": payload.high_priority,
+                 "allow_duplicates": payload.allow_duplicates,
                  "video_count": len(ids)},
     ))
     db.commit()
     return {"job_ids": ids, "count": len(ids), "plan_id": plan.id,
             "dispatch": payload.dispatch,
+            "priority": "higher" if payload.high_priority else "lower",
             "message": ("Queued for the Supervisely worker."
                         if payload.dispatch == "publish"
                         else "Saved in Nightjar. Publish when ready.")}
