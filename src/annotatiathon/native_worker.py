@@ -68,6 +68,7 @@ from .native_names import (
     project_name,
 )
 from .native_operations_api import (
+    native_identity_assignable,
     can_queue_next,
     next_eligible,
     queue_publish,
@@ -251,11 +252,7 @@ def assigned_people(db: Session, job: LabelingJob):
     person = next((p for p in members if p.id == job.assignee_person_id), None)
     if person is None:
         raise NativeWorkerError("assigned_member_not_in_team")
-    permitted = ({"annotator"} if person.kind == "participant"
-                 else {"admin", "manager", "developer"})
-    if (not person.supervisely_user_id or person.membership_status != "joined"
-            or not person.native_verified_at
-            or (person.supervisely_role or "").lower() not in permitted):
+    if not native_identity_assignable(person):
         raise NativeWorkerError("assigned_member_unverified")
     return [person]
 
