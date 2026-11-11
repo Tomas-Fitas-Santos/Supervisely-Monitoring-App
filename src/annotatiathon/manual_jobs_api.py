@@ -165,13 +165,7 @@ def create_manual_jobs(
         person = next((p for p in members if p.id == assignment.assignee_person_id), None)
         if person is None:
             raise HTTPException(status_code=422, detail="Assignee is not a member of the selected team.")
-        if payload.dispatch == "publish" and not (
-            person.supervisely_user_id and person.membership_status == "joined"
-            and person.native_verified_at
-            and (person.supervisely_role or "").lower() in
-            ({"annotator"} if person.kind == "participant"
-             else {"admin", "manager", "developer"})
-        ):
+        if payload.dispatch == "publish" and not native_identity_assignable(person):
             raise HTTPException(
                 status_code=409,
                 detail="The selected annotator must have a verified Supervisely account.",
@@ -260,8 +254,7 @@ def publish_manual_job(
         raise HTTPException(status_code=409, detail="The job's plan is not running.")
     members = roster(db, event.id).get(job.team_id, [])
     person = next((p for p in members if p.id == job.assignee_person_id), None)
-    if (person is None or not person.supervisely_user_id
-            or person.membership_status != "joined" or not person.native_verified_at):
+    if person is None or not native_identity_assignable(person):
         raise HTTPException(status_code=409, detail="Annotator is not verified in Supervisely.")
     job.release_mode = "manual_released"
     task = queue_publish(db, job)
@@ -337,17 +330,10 @@ def reassignment_options(
             team = target_team(db, event.id, person)
         except HTTPException:
             continue
-        allowed = ({"annotator"} if person.kind == "participant"
-                   else {"admin", "manager", "developer"})
         options.append({
             "id": person.id, "name": person.name, "team_id": team.id,
             "team_name": team.name,
-            "native_ready": bool(
-                person.supervisely_user_id
-                and person.membership_status == "joined"
-                and person.native_verified_at
-                and (person.supervisely_role or "").lower() in allowed
-            ),
+            "native_ready": native_identity_assignable(person),
         })
     return {"items": options}
 
@@ -382,11 +368,7 @@ def reassign_job(
     if person is None:
         raise HTTPException(status_code=404, detail="New annotator not found.")
     team = target_team(db, event.id, person)
-    allowed = ({"annotator"} if person.kind == "participant"
-               else {"admin", "manager", "developer"})
-    if not (person.supervisely_user_id and person.membership_status == "joined"
-            and person.native_verified_at and
-            (person.supervisely_role or "").lower() in allowed):
+    if not native_identity_assignable(person):
         raise HTTPException(
             status_code=409, detail="New annotator must be verified in Supervisely.",
         )
