@@ -27,7 +27,11 @@ from pathlib import Path, PurePosixPath
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .annotation_schema import AnnotationSchemaError, ensure_project_annotation_classes
+from .annotation_schema import (
+    ANNOTATION_CLASSES,
+    AnnotationSchemaError,
+    ensure_project_annotation_classes,
+)
 from .db import session_factory
 from .events_api import seed_categories
 from .full_reset_api import clear_event_data, safe_dataset_paths
@@ -302,6 +306,14 @@ def publish_job(db: Session, job: LabelingJob, api, config: SuperviselyConfig) -
             dataset_id=remote_ds_id,
             user_ids=missing,
             images_ids=native_media,
+            classes_to_label=[name for name, _shape, _color, _meaning
+                              in ANNOTATION_CLASSES],
+            readme=(
+                "Annotate the bird with a bounding box (bird) and the head "
+                "landmarks as points: left_eye, right_eye, beak, crown. "
+                "Use the corresponding *_occ class when a landmark is "
+                "occluded. Visible and occluded points use matched color pairs."
+            ),
         )
         current = api.labeling_job.get_list(
             config.team_id, dataset_id=remote_ds_id, show_disabled=True,
