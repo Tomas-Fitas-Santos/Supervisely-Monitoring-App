@@ -68,8 +68,8 @@ from .native_names import (
     project_name,
 )
 from .native_operations_api import (
-    native_identity_assignable,
     can_queue_next,
+    native_identity_assignable,
     next_eligible,
     queue_publish,
     team_members,
