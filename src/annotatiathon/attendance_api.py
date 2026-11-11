@@ -39,10 +39,12 @@ def attendance_summary(
 ):
     event = current_event(db, _ctx)
     registered = db.scalar(select(func.count(Person.id)).where(
-        Person.active.is_(True), Person.event_id == event.id
+        Person.active.is_(True), Person.event_id == event.id,
+        Person.kind == "participant",
     )) or 0
     present = db.scalar(select(func.count(Person.id)).where(
-        Person.event_id == event.id, Person.active.is_(True), Person.check_in_at.is_not(None)
+        Person.event_id == event.id, Person.active.is_(True),
+        Person.kind == "participant", Person.check_in_at.is_not(None)
     )) or 0
     return {"registered": registered, "present": present, "not_arrived": registered - present}
 
@@ -56,6 +58,8 @@ def change_check_in(
     ).with_for_update())
     if person is None or not person.active:
         raise HTTPException(status_code=404, detail="Active attendee not found.")
+    if person.kind != "participant":
+        raise HTTPException(status_code=409, detail="Event monitors do not check in or out.")
     team = None
     if person.kind == "participant" and person.team_id is not None:
         team = db.scalar(select(CompetitionTeam).where(
@@ -89,6 +93,26 @@ def change_check_in(
     if changed:
         previous = person.check_in_at
         person.check_in_at = epoch() if check_in else None
+        table_cleared = False
+        if not check_in:
+            if team is not None:
+                # The team row is locked: keep the table until the last member leaves.
+                still_present = db.scalar(select(Person.id).where(
+                    Person.event_id == event_id,
+                    Person.team_id == team.id,
+                    Person.kind == "participant",
+                    Person.active.is_(True),
+                    Person.id != person.id,
+                    Person.check_in_at.is_not(None),
+                ).limit(1))
+                if still_present is None:
+                    team.table_number = None
+                    table_cleared = True
+                    table = None
+            else:
+                person.table_number = None
+                table_cleared = True
+                table = None
         db.add(AuditEvent(
             staff_id=staff_id, event_id=event_id,
             action="attendance.check_in" if check_in else "attendance.reverse",
@@ -96,6 +120,7 @@ def change_check_in(
             details={
                 "prior_check_in_at": previous, "new_check_in_at": person.check_in_at,
                 "table_number": table, "team_id": person.team_id,
+                "table_cleared": table_cleared,
             },
         ))
         db.commit()
@@ -109,7 +134,7 @@ def change_check_in(
 @router.put("/teams/{team_id}/table")
 def change_team_table(
     team_id: str, payload: TableChange,
-    ctx: AuthContext = Depends(requires("organiser", "reception", mutation=True)),
+    ctx: AuthContext = Depends(requires("organiser", "reception", "monitor", mutation=True)),
     db: Session = Depends(get_db),
 ):
     event = current_event(db, ctx, writable=True)
@@ -138,7 +163,7 @@ def change_team_table(
 def check_in(
     person_id: str,
     payload: CheckInInput | None = None,
-    ctx: AuthContext = Depends(requires("organiser", "reception", mutation=True)),
+    ctx: AuthContext = Depends(requires("organiser", "reception", "monitor", mutation=True)),
     db: Session = Depends(get_db),
 ):
     event = current_event(db, ctx, writable=True)
@@ -151,7 +176,7 @@ def check_in(
 @router.post("/{person_id}/reverse", response_model=AttendanceResult)
 def reverse_check_in(
     person_id: str,
-    ctx: AuthContext = Depends(requires("organiser", "reception", mutation=True)),
+    ctx: AuthContext = Depends(requires("organiser", "reception", "monitor", mutation=True)),
     db: Session = Depends(get_db),
 ):
     event = current_event(db, ctx, writable=True)
