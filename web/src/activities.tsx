@@ -1,4 +1,5 @@
 import { confirmAction } from "./dialogs";
+import { formatLisbonTime, parseLisbonTime } from "./event_time";
 import { useCallback, useEffect, useState } from "react";
 import type React from "react";
 import {
@@ -18,8 +19,7 @@ type AwardRecord={id:string;person_id:string;person_name:string;prize_id:string;
   distribution_id:string;awarded_at:number};
 type Detail={activity:Activity;results:Result[];prizes:Prize[];awards:AwardRecord[]};
 type Category={id:string;name:string;active:boolean};
-const localDate=(value:number|null)=>value?new Date(value*1000).toLocaleString():"Not scheduled";
-const parseInput=(value:string)=>value?Math.floor(new Date(value).getTime()/1000):null;
+const localDate=formatLisbonTime;
 
 export function ActivitiesScreen({auth}:{auth:Auth}) {
   const canEdit=auth.staff.roles.some(r=>r==="organiser"||r==="activity"||r==="monitor");
@@ -90,7 +90,7 @@ export function ActivitiesScreen({auth}:{auth:Auth}) {
     setBusy(true);setError("");setNotice("");
     try{
       const result=await api<Activity>("/activities","POST",{
-        name,description,location,start_at:parseInput(start),end_at:parseInput(end),
+        name,description,location,start_at:parseLisbonTime(start),end_at:parseLisbonTime(end),
       },auth.csrf_token);
       setAddOpen(false);setName("");setDescription("");setLocation("");setStart("");setEnd("");
       await refresh();setSelected(result.id);setNotice("Activity created.");
@@ -171,9 +171,15 @@ export function ActivitiesScreen({auth}:{auth:Auth}) {
         <label>Location<input maxLength={200} value={location} onChange={e=>setLocation(e.target.value)}
           placeholder="Hall A / Seminar room"/></label>
         <div className="form-grid">
-          <label>Start<input type="datetime-local" value={start} onChange={e=>setStart(e.target.value)}/></label>
-          <label>End<input type="datetime-local" value={end} onChange={e=>setEnd(e.target.value)}/></label>
-        </div><button className="btn primary" disabled={busy}>Create activity</button>
+          <label>Start (Lisbon)<input type="datetime-local" value={start}
+              onChange={e=>setStart(e.target.value)}/></label>
+          <label>End (Lisbon)<input type="datetime-local" value={end}
+              min={start||undefined} onChange={e=>setEnd(e.target.value)}/></label>
+        </div>
+        <p className="muted small">Activity times are interpreted in Europe/Lisbon,
+          including Portuguese daylight-saving changes. Ambiguous or nonexistent local times
+          must be adjusted before saving.</p>
+        <button className="btn primary" disabled={busy}>Create activity</button>
       </form>
     </section>}
     <div className="content-grid activities-layout activities-subtab-layout">
