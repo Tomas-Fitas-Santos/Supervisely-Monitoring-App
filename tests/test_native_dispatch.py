@@ -49,6 +49,9 @@ class MockSDK:
         self.project_metas = {}
         self.meta_updates = []
         self.removed_projects = []
+        self.archived_projects = []
+        self.removed_datasets = []
+        self.removed_jobs = []
         self.datasets = []
         self.images = {}
         self.jobs = []
@@ -56,17 +59,20 @@ class MockSDK:
         self.fail_job_create_once = False
         self.project = Obj(
             get_list=self.projects_list,
+            get_list_all=self.projects_list_all,
             create=self.project_create,
             remove=self.project_remove,
             get_meta=self.projects_get_meta,
             update_meta=self.projects_update_meta,
             get_info_by_id=lambda ident: next(
-                (p for p in self.projects if p.id == ident), None
+                (p for p in self.projects + self.archived_projects
+                 if p.id == ident), None
             ),
         )
         self.dataset = Obj(
             get_list=self.datasets_list,
             create=self.dataset_create,
+            remove=self.dataset_remove,
             get_info_by_id=lambda ident: next(
                 (d for d in self.datasets if d.id == ident), None
             ),
@@ -84,6 +90,7 @@ class MockSDK:
         self.labeling_job = Obj(
             get_list=self.jobs_list,
             create=self.jobs_create,
+            remove=self.jobs_remove,
             restart=self.jobs_restart,
             get_info_by_id=lambda ident: next((j for j in self.jobs if j.id == ident), None),
         )
@@ -95,8 +102,17 @@ class MockSDK:
     def projects_list(self, workspace_id):
         return [p for p in self.projects if p.workspace_id == workspace_id]
 
+    def projects_list_all(self, filters, skip_exported):
+        assert filters[0]["field"] == "workspaceId"
+        assert not skip_exported
+        workspace_id = filters[0]["value"]
+        return [p for p in self.projects + self.archived_projects
+                if p.workspace_id == workspace_id]
+
     def project_remove(self, project_id):
         self.removed_projects.append(project_id)
+        archived = next(p for p in self.projects if p.id == project_id)
+        self.archived_projects.append(archived)
         self.projects = [p for p in self.projects if p.id != project_id]
 
     def projects_get_meta(self, project_id):
@@ -119,6 +135,11 @@ class MockSDK:
     def datasets_list(self, project_id):
         return [d for d in self.datasets if d.project_id == project_id]
 
+    def dataset_remove(self, dataset_id):
+        self.removed_datasets.append(dataset_id)
+        self.datasets = [d for d in self.datasets if d.id != dataset_id]
+        self.images.pop(dataset_id, None)
+
     def dataset_create(self, project_id, name, **kwargs):
         assert kwargs["change_name_if_conflict"] is False
         item = Obj(id=self.new_id(), project_id=project_id, name=name)
@@ -139,16 +160,43 @@ class MockSDK:
                 collection.append(Obj(id=self.new_id(), name=name))
         return [next(i for i in collection if i.name == name) for name in names]
 
-    def jobs_list(self, team_id, dataset_id, **kwargs):
+    def jobs_list(self, team_id, dataset_id=None, project_id=None, **kwargs):
         assert team_id == 125980 and kwargs["show_disabled"] is True
-        return [j for j in self.jobs if j.dataset_id == dataset_id]
+        assert dataset_id is not None or project_id is not None
+        return [j for j in self.jobs if
+                (dataset_id is None or j.dataset_id == dataset_id) and
+                (project_id is None or j.project_id == project_id)]
 
-    def jobs_create(self, name, dataset_id, user_ids, images_ids):
+    def jobs_remove(self, job_id):
+        self.removed_jobs.append(job_id)
+        self.jobs = [j for j in self.jobs if j.id != job_id]
+
+    def jobs_create(self, name, dataset_id, user_ids, images_ids,
+                    classes_to_label, readme):
         assert len(images_ids) == len(self.images[dataset_id])
+        assert classes_to_label == [
+            "bird", "left_eye", "left_eye_occ", "right_eye", "right_eye_occ",
+            "beak", "beak_occ", "crown", "crown_occ",
+        ]
+        assert "bounding box" in readme and "occluded" in readme
+        dataset = next(d for d in self.datasets if d.id == dataset_id)
+        classes = {
+            cls["title"]: cls
+            for cls in self.project_metas[dataset.project_id]["classes"]
+        }
+        assert len(classes) == 9
+        assert classes["bird"]["shape"] == "rectangle"
+        for key in ("left_eye", "left_eye_occ", "right_eye", "right_eye_occ",
+                    "beak", "beak_occ", "crown", "crown_occ"):
+            assert classes[key]["shape"] == "point"
+        assert "Nightjar video " not in name
+        assert " · " in name
         new_jobs = []
         for uid in user_ids:
             j = Obj(
                 id=self.new_id(), name=name, dataset_id=dataset_id,
+                project_id=dataset.project_id,
+                classes_to_label=list(classes_to_label),
                 assigned_to_id=uid, status="pending",
                 images_count=len(images_ids), finished_images_count=0,
             )
@@ -166,6 +214,7 @@ class MockSDK:
         assert assignee_ids == [old.assigned_to_id]
         new = Obj(
             id=self.new_id(), name=title, dataset_id=old.dataset_id,
+            project_id=old.project_id,
             assigned_to_id=assignee_ids[0], status="pending",
             images_count=old.images_count, finished_images_count=0,
         )
@@ -593,6 +642,10 @@ def test_confirmed_reset_archives_only_event_projects_and_keeps_members(configur
         assert len(list(db.scalars(select(CompetitionTeam)))) == 1
         assert db.get(SuperviselyConfig, 1).team_id == 125980
     assert owned_project in sdk.removed_projects
+    assert len(sdk.removed_jobs) == 2
+    assert len(sdk.removed_datasets) == 1
+    assert not sdk.jobs
+    assert not any(d.project_id == owned_project for d in sdk.datasets)
     assert other.id not in sdk.removed_projects
     assert len(sdk.projects) == 1
     assert sdk.projects[0].id == other.id
@@ -601,6 +654,7 @@ def test_confirmed_reset_archives_only_event_projects_and_keeps_members(configur
     assert final.json()["datasets"] == 0
     assert final.json()["jobs"] == 0
     assert final.json()["operation"]["status"] == "done"
+    assert final.json()["remote_action"] == "remove_labeling_jobs_archive_datasets_and_projects"
     categories = http.get("/api/v1/tickets/categories")
     assert categories.status_code == 200
     assert len(categories.json().get("items", [])) >= 3
@@ -733,3 +787,74 @@ def test_private_roster_csv_fields_are_restricted_and_editable(configured):
         assert "date_of_birth" not in food_person
         assert "data_consent" not in food_person
         assert "phone" not in food_person
+
+
+def test_reset_cleans_historical_jobs_from_already_archived_project(configured):
+    """A previous archive-only reset could leave jobs without local bindings."""
+    from sqlalchemy import delete
+
+    http, maker, csrf, plan_id, sdk = configured
+    launch(http, csrf, plan_id)
+    with maker() as db:
+        conf = db.get(SuperviselyConfig, 1)
+        assert process_once(db, sdk, conf)["status"] == "done"
+        owned_id = sdk.projects[0].id
+        assert len(sdk.jobs) == 2
+        sdk.project.remove(owned_id)
+    with maker.begin() as db:
+        db.execute(delete(NativeJobBinding))
+    assert owned_id not in {p.id for p in sdk.projects}
+    assert owned_id in {p.id for p in sdk.archived_projects}
+    preview = http.get("/api/v1/settings/reset/preview").json()
+    queued = call(http, csrf, "/settings/reset/request", {
+        "confirmation": preview["confirmation_phrase"],
+    })
+    assert queued.status_code == 202, queued.text
+    with maker() as db:
+        result = process_event_reset(db, sdk, db.get(SuperviselyConfig, 1))
+        assert result["status"] == "done", result
+        assert result["removed_native_jobs"] == 2
+        assert result["archived_projects"] == 0
+        assert db.get(Event, DEFAULT_EVENT_ID).status == "active"
+    assert sdk.jobs == []
+    assert sdk.removed_jobs and len(sdk.removed_jobs) == 2
+
+
+def test_reset_can_retry_after_remote_job_removal_interruption(configured):
+    http, maker, csrf, plan_id, sdk = configured
+    launch(http, csrf, plan_id)
+    with maker() as db:
+        assert process_once(db, sdk, db.get(SuperviselyConfig, 1))["status"] == "done"
+    preview = http.get("/api/v1/settings/reset/preview").json()
+    queued = call(http, csrf, "/settings/reset/request", {
+        "confirmation": preview["confirmation_phrase"],
+    })
+    assert queued.status_code == 202, queued.text
+    original_remove = sdk.labeling_job.remove
+    failed_once = False
+
+    def interrupted_remove(job_id):
+        nonlocal failed_once
+        if not failed_once:
+            failed_once = True
+            original_remove(job_id)
+            raise ConnectionError("Simulated lost response after removal")
+        original_remove(job_id)
+
+    sdk.labeling_job.remove = interrupted_remove
+    with maker() as db:
+        first = process_event_reset(db, sdk, db.get(SuperviselyConfig, 1))
+        assert first["status"] == "attention"
+        assert db.get(Event, DEFAULT_EVENT_ID).status == "resetting"
+        assert list(db.scalars(select(MediaDataset)))
+        assert list(db.scalars(select(LabelingJob)))
+    sdk.labeling_job.remove = original_remove
+    queued = call(http, csrf, "/settings/reset/retry")
+    assert queued.status_code == 202, queued.text
+    with maker() as db:
+        second = process_event_reset(db, sdk, db.get(SuperviselyConfig, 1))
+        assert second["status"] == "done", second
+        assert db.get(Event, DEFAULT_EVENT_ID).status == "active"
+        assert not list(db.scalars(select(MediaDataset)))
+        assert not list(db.scalars(select(LabelingJob)))
+    assert not sdk.jobs
