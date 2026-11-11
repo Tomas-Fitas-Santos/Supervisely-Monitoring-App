@@ -293,3 +293,27 @@ input,select{border:1px solid #dfe5ed;border-radius:9px;background:white;padding
 .annotation-legend{display:flex;flex-wrap:wrap;gap:7px;padding:9px;border-radius:9px;background:#f7f9fa;border:1px solid #e5ebec}
 .annotation-legend span{display:flex;align-items:center;gap:5px;white-space:nowrap;font-size:10px;color:#586a77}
 .annotation-legend i{width:11px;height:11px;display:inline-block;border:1px solid #273746;border-radius:50%;flex-shrink:0}
+
+
+/* Pre-event full media mirror / intuitive 3-step manual video assignment */
+.dataset-mirror-status{margin-top:14px;padding:15px;border-radius:12px;border:1px solid #bdded2;background:#f3faf7;display:flex;flex-direction:column;gap:8px}
+.dataset-mirror-status strong{font-size:13px;color:#235c4a}
+.dataset-mirror-status progress{display:block;width:100%;height:10px;accent-color:#278365}
+.dataset-mirror-status p{margin:0}
+.manual-video-choices{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;max-height:320px;overflow-y:auto;margin:14px 0 20px;padding:5px}
+.manual-video-choice{display:flex;align-items:flex-start;gap:9px;padding:12px;border:1px solid #dfe9e6;background:#f9fcfb;border-radius:10px;min-width:0;cursor:pointer}
+.manual-video-choice input{margin-top:3px;flex-shrink:0}
+.manual-video-choice span{min-width:0}
+.manual-video-choice strong,.manual-video-choice small{display:block;overflow-wrap:anywhere}
+.manual-video-choice strong{font-size:12px;color:#31544e}
+.manual-video-choice small{font-size:10px;color:#7a8d8b;margin-top:6px}
+.manual-option-checkbox{display:flex;align-items:center;gap:9px;font-size:12px;font-weight:700;color:#40645a;margin:14px 0;cursor:pointer}
+.manual-option-checkbox input{margin:0}
+.manual-option-checkbox span{font-weight:400}
+.manual-reassignment{border:1px solid #e1e9e6;border-radius:10px;padding:14px;margin-top:18px;background:#f8faf9;display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end}
+.manual-reassignment h4{width:100%;margin:0}
+.manual-reassignment p{width:100%;margin:0}
+.manual-reassignment select{flex:1;min-width:240px}
+.manual-draft .job-plan-row label{display:block;font-size:11px;margin-top:8px}
+.manual-draft .job-plan-row select{display:block;width:100%;margin-top:5px}
+@media(max-width:750px){.manual-video-choices{grid-template-columns:1fr}.manual-reassignment{display:block}.manual-reassignment select{width:100%;margin:12px 0}}
