@@ -303,7 +303,7 @@ def retry_operation(
             status_code=409,
             detail="Job operation cannot be retried in the current plan state.",
         )
-    if op.kind not in {"publish_job", "restart_job"}:
+    if op.kind not in {"publish_job", "restart_job", "reassign_job"}:
         raise HTTPException(status_code=409, detail="Unsupported job operation.")
     op.status = "pending"
     op.error_code = None
