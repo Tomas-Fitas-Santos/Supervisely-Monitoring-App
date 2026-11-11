@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type React from "react";
 import {
   CheckCircle2, ChevronRight, ClipboardCheck, PauseCircle, PlayCircle,
-  RefreshCw, RotateCcw, Trophy, ZoomIn, ZoomOut
+  RefreshCw, RotateCcw, ZoomIn, ZoomOut
 } from "lucide-react";
 import { api, type Auth } from "./api";
 import { AnnotationFrame } from "./annotation_overlay";
