@@ -230,7 +230,7 @@ def create_plan(
     reserved = {mid for job in prior_jobs for mid in job.media_ids}
     assets = [item for item in assets if item.id not in reserved]
     whole_video_groups = {asset.video_group for asset in assets if asset.video_group}
-    if len(whole_video_groups) >= 2 and all(item.video_group for item in assets):
+    if assets and all(item.video_group for item in assets):
         if payload.jobs_per_team < 2:
             raise HTTPException(
                 status_code=422,
@@ -246,6 +246,13 @@ def create_plan(
         build_units(assets), [t.id for t in teams], payload.jobs_per_team,
         payload.redundancy, payload.video_limit,
     )
+    if assets and all(item.video_group for item in assets):
+        if any(totals["video_counts"].get(t.id, 0) < 2 for t in teams):
+            raise HTTPException(
+                status_code=422,
+                detail="Automatic allocation must give both members of every team "
+                       "different videos. Add more videos or adjust the team count.",
+            )
     assignments = {
         m.team_id: m.monitor_person_id for m in db.scalars(select(MonitorAssignment).where(
             MonitorAssignment.event_id == event.id, MonitorAssignment.active.is_(True),
