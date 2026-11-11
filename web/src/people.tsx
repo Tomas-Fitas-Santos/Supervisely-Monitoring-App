@@ -283,7 +283,7 @@ export function PeopleScreen({auth}:{auth:Auth}) {
       </tr>)}</tbody>
     </table>{items.length===0&&<div className="empty-table">No people match these filters.</div>}</div>;
   }
-  return <div className="page-body">
+  return <div className={"page-body "+((mode==="people"||mode==="teams")?"roster-viewport":"")}>
     <div className="page-heading"><div><span className="eyebrow">EVENT SETUP · PEOPLE</span>
       <h2>People & Teams</h2><p className="muted">Roster, teams, check-in and invitations have separate workspaces. Birthdates and consent details are restricted to organisers and reception. Food distribution staff can see dietary allergies.</p>
     </div><div className="heading-actions">
