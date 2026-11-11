@@ -95,6 +95,8 @@ class MockSDK:
         self.labeling_job = Obj(
             get_list=self.jobs_list,
             set_assignees=self.jobs_set_assignees,
+            get_annotations=self.jobs_get_annotations,
+            get_project_meta=self.jobs_get_project_meta,
             create=self.jobs_create,
             get_project_meta=self.jobs_project_meta,
             get_annotations=self.jobs_annotations,
@@ -198,6 +200,24 @@ class MockSDK:
             })
         return [annotation(image_id) for image_id in image_ids]
 
+    def jobs_get_project_meta(self, job_id):
+        job = next(item for item in self.jobs if item.id == job_id)
+        return self.project_metas[job.project_id]
+
+    def jobs_get_annotations(self, job_id, image_ids, project_meta):
+        job = next(item for item in self.jobs if item.id == job_id)
+        assert set(image_ids).issubset(set(job.image_ids))
+        assert project_meta == self.project_metas[job.project_id]
+        return [Obj(to_json=lambda meta, iid=image_id: {
+            "name": str(iid) + ".jpg",
+            "size": {"width": 100, "height": 100},
+            "objects": [{
+                "classTitle": "bird", "geometryType": "rectangle",
+                "points": {"exterior": [[12, 12], [82, 88]], "interior": []},
+            }],
+            "tags": [],
+        }) for image_id in image_ids]
+
     def jobs_set_assignees(self, job_id, annotator_id):
         job = next(item for item in self.jobs if item.id == job_id)
         job.assigned_to_id = annotator_id
@@ -236,6 +256,7 @@ class MockSDK:
                 classes_to_label=list(classes_to_label),
                 image_ids=list(images_ids),
                 assigned_to_id=uid, status="pending",
+                image_ids=list(images_ids),
                 images_count=len(images_ids), finished_images_count=0,
             )
             self.jobs.append(j)
@@ -254,6 +275,7 @@ class MockSDK:
             id=self.new_id(), name=title, dataset_id=old.dataset_id,
             project_id=old.project_id,
             assigned_to_id=assignee_ids[0], status="pending",
+            image_ids=list(old.image_ids),
             image_ids=list(old.image_ids),
             images_count=old.images_count, finished_images_count=0,
         )
@@ -413,7 +435,9 @@ def test_initial_release_and_next_after_both_submit(configured):
         assert len(sdk.datasets) == 1
         assert len(sdk.jobs) == 2
         assert sync_all(db, sdk, config)["changed_jobs"] == 0
-        ops = list(db.scalars(select(NativeOperation)))
+        ops = list(db.scalars(select(NativeOperation).where(
+            NativeOperation.kind == "publish_job",
+        )))
         assert len(ops) == 1
         sdk.jobs[0].status = "on_review"
         sdk.jobs[0].finished_images_count = 2
@@ -535,7 +559,9 @@ def test_uncertain_native_create_is_reconciled_without_duplicates(configured):
         assert result["status"] == "attention"
         assert len(sdk.projects) == 1 and len(sdk.datasets) == 1
         assert len(sdk.jobs) == 2
-        op = db.scalar(select(NativeOperation))
+        op = db.scalar(select(NativeOperation).where(
+            NativeOperation.kind == "publish_job",
+        ))
         opid = op.id
         assert op.status == "attention"
     retry = call(http, csrf, "/native/operations/"+opid+"/retry")
@@ -554,7 +580,7 @@ def test_pause_blocks_releasing_new_native_jobs(configured):
     assert response.status_code == 200
     with maker() as db:
         assert process_once(db, sdk, db.get(SuperviselyConfig, 1)) is None
-        assert len(sdk.projects) == 0
+        assert len(sdk.projects) == 1
     resume = call(http, csrf, "/native/plans/"+plan_id+"/resume")
     assert resume.status_code == 200
     with maker() as db:
@@ -641,7 +667,8 @@ def test_manual_assignments_publish_independent_videos(configured):
         assert process_once(db, sdk, conf)["native_jobs"] == 1
         assert process_once(db, sdk, conf)["native_jobs"] == 1
         assert len(sdk.jobs) == 2
-        assert len({j.dataset_id for j in sdk.jobs}) == 2
+        assert len({j.dataset_id for j in sdk.jobs}) == 1
+        assert sdk.jobs[0].dataset_id != sdk.datasets[0].id
         for native in sdk.jobs:
             native.status = "on_review"
             native.finished_images_count = 0
