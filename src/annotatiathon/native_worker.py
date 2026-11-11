@@ -809,6 +809,9 @@ def process_reassignment_once(db: Session, api,
         current = api.labeling_job.get_info_by_id(binding.native_job_id)
         if (current is None or current.dataset_id != job.native_dataset_id):
             raise NativeWorkerError("reassign_native_job_identity_changed")
+        if (current.assigned_to_id != person.supervisely_user_id
+                and current.status in {"on_review", "completed", "review_completed"}):
+            raise NativeWorkerError("reassign_native_job_already_submitted")
         if current.assigned_to_id != person.supervisely_user_id:
             api.labeling_job.set_assignees(
                 binding.native_job_id,
