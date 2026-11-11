@@ -79,7 +79,7 @@ services:
       api:
         condition: service_healthy
     ports:
-      - "127.0.0.1:8080:80"
+      - "127.0.0.1:${NIGHTJAR_LIVE_TEST_PORT:-8080}:80"
     restart: unless-stopped
     # Only this combined web/API origin is reachable from the host/tunnel.
 

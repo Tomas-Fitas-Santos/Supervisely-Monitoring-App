@@ -259,10 +259,10 @@ export function DatasetScreen({auth}:{auth:Auth}) {
               Manual assignments can independently duplicate a video in their separate remote dataset.</p>}
           </div>}
           {videos.length>0&&<div className="settings-note">
-            <div><label>Frame-storage projection<input type="number" min={1} max={1000000000}
+            <div><label>Estimated storage · target frame count<input type="number" min={1} max={1000000000}
               value={projectedFrames} onChange={e=>setProjectedFrames(Math.min(1000000000,Math.max(1,Number(e.target.value)||1)))}/></label>
               <p>Approximately {formatBytes(videos.reduce((sum,video)=>sum+video.extracted_bytes,0)
-                /Math.max(1,videos.reduce((sum,video)=>sum+video.frame_count,0))*projectedFrames)} for these frame files.
+                /Math.max(1,videos.reduce((sum,video)=>sum+video.frame_count,0))*projectedFrames)} for {projectedFrames.toLocaleString()} frames at the average size in this collection.
                 Allow additional storage for original videos, staging, annotations, exports and backups.</p></div>
           </div>}
           {dataset.status==="ready"&&videosLoaded&&!videos.length&&<p className="advisory">

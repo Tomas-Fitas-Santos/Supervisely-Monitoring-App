@@ -31,7 +31,7 @@ class FrameDescription(BaseModel):
 
 class FrameManifest(BaseModel):
     version: Literal[1]
-    source_sha256: str = Field(pattern=r"^[0-9a-fA-F]{64}$")
+    source_sha256: str | None = Field(default=None, pattern=r"^[0-9a-fA-F]{64}$")
     source_frame_count: int = Field(ge=1, le=250000)
     all_frames: bool
     time_base: str | None = None
@@ -71,13 +71,15 @@ def index_supplied_frames(db: Session, video: MediaVideo, media_root: Path,
             raise HTTPException(status_code=422, detail=f"Invalid frames.json for {video.video_group}: {exc}") from exc
         video.extraction_policy = "supplied_manifest"
         video.density = "declared_full" if manifest.all_frames else "unknown"
-        video.source_sha256 = manifest.source_sha256.lower()
+        video.source_sha256 = manifest.source_sha256.lower() if manifest.source_sha256 else None
         video.source_frame_count = manifest.source_frame_count
         video.time_base = manifest.time_base
         video.frame_rate = manifest.frame_rate
         declared_total = manifest.source_frame_count
         strict = True
-        notes.append("Original video checksum and density are declared by the supplied manifest.")
+        notes.append("Frame density is declared by the supplied manifest.")
+        if manifest.source_sha256 is None:
+            notes.append("Original video checksum was not supplied.")
     seen = set()
     ambiguous = False
     for frame in frames:

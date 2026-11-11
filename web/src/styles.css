@@ -326,24 +326,18 @@ input,select{border:1px solid #dfe5ed;border-radius:9px;background:white;padding
 @media (min-width:981px){
   .app-shell{height:100dvh;min-height:0;overflow:hidden}
   .main-area{height:100dvh;overflow:hidden;min-height:0}
-  .main-area>.page-body{min-height:0;overflow-y:auto}
-  .main-area>.admission-viewport,
-  .main-area>.roster-viewport{
+  .main-area>.page-body,.main-area>.dataset-workspace{min-height:0;overflow-y:auto}
+  .main-area>.admission-viewport{
     display:flex;flex-direction:column;overflow:hidden;padding-bottom:24px;
   }
-  .admission-viewport>.page-heading,.roster-viewport>.page-heading,
-  .admission-viewport>.stat-grid,.roster-viewport>.stat-grid,
-  .roster-viewport>.workspace-subtabs{
+  .admission-viewport>.page-heading,.admission-viewport>.stat-grid{
     flex:0 0 auto;
   }
-  .admission-viewport>.table-panel,.roster-viewport>.table-panel{
+  .admission-viewport>.table-panel{
     display:flex;flex-direction:column;min-height:0;flex:1;overflow:hidden;
   }
-  .admission-viewport .table-scroll,.roster-viewport .table-scroll{
+  .admission-viewport .table-scroll{
     min-height:0;flex:1;overflow:auto;scrollbar-gutter:stable;
-  }
-  .roster-viewport .team-list,.roster-viewport .team-detail{
-    flex:1;min-height:0;overflow-y:auto;
   }
 }
 .admission-viewport .data-table{min-width:850px}
@@ -352,7 +346,7 @@ input,select{border:1px solid #dfe5ed;border-radius:9px;background:white;padding
 }
 .table-scroll .data-table thead th{position:sticky;top:0;z-index:2}
 @media(max-width:980px){
-  .admission-viewport .table-scroll,.roster-viewport .table-scroll{
+  .admission-viewport .table-scroll{
     max-height:54vh;overflow:auto;
   }
 }
@@ -431,9 +425,8 @@ input,select{border:1px solid #dfe5ed;border-radius:9px;background:white;padding
 
 /* People/Teams: one scrolling roster surface, responsive team cards, compact member details. */
 .roster-viewport .roster-team-grid{
-  flex:1;min-height:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(min(310px,100%),1fr));
-  align-content:start;gap:14px;overflow-y:auto;padding:20px 22px;
-  scrollbar-gutter:stable;background:#f8fbf9;
+  display:grid;grid-template-columns:repeat(auto-fill,minmax(min(310px,100%),1fr));
+  align-content:start;gap:14px;padding:20px 22px;background:#f8fbf9;
 }
 .roster-viewport .roster-team-grid-heading{
   grid-column:1/-1;display:flex;align-items:baseline;gap:14px;
@@ -455,16 +448,14 @@ input,select{border:1px solid #dfe5ed;border-radius:9px;background:white;padding
 .roster-team-card-footer{display:flex;align-items:center;justify-content:space-between;
   flex-wrap:wrap;gap:8px;padding-top:11px;border-top:1px solid #e8eee9;
   font-size:11px;color:#577365;font-weight:700}
-.roster-viewport .roster-team-detail{display:flex;flex-direction:column;min-height:0;
-  overflow:hidden;flex:1;padding:20px 24px}
+.roster-viewport .roster-team-detail{padding:20px 24px}
 .roster-team-detail .back-link{flex:none}
 .roster-team-detail-header{flex:none;display:flex;align-items:center;
   justify-content:space-between;gap:12px;flex-wrap:wrap}
 .roster-team-detail-title h3{margin:0 0 6px}
 .roster-team-detail-stats{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-.roster-team-member-table{flex:1;min-height:0;overflow:hidden;display:flex;flex-direction:column}
-.roster-team-member-table .table-scroll{flex:1;min-height:0;overflow:auto;
-  border:1px solid #e3ebe6;border-radius:10px;scrollbar-gutter:stable}
+.roster-viewport .table-scroll{overflow-x:auto}
+.roster-team-member-table .table-scroll{border:1px solid #e3ebe6;border-radius:10px}
 .roster-viewport .roster-team-member-table .data-table{min-width:720px}
 .roster-viewport .roster-team-member-table th{position:sticky;top:0;z-index:2}
 .roster-viewport .roster-team-grid-empty{grid-column:1/-1}

@@ -20,7 +20,9 @@ from .people_api import router as people_router
 from .personal_settings_api import router as personal_settings_router
 from .registration_api import router as registration_router
 from .review_dashboard_api import router as review_dashboard_router
+from .review_queue_api import router as review_queue_router
 from .reviews_api import router as reviews_router
+from .scoring_api import router as scoring_router
 from .settings_api import router as settings_router
 from .staff_api import router as staff_router
 from .teams_api import router as teams_router
@@ -53,6 +55,8 @@ app.include_router(labeling_router)
 app.include_router(manual_jobs_router)
 app.include_router(reviews_router)
 app.include_router(review_dashboard_router)
+app.include_router(review_queue_router)
+app.include_router(scoring_router)
 app.include_router(closeout_router)
 
 
