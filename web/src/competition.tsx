@@ -31,6 +31,9 @@ type ManualOptions={teams:TeamOption[];videos:VideoOption[];
     job_id:string;status:string}[]};
 type Draft={team_id:string;assignee_person_id:string;video_group:string};
 type AnnotationClass={name:string;shape:"rectangle"|"point";color:string;description:string};
+type AssigneeOption={id:string;name:string;team_name:string;team_id:string;native_ready:boolean};
+type MirrorStatus={state:string;uploaded_frames:number;total_frames:number;
+  ready_for_automatic_jobs:boolean;error_code:string|null};
 
 export function CompetitionScreen({auth}:{auth:Auth}) {
   const admin=auth.staff.roles.includes("organiser");
@@ -42,7 +45,6 @@ export function CompetitionScreen({auth}:{auth:Auth}) {
   const [chosen,setChosen]=useState("");
   const [media,setMedia]=useState<MediaPage|null>(null);
   const [page,setPage]=useState(1);
-  const [redundancy,setRedundancy]=useState(1);
   const [jobsPerTeam,setJobsPerTeam]=useState(4);
   const [videoLimit,setVideoLimit]=useState("");
   const [created,setCreated]=useState<Created|null>(null);
@@ -50,8 +52,11 @@ export function CompetitionScreen({auth}:{auth:Auth}) {
   const [annotationClasses,setAnnotationClasses]=useState<AnnotationClass[]>([]);
   const [options,setOptions]=useState<ManualOptions|null>(null);
   const [teamId,setTeamId]=useState("");
-  const [personId,setPersonId]=useState("");
-  const [videoGroup,setVideoGroup]=useState("");
+  const [allowDuplicates,setAllowDuplicates]=useState(false);
+  const [highPriority,setHighPriority]=useState(false);
+  const [assignees,setAssignees]=useState<AssigneeOption[]>([]);
+  const [reassignTo,setReassignTo]=useState("");
+  const [mirror,setMirror]=useState<MirrorStatus|null>(null);
   const [drafts,setDrafts]=useState<Draft[]>([]);
   const [dispatch,setDispatch]=useState<"hold"|"publish">("publish");
   const [filter,setFilter]=useState<"all"|"review"|"active"|"held">("all");
@@ -85,6 +90,15 @@ export function CompetitionScreen({auth}:{auth:Auth}) {
   },[dataset]);
   useEffect(()=>{void refresh();},[refresh]);
   useEffect(()=>{
+    void api<{items:AssigneeOption[]}>("/labeling/manual/assignees")
+      .then(result=>setAssignees(result.items)).catch(()=>undefined);
+  },[]);
+  useEffect(()=>{
+    if(!dataset){setMirror(null);return;}
+    void api<MirrorStatus>("/datasets/"+dataset+"/mirror-status")
+      .then(setMirror).catch(()=>setMirror(null));
+  },[dataset,native]);
+  useEffect(()=>{
     void api<{items:AnnotationClass[]}>("/labeling/annotation-classes")
       .then(response=>setAnnotationClasses(response.items))
       .catch(error=>setError((error as Error).message));
@@ -96,26 +110,27 @@ export function CompetitionScreen({auth}:{auth:Auth}) {
       .then(setMedia).catch(e=>setError((e as Error).message));
   },[chosen,page]);
   const currentTeam=options?.teams.find(t=>t.id===teamId);
-  useEffect(()=>{
-    setPersonId(old=>currentTeam?.members.some(m=>m.id===old)?old:
-      (currentTeam?.members[0]?.id||""));
-  },[currentTeam]);
+  const selectedForTeam=drafts.filter(x=>x.team_id===teamId);
   const availableVideos=useMemo(()=>{
-    const occupied=new Set((options?.existing||[]).filter(x=>x.team_id===teamId)
-      .map(x=>x.video_group));
-    for(const draft of drafts)if(draft.team_id===teamId)occupied.add(draft.video_group);
-    return (options?.videos||[]).filter(video=>!occupied.has(video.video_group));
-  },[options,teamId,drafts]);
-  useEffect(()=>{
-    setVideoGroup(old=>availableVideos.some(v=>v.video_group===old)?old:
-      (availableVideos[0]?.video_group||""));
-  },[availableVideos]);
+    const used=new Set((options?.existing||[]).map(x=>x.video_group));
+    return (options?.videos||[]).filter(v=>allowDuplicates||
+      !used.has(v.video_group)||drafts.some(d=>d.video_group===v.video_group));
+  },[options,allowDuplicates,drafts]);
+  function toggleVideo(group:string){
+    setDrafts(prev=>prev.some(row=>row.team_id===teamId&&row.video_group===group)?
+      prev.filter(row=>!(row.team_id===teamId&&row.video_group===group)):
+      [...prev,{team_id:teamId,video_group:group,assignee_person_id:""}]);
+  }
+  function changeDraftAssignee(index:number,personId:string){
+    setDrafts(old=>old.map((row,i)=>i===index?
+      {...row,assignee_person_id:personId}:row));
+  }
 
   async function generate(){
     setBusy(true);setError("");setNotice("");
     try {
       const response=await api<Created>("/labeling/plans","POST",{
-        dataset_id:dataset,jobs_per_team:jobsPerTeam,redundancy,
+        dataset_id:dataset,jobs_per_team:jobsPerTeam,redundancy:1,
         video_limit:videoLimit.trim()?Number(videoLimit):null,
       },auth.csrf_token);
       setCreated(response);
@@ -147,14 +162,11 @@ export function CompetitionScreen({auth}:{auth:Auth}) {
     }catch(e){setError((e as Error).message);}
     finally{setBusy(false);}
   }
-  function addDraft(){
-    if(!currentTeam||!personId||!videoGroup)return;
-    if(!currentTeam.members.some(m=>m.id===personId))return;
-    setDrafts(old=>[...old,{team_id:teamId,assignee_person_id:personId,video_group:videoGroup}]);
-    setError("");
-  }
   async function saveManual(){
     if(!drafts.length)return;
+    if(drafts.some(item=>!item.assignee_person_id)){
+      setError("Select an annotator for each chosen video before creating jobs.");return;
+    }
     if(dispatch==="publish"&&!window.confirm(
       "Queue "+drafts.length+" job(s) for the live Supervisely worker? "+
       "Every row is one video assigned to one person."))return;
@@ -162,11 +174,28 @@ export function CompetitionScreen({auth}:{auth:Auth}) {
     try {
       const result=await api<{count:number;message:string}>("/labeling/manual/jobs","POST",{
         dataset_id:dataset,assignments:drafts,dispatch,
+        high_priority:dispatch==="publish"&&highPriority,
+        allow_duplicates:allowDuplicates,
       },auth.csrf_token);
       setDrafts([]);
       setNotice(result.count+" video job(s) created. "+result.message);
       setSection("overview");
       await refresh();await refreshOptions();
+    }catch(e){setError((e as Error).message);}
+    finally{setBusy(false);}
+  }
+  async function reassignSelected(){
+    if(!selectedJob||!reassignTo||busy)return;
+    if(!window.confirm("Reassign this job to the selected annotator? The recipient may belong to another team."))return;
+    setBusy(true);setError("");setNotice("");
+    try{
+      const result=await api<{status:string}>(
+        "/labeling/manual/jobs/"+selectedJob.id+"/reassign","POST",
+        {person_id:reassignTo},auth.csrf_token);
+      setNotice(result.status==="updated"?
+        "Assignment changed in Nightjar before publishing.":
+        "Supervisely reassignment queued. The worker will confirm before Nightjar changes the owner.");
+      await refresh();
     }catch(e){setError((e as Error).message);}
     finally{setBusy(false);}
   }
@@ -222,39 +251,40 @@ export function CompetitionScreen({auth}:{auth:Auth}) {
         </div>
       </details>
       <div className="form-grid triple">
-        <label>Source collection<select value={dataset} onChange={e=>setDataset(e.target.value)}>
-          <option value="">Select collection…</option>
+        <label>1 · Source dataset<select value={dataset} onChange={e=>setDataset(e.target.value)}>
+          <option value="">Select source…</option>
           {datasets.map(ds=><option key={ds.id} value={ds.id}>{ds.name} · {ds.video_count} videos</option>)}
         </select></label>
-        <label>Competition team<select value={teamId} onChange={e=>setTeamId(e.target.value)}>
+        <label>1 · Select team<select value={teamId} onChange={e=>setTeamId(e.target.value)}>
           {!options?.teams.length&&<option value="">No eligible teams</option>}
           {options?.teams.map(team=><option key={team.id} value={team.id}>{team.name}</option>)}
         </select></label>
-        <label>Individual annotator<select value={personId} onChange={e=>setPersonId(e.target.value)}>
-          {currentTeam?.members.map(person=><option key={person.id} value={person.id}>
-            {person.name}{person.native_ready?"":" · Not linked"}
-          </option>)}
-        </select></label>
       </div>
-      <div className="manual-video-row">
-        <label>Video (always exactly one per job)<select value={videoGroup}
-          onChange={e=>setVideoGroup(e.target.value)}>
-          {!availableVideos.length&&<option value="">No unassigned videos for this team</option>}
-          {availableVideos.map(video=><option key={video.video_group} value={video.video_group}>
-            {video.video_group} · {video.frames} frames
-          </option>)}
-        </select></label>
-        <button className="btn secondary" disabled={!videoGroup||!personId||busy}
-          onClick={addDraft}><Plus size={15}/> Add assignment</button>
+      <h4>2 · Select the videos for {currentTeam?.name||"this team"}</h4>
+      <p className="muted small">Each selected video becomes exactly one job. Automatic jobs are unique across the event. Enable duplicate assignments only to deliberately repeat a video.</p>
+      <label className="manual-option-checkbox"><input type="checkbox" checked={allowDuplicates}
+        onChange={e=>setAllowDuplicates(e.target.checked)}/> Allow duplicate videos in manual assignments</label>
+      <div className="manual-video-choices">
+        {availableVideos.map(video=><label key={video.video_group} className="manual-video-choice">
+          <input type="checkbox" disabled={busy} checked={selectedForTeam.some(x=>x.video_group===video.video_group)}
+            onChange={()=>toggleVideo(video.video_group)}/>
+          <span><strong>{video.video_group}</strong><small>{video.frames} frames · {video.morphology}</small></span>
+        </label>)}
+        {!availableVideos.length&&<p className="muted small">No unused videos available. You may enable manual duplicates to assign a previously used video.</p>}
       </div>
-      <p className="muted small">An assigned video cannot be selected twice for the same team. Other teams may receive the same video independently for cross-team comparison.</p>
       {drafts.length>0&&<div className="manual-draft">
-        <div className="panel-heading"><h4>Assignments to create ({drafts.length})</h4>
+        <div className="panel-heading"><h4>3 · Assign each selected video to a person ({drafts.length})</h4>
           <button className="btn secondary" onClick={()=>setDrafts([])} disabled={busy}>Clear all</button></div>
-        {drafts.map((item,index)=><div className="job-plan-row" key={index}>
-          <div><strong>{options?.teams.find(t=>t.id===item.team_id)?.name} · {
-            options?.teams.find(t=>t.id===item.team_id)?.members.find(m=>m.id===item.assignee_person_id)?.name}</strong>
-            <span>{item.video_group}</span></div>
+        {drafts.map((item,index)=><div className="job-plan-row" key={item.team_id+item.video_group+index}>
+          <div><strong>{options?.teams.find(t=>t.id===item.team_id)?.name} · {item.video_group}</strong>
+            <label>Assigned annotator
+              <select value={item.assignee_person_id} onChange={e=>changeDraftAssignee(index,e.target.value)}>
+                <option value="">Choose annotator…</option>
+                {options?.teams.find(t=>t.id===item.team_id)?.members.map(member=>
+                  <option key={member.id} value={member.id}>{member.name}{member.native_ready?"":" · Not linked"}</option>)}
+              </select>
+            </label>
+          </div>
           <button className="btn secondary" aria-label="Remove assignment" disabled={busy}
             onClick={()=>setDrafts(old=>old.filter((_,i)=>i!==index))}><Trash2 size={14}/></button>
         </div>)}
@@ -266,7 +296,12 @@ export function CompetitionScreen({auth}:{auth:Auth}) {
             onChange={()=>setDispatch("hold")}/>
             <span><strong>Save for later</strong><small>Keep in Nightjar; publish manually when ready.</small></span></label>
         </div>
-        <button className="btn primary" disabled={busy} onClick={()=>void saveManual()}>
+        {dispatch==="publish"&&<label className="manual-option-checkbox">
+          <input type="checkbox" checked={highPriority} onChange={e=>setHighPriority(e.target.checked)}/>
+          Higher priority <span className="muted small">New jobs normally use lower priority. Enable this to publish before ordinary queued jobs.</span>
+        </label>}
+        <button className="btn primary" disabled={busy||drafts.some(x=>!x.assignee_person_id)}
+          onClick={()=>void saveManual()}>
           <Send size={15}/>{dispatch==="publish"?"Queue jobs for Supervisely":"Save held jobs"}</button>
       </div>}
     </section>}
@@ -306,6 +341,19 @@ export function CompetitionScreen({auth}:{auth:Auth}) {
               {binding.native_status.replaceAll("_"," ")}</span>
           </div>)}
           {!selectedJob.native_submissions?.length&&<p className="muted small">No native job yet. If published, the worker will create it.</p>}
+          {admin&&selectedJob.assignee_person_id&&
+            !["on_review","completed","needs_correction"].includes(selectedJob.status)&&
+            <div className="manual-reassignment">
+              <h4>Change assigned annotator</h4>
+              <p className="muted small">You may select a person from any active team. Published jobs are reassigned directly in Supervisely by the worker; no new job or video upload is created.</p>
+              <select value={reassignTo} onChange={e=>setReassignTo(e.target.value)}>
+                <option value="">Choose new annotator…</option>
+                {assignees.filter(p=>p.native_ready&&p.id!==selectedJob.assignee_person_id).map(p=>
+                  <option key={p.id} value={p.id}>{p.team_name} · {p.name}</option>)}
+              </select>
+              <button className="btn secondary" disabled={!reassignTo||busy}
+                onClick={()=>void reassignSelected()}>Reassign job</button>
+            </div>}
           {admin&&selectedJob.release_mode==="manual_hold"&&<button className="btn primary"
             disabled={busy} onClick={()=>void nativeAction(
               "/labeling/manual/jobs/"+selectedJob.id+"/publish",
@@ -337,7 +385,7 @@ export function CompetitionScreen({auth}:{auth:Auth}) {
     {selectedJob&&media&&<section className="panel" style={{marginTop:20}}>
       <div className="panel-heading"><div><span className="eyebrow">ASSIGNED SOURCE VIDEO</span>
         <h3>{media.items[0]?.video_group||"Standalone images"}</h3>
-        <p>{media.total} frames. The worker uploads them together to one native dataset for this individual job.</p>
+        <p>{media.total} frames. Automatic frames were preloaded before the event. Manual duplicates use a separate Supervisely dataset.</p>
       </div></div>
       <div className="table-scroll"><table className="data-table"><thead><tr>
         <th>Frame source</th><th>Morphology</th><th>Video</th>
@@ -357,16 +405,15 @@ export function CompetitionScreen({auth}:{auth:Auth}) {
         <p>Automatically distribute whole videos across eligible teams, with one job per person and video.</p>
       </div></div>
 
-      <p className="muted small">Each job contains exactly one entire video. <strong>Maximum jobs per team</strong> limits how many distinct video jobs a team receives. <strong>Different teams per video</strong> controls cross-team redundancy; it never creates duplicate copies for the two members of the same team. Jobs alternate between the two annotators. <strong>Maximum videos per team</strong> is an optional cap. Creating a plan is a draft: only approval and launch send it to the worker.</p>
+      <p className="muted small">Automatic distribution uses the complete pre-uploaded Supervisely video library. Each video is given to exactly one annotator across the whole event, with no overlap. The two people in a team receive different videos. Jobs alternate between teammates. Finalize and fully mirror the dataset before launch.</p>
       <div className="form-grid triple">
         <label>Maximum jobs per team<input type="number" min={1} max={100}
           value={jobsPerTeam} onChange={e=>setJobsPerTeam(Number(e.target.value))}/></label>
-        <label>Different teams per video<input type="number" min={1} max={100}
-          value={redundancy} onChange={e=>setRedundancy(Number(e.target.value))}/></label>
         <label>Maximum videos per team (optional)<input type="number" min={0}
           value={videoLimit} placeholder="Unlimited"
           onChange={e=>setVideoLimit(e.target.value)}/></label>
       </div>
+      <p className="muted small">Supervisely mirror: {mirror?.state||"Unknown"} · {mirror?.uploaded_frames||0}/{mirror?.total_frames||0} frames uploaded. {mirror?.ready_for_automatic_jobs?"Ready for instant assignment.":"Wait until the full dataset is mirrored before launching."}</p>
       <button className="btn secondary" disabled={busy||!dataset||plans.some(p=>p.status==="approved")}
         onClick={()=>void generate()}><UsersRound size={15}/> Generate draft plan</button>
       {created&&<div className="job-plan-summary"><strong>{created.job_count} jobs created in a draft</strong>
@@ -375,7 +422,7 @@ export function CompetitionScreen({auth}:{auth:Auth}) {
         {plans.map(plan=><div className="job-plan-row" key={plan.id}>
           <div><strong>{plan.jobs_per_team===0?"Manual assignments":"Automatic plan"} · {plan.status}</strong>
             <span>{plan.jobs_per_team===0?"Jobs added as needed":
-              plan.jobs_per_team+" maximum jobs/team · "+plan.redundancy+"× different-team coverage"}</span></div>
+              plan.jobs_per_team+" maximum jobs/team · "+(plan.redundancy===1?"No overlap":"Legacy overlap plan")}</span></div>
           {plan.status==="planned"&&<button className="btn secondary" disabled={busy}
             onClick={()=>void approve(plan)}><ClipboardCheck size={15}/> Approve</button>}
           {plan.status==="approved"&&<button className="btn primary" disabled={busy}
