@@ -1,3 +1,4 @@
+import { confirmAction } from "./dialogs";
 import { useCallback, useEffect, useState } from "react";
 import type React from "react";
 import { AlertTriangle, ClipboardCheck, Gift, RefreshCw, RotateCcw, Ticket } from "lucide-react";
@@ -76,7 +77,7 @@ export function TicketsScreen({auth}:{auth:Auth}) {
   }
   async function confirm(){
     if(!preview)return;
-    if(!window.confirm(
+    if(!await confirmAction(
       "Confirm "+preview.operation+" of "+preview.quantity+" "+preview.category.name+
       " ticket(s) for "+preview.count+" person(s)? This creates audited ledger records."
     ))return;
@@ -91,7 +92,7 @@ export function TicketsScreen({auth}:{auth:Auth}) {
     finally{setBusy(false);}
   }
   async function reverse(batch:Batch) {
-    if(!window.confirm("Reverse the entire batch "+batch.id+"? Reversals are audited and only possible if subsequent ticket use permits."))return;
+    if(!await confirmAction("Reverse the entire batch "+batch.id+"? Reversals are audited and only possible if subsequent ticket use permits."))return;
     setBusy(true);setError("");setNotice("");
     try {
       await api("/tickets/batches/"+batch.id+"/reverse","POST",undefined,auth.csrf_token);

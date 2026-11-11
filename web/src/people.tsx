@@ -1,3 +1,4 @@
+import { confirmAction } from "./dialogs";
 import { useCallback, useEffect, useState } from "react";
 import type React from "react";
 import {
@@ -61,7 +62,7 @@ function RosterImporter({auth,onComplete}:{auth:Auth;onComplete:()=>void}) {
     setBusy(true);setError("");
     try {
       if(!mapping.name||!mapping.email)throw Error("Map the name and email columns.");
-      if(commit && !window.confirm("Import this roster into PostgreSQL? Existing records may be updated."))return;
+      if(commit && !await confirmAction("Import this roster into PostgreSQL? Existing records may be updated."))return;
       const report=await api<typeof preview>(commit?"/roster/import":"/roster/preview",
         "POST",payload(),auth.csrf_token);
       setPreview(report);
@@ -192,7 +193,7 @@ export function PeopleScreen({auth}:{auth:Auth}) {
     }finally{setModalStatus("");setBusy(false);}
   }
   async function deactivate(person:Person) {
-    if(!window.confirm("Deactivate "+person.name+"? Historical records will remain available."))return;
+    if(!await confirmAction("Deactivate "+person.name+"? Historical records will remain available."))return;
     setBusy(true);
     try {
       await api("/people/"+person.id,"PATCH",{active:false},auth.csrf_token);
@@ -232,7 +233,7 @@ export function PeopleScreen({auth}:{auth:Auth}) {
     }catch{setError("Could not access the clipboard; allow clipboard access and retry.");}
   }
   async function markSent() {
-    if(!window.confirm("Confirm you actually sent these invitations through the Supervisely website. Copying email addresses is not enough."))return;
+    if(!await confirmAction("Confirm you actually sent these invitations through the Supervisely website. Copying email addresses is not enough."))return;
     setBusy(true);setError("");
     try {
       await api("/people/invitations-reported","POST",{person_ids:selectedPeople.map(p=>p.id)},auth.csrf_token);

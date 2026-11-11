@@ -1,3 +1,4 @@
+import { confirmAction } from "./dialogs";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type React from "react";
 import {
@@ -159,7 +160,7 @@ export function CoverageScreen({auth}:{auth:Auth}) {
     finally{setBusy(false);}
   }
   async function removeSegment(segment:Segment){
-    if(!window.confirm("Remove this observed-movement range? It will become unlabeled."))return;
+    if(!await confirmAction("Remove this observed-movement range? It will become unlabeled."))return;
     setBusy(true);setError("");setNotice("");
     try {
       await api("/coverage/datasets/"+datasetId+"/movements/"+segment.id,

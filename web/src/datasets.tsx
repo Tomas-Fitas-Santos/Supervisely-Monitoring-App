@@ -1,3 +1,4 @@
+import { confirmAction } from "./dialogs";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type React from "react";
 import {
@@ -149,7 +150,7 @@ export function DatasetScreen({auth}:{auth:Auth}) {
   }
   async function deleteSelected() {
     if(!dataset||dataset.status==="ready")return;
-    if(!window.confirm("Delete the incomplete dataset '"+dataset.name+
+    if(!await confirmAction("Delete the incomplete dataset '"+dataset.name+
       "' and all its partial local files? This cannot be undone."))return;
     setBusy(true);setError("");setNotice("");
     try {

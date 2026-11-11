@@ -1,3 +1,4 @@
+import { confirmAction } from "./dialogs";
 import { useEffect, useState } from "react";
 import type React from "react";
 import { AlertTriangle, CheckCircle2, Cloud, LockKeyhole, RefreshCw, Save, ShieldCheck, Trash2 } from "lucide-react";
@@ -93,7 +94,7 @@ export function SettingsScreen({auth}:{auth:Auth}) {
   }
   async function requestFullReset(){
     if(!resetPreview||resetPhrase!==resetPreview.confirmation_phrase)return;
-    if(!window.confirm(
+    if(!await confirmAction(
       "Archive this event's Nightjar projects in Supervisely and clear its " +
       "local event data? This cannot be undone in Nightjar. Team memberships " +
       "and monitor accounts will be preserved."))return;
@@ -170,7 +171,7 @@ export function SettingsScreen({auth}:{auth:Auth}) {
                 })}><CheckCircle2 size={16}/> Verify connection</button>
               <button type="button" className="btn danger-outline"
                 disabled={busy||!config?.credential_configured}
-                onClick={()=>{if(window.confirm("Remove the saved team integration token? Native synchronization and the worker will stop until a new token is saved."))void work(async()=>{
+                onClick={async()=>{if(await confirmAction("Remove the saved team integration token? Native synchronization and the worker will stop until a new token is saved."))void work(async()=>{
                   await api("/settings/supervisely/credential","DELETE",undefined,auth.csrf_token);
                   setMessage("Organiser integration credential removed.");
                 });}}>Remove token</button>
