@@ -39,8 +39,8 @@ def owned_project_event_id(name: str) -> str | None:
     if old:
         return old.group(1)
     modern = re.search(
-        r" \[NJ:([a-zA-Z0-9_-]{1,60}):"
-        r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\]$",
+        r" \[NJ:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):"
+        r"([a-zA-Z0-9_-]{1,60})\]$",
         name,
     )
     if modern and name.startswith("Nightjar · "):
