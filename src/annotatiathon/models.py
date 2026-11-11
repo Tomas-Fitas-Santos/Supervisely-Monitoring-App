@@ -372,6 +372,7 @@ class MediaDataset(Base):
     video_count: Mapped[int] = mapped_column(Integer, default=0)
     native_project_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     native_dataset_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    native_manual_dataset_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_by: Mapped[str] = mapped_column(ForeignKey("staff_accounts.id"))
     created_at: Mapped[int] = mapped_column(Integer, default=epoch)
     completed_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -549,6 +550,25 @@ class EventCloseout(Base):
 
 
 
+class NativeSourceMedia(Base):
+    """Pre-event upload: each source frame has one stable Supervisely image ID.
+
+    Automatic jobs reference subsets of these IDs; they never upload copies.
+    """
+
+    __tablename__ = "native_source_media"
+    __table_args__ = (
+        UniqueConstraint("media_id", name="uq_native_source_media"),
+        UniqueConstraint("native_image_id", name="uq_native_source_image"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=identifier)
+    event_id: Mapped[str] = mapped_column(ForeignKey("events.id"), index=True)
+    dataset_id: Mapped[str] = mapped_column(ForeignKey("media_datasets.id"), index=True)
+    media_id: Mapped[str] = mapped_column(ForeignKey("media_assets.id"), index=True)
+    native_dataset_id: Mapped[int] = mapped_column(Integer)
+    native_image_id: Mapped[int] = mapped_column(Integer)
+
+
 class NativeMediaInstance(Base):
     """Per-job copies give overlapping teams independent annotation image identities."""
 
@@ -577,6 +597,8 @@ class NativeOperation(Base):
     kind: Mapped[str] = mapped_column(String(30))
     target_id: Mapped[str] = mapped_column(String(36))
     status: Mapped[str] = mapped_column(String(20), default="pending")
+    priority: Mapped[int] = mapped_column(Integer, default=0)
+    payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     error_code: Mapped[str | None] = mapped_column(String(70), nullable=True)
     created_at: Mapped[int] = mapped_column(Integer, default=epoch)
