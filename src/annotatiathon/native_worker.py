@@ -160,8 +160,9 @@ def remote_dataset(api, db: Session, project_id: int,
     return created.id
 
 
-def media_name(asset: MediaAsset) -> str:
-    return asset.id + PurePosixPath(asset.relative_path).suffix.lower()
+def media_name(asset: MediaAsset, job: LabelingJob | None = None) -> str:
+    suffix = PurePosixPath(asset.relative_path).suffix.lower()
+    return (job.id + "_" if job else "") + asset.id + suffix
 
 
 def upload_media(db: Session, api, job: LabelingJob, ds: MediaDataset,
@@ -187,7 +188,7 @@ def upload_media(db: Session, api, job: LabelingJob, ds: MediaDataset,
     pending: list[tuple[MediaAsset, str, str]] = []
     for media_id in job.media_ids:
         asset = assets[media_id]
-        name = media_name(asset)
+        name = media_name(asset, job if native_dataset_id == ds.native_manual_dataset_id else None)
         remote_id = existing.get(name)
         current = linked.get(media_id)
         if current:
@@ -400,12 +401,24 @@ def publish_job(db: Session, job: LabelingJob, api, config: SuperviselyConfig) -
         job.status = "publishing"
         db.commit()
     roster_ids = {p.supervisely_user_id: p for p in people}
-    # One immutable dataset and one native job per assigned annotator.
+    # Automatic jobs reference subsets of the shared preloaded dataset.
+    # Manual jobs reference their own copied frames in a separate dataset.
+    # Only jobs with this deterministic Nightjar title belong to this job.
+    expected_title = labeling_job_name(
+        job, team, job_video_group(db, job),
+        people[0].name if job.assignee_person_id else "Team pair",
+    )
     current = api.labeling_job.get_list(
         config.team_id, dataset_id=remote_ds_id, show_disabled=True,
     )
     by_user = defaultdict(list)
+    bound_ids = {x.native_job_id for x in db.scalars(select(NativeJobBinding).where(
+        NativeJobBinding.event_id == job.event_id,
+        NativeJobBinding.job_id == job.id,
+    ))}
     for remote in current:
+        if remote.name != expected_title and remote.id not in bound_ids:
+            continue
         if remote.dataset_id != remote_ds_id:
             raise NativeWorkerError("native_dataset_mismatch")
         by_user[remote.assigned_to_id].append(remote)
@@ -414,10 +427,7 @@ def publish_job(db: Session, job: LabelingJob, api, config: SuperviselyConfig) -
     missing = [uid for uid in roster_ids if uid not in by_user]
     if missing:
         api.labeling_job.create(
-            name=labeling_job_name(
-                job, team, job_video_group(db, job),
-                people[0].name if job.assignee_person_id else "Team pair",
-            ),
+            name=expected_title,
             dataset_id=remote_ds_id,
             user_ids=missing,
             images_ids=native_media,
@@ -435,7 +445,8 @@ def publish_job(db: Session, job: LabelingJob, api, config: SuperviselyConfig) -
         )
         by_user = defaultdict(list)
         for remote in current:
-            by_user[remote.assigned_to_id].append(remote)
+            if remote.name == expected_title or remote.id in bound_ids:
+                by_user[remote.assigned_to_id].append(remote)
     if set(by_user) != set(roster_ids) or any(len(rows) != 1 for rows in by_user.values()):
         raise NativeWorkerError("native_job_confirmation_failed")
     for uid, person in roster_ids.items():
