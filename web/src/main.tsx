@@ -15,7 +15,7 @@ import { TicketsScreen } from "./tickets";
 import { ActivitiesScreen } from "./activities";
 import { DatasetWorkspace } from "./dataset_workspace";
 import { CompetitionScreen } from "./competition";
-import { QualityScreen } from "./reviews";
+import { SharedReviewScreen } from "./shared_review";
 import { CloseoutScreen } from "./closeout";
 import "./styles.css";
 
@@ -289,7 +289,7 @@ function App() {
       {accessibleTab==="datasets"&&organiser&&<DatasetWorkspace auth={auth}/>}
       {accessibleTab==="competition"&&<CompetitionScreen auth={auth} view="progress"/>}
       {accessibleTab==="job_setup"&&organiser&&<CompetitionScreen auth={auth} view="setup"/>}
-      {accessibleTab==="quality"&&<QualityScreen auth={auth}/>}
+      {accessibleTab==="quality"&&<SharedReviewScreen auth={auth}/>}
       {accessibleTab==="closeout"&&<CloseoutScreen auth={auth}/>}
       {accessibleTab==="staff"&&organiser&&<div className="page-body"><div className="page-heading"><div><span className="eyebrow">EVENT SETUP · PERMISSIONS</span><h2>Staff Access</h2><p className="muted">Only organisers manage Nightjar staff roles and permissions.</p></div></div><StaffScreen auth={auth}/></div>}
       {((accessibleTab==="settings"&&organiser)||accessibleTab==="account")&&<SettingsScreen auth={auth}/>}
