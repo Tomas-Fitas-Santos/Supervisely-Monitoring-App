@@ -442,7 +442,9 @@ def test_initial_release_and_next_after_both_submit(configured):
         sdk.jobs[0].status = "on_review"
         sdk.jobs[0].finished_images_count = 2
         sync_all(db, sdk, config)
-        assert len(db.scalars(select(NativeOperation)).all()) == 1
+        assert len(db.scalars(select(NativeOperation).where(
+            NativeOperation.kind != "mirror_dataset",
+        )).all()) == 1
         sdk.jobs[1].status = "on_review"
         sdk.jobs[1].finished_images_count = 1
         assert sync_all(db, sdk, config)["changed_jobs"] == 0
@@ -450,7 +452,9 @@ def test_initial_release_and_next_after_both_submit(configured):
         sdk.jobs[1].finished_images_count = 2
         result = sync_all(db, sdk, config)
         assert result["changed_jobs"] == 1
-        assert len(db.scalars(select(NativeOperation)).all()) == 1
+        assert len(db.scalars(select(NativeOperation).where(
+            NativeOperation.kind != "mirror_dataset",
+        )).all()) == 1
         # The second job must NOT be published before monitor acceptance.
         assert process_once(db, sdk, config) is None
         first_job = db.scalar(select(LabelingJob).where(
@@ -476,7 +480,9 @@ def test_initial_release_and_next_after_both_submit(configured):
     with maker() as db:
         config = db.get(SuperviselyConfig, 1)
         sync_all(db, sdk, config)
-        assert len(db.scalars(select(NativeOperation)).all()) == 2
+        assert len(db.scalars(select(NativeOperation).where(
+            NativeOperation.kind != "mirror_dataset",
+        )).all()) == 2
         next_run = process_once(db, sdk, config)
         assert next_run["status"] == "done"
         assert len(sdk.datasets) == 1
@@ -543,7 +549,9 @@ def test_returned_pair_job_restarts_and_blocks_next_release(configured):
     with maker() as db:
         config = db.get(SuperviselyConfig, 1)
         sync_all(db, sdk, config)
-        assert len(db.scalars(select(NativeOperation)).all()) == 3
+        assert len(db.scalars(select(NativeOperation).where(
+            NativeOperation.kind != "mirror_dataset",
+        )).all()) == 3
         assert process_once(db, sdk, config)["status"] == "done"
 
 
@@ -569,7 +577,7 @@ def test_uncertain_native_create_is_reconciled_without_duplicates(configured):
     with maker() as db:
         assert process_once(db, sdk, db.get(SuperviselyConfig, 1))["status"] == "done"
         assert len(sdk.jobs) == 2
-        assert len(sdk.images[sdk.datasets[0].id]) == 2
+        assert len(sdk.images[sdk.datasets[0].id]) == 3
         assert len(db.scalars(select(NativeJobBinding)).all()) == 2
 
 
