@@ -24,8 +24,8 @@ from .models import (
     StaffSession,
     SuperviselyConfig,
 )
-from .supervisely_client import NativeAPIError, change_member_role
 from .registration_api import monitor_can_register
+from .supervisely_client import NativeAPIError, change_member_role
 
 router = APIRouter(prefix="/api/v1", tags=["people"])
 VIEWER = ("organiser", "monitor", "reception", "activity", "distribution", "observer")
