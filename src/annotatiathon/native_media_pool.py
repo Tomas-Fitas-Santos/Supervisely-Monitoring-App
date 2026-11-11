@@ -5,13 +5,19 @@ those image IDs, without uploading media or creating per-job datasets.
 Manual jobs use separate per-assignment copies in one manual dataset.
 """
 from pathlib import Path
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .annotation_schema import AnnotationSchemaError, ensure_project_annotation_classes
 from .models import (
-    AuditEvent, Event, MediaAsset, MediaDataset, NativeOperation,
-    NativeSourceMedia, SuperviselyConfig, epoch,
+    AuditEvent,
+    Event,
+    MediaAsset,
+    MediaDataset,
+    NativeOperation,
+    NativeSourceMedia,
+    SuperviselyConfig,
 )
 from .native_names import legacy_project_name, project_name
 
