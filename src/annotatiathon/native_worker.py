@@ -8,7 +8,8 @@ The official SDK calls used here are:
   Api(server_address, token), workspace.get_info_by_id,
   project.get_list/create/get_meta/update_meta, dataset.get_list/create,
   image.get_list/upload_paths, labeling_job.get_list/create/get_info_by_id.
-No project/job deletion, role mutation or forced job completion is performed.
+Jobs and datasets are removed only when an organiser explicitly confirms a
+full event reset. No team-member deletion or forced job completion is performed.
 
 Each new video job belongs to exactly one verified annotator. Two members
 of a team receive separate videos and separate native jobs. Historical pair
@@ -32,6 +33,7 @@ from .events_api import seed_categories
 from .full_reset_api import clear_event_data, safe_dataset_paths
 from .models import (
     AuditEvent,
+    CompetitionTeam,
     Event,
     LabelingJob,
     LabelingPlan,
@@ -45,6 +47,14 @@ from .models import (
     epoch,
 )
 from .native_export_api import export_event_zip
+from .native_names import (
+    dataset_name,
+    labeling_job_name,
+    legacy_dataset_name,
+    legacy_project_name,
+    owned_project_event_id,
+    project_name,
+)
 from .native_operations_api import (
     can_queue_next,
     next_eligible,
@@ -82,41 +92,61 @@ def unique_remote(items, expected: str, kind: str):
     return matches[0] if matches else None
 
 
-def remote_project(api, config: SuperviselyConfig, dataset: MediaDataset) -> int:
+def remote_project(api, config: SuperviselyConfig,
+                   dataset: MediaDataset, event: Event) -> int:
     workspace = api.workspace.get_info_by_id(config.workspace_id)
     if workspace is None or workspace.team_id != config.team_id:
         raise NativeWorkerError("workspace_team_mismatch")
-    name = "Nightjar-" + dataset.event_id + "-" + dataset.id
+    name = project_name(event, dataset)
+    old_name = legacy_project_name(dataset)
     if dataset.native_project_id:
         project = api.project.get_info_by_id(dataset.native_project_id)
-        if project is None or project.name != name:
+        if (project is None or project.name not in {name, old_name}
+                or project.workspace_id != config.workspace_id):
             raise NativeWorkerError("project_identity_changed")
         return project.id
-    existing = unique_remote(
-        api.project.get_list(config.workspace_id), name, "project"
+    remote = list(api.project.get_list(config.workspace_id))
+    matches = [p for p in remote if p.name in {name, old_name}]
+    if len(matches) > 1:
+        raise NativeWorkerError("ambiguous_project")
+    if matches:
+        return matches[0].id
+    created = api.project.create(
+        config.workspace_id, name, change_name_if_conflict=False,
     )
-    if existing is None:
-        existing = api.project.create(
-            config.workspace_id, name, change_name_if_conflict=False,
-        )
-    return existing.id
+    return created.id
 
 
-def remote_dataset(api, project_id: int, job: LabelingJob) -> int:
-    name = "Nightjar-" + job.id
+def job_video_group(db: Session, job: LabelingJob) -> str | None:
+    if not job.media_ids:
+        return None
+    return db.scalar(select(MediaAsset.video_group).where(
+        MediaAsset.event_id == job.event_id,
+        MediaAsset.dataset_id == job.dataset_id,
+        MediaAsset.id.in_(job.media_ids),
+        MediaAsset.video_group.is_not(None),
+    ).limit(1))
+
+
+def remote_dataset(api, db: Session, project_id: int,
+                   job: LabelingJob, team: CompetitionTeam) -> int:
+    name = dataset_name(job, team, job_video_group(db, job))
+    old_name = legacy_dataset_name(job)
     if job.native_dataset_id is not None:
         item = api.dataset.get_info_by_id(job.native_dataset_id)
-        if item is None or item.name != name or item.project_id != project_id:
+        if item is None or item.name not in {name, old_name} or item.project_id != project_id:
             raise NativeWorkerError("native_dataset_identity_changed")
         return item.id
-    existing = unique_remote(
-        api.dataset.get_list(project_id), name, "dataset"
+    matches = [d for d in api.dataset.get_list(project_id)
+               if d.name in {name, old_name}]
+    if len(matches) > 1:
+        raise NativeWorkerError("ambiguous_dataset")
+    if matches:
+        return matches[0].id
+    created = api.dataset.create(
+        project_id, name, change_name_if_conflict=False,
     )
-    if existing is None:
-        existing = api.dataset.create(
-            project_id, name, change_name_if_conflict=False,
-        )
-    return existing.id
+    return created.id
 
 
 def media_name(asset: MediaAsset) -> str:
@@ -231,7 +261,10 @@ def publish_job(db: Session, job: LabelingJob, api, config: SuperviselyConfig) -
     dataset = db.get(MediaDataset, job.dataset_id)
     if dataset is None or dataset.status != "ready":
         raise NativeWorkerError("local_dataset_not_ready")
-    project_id = remote_project(api, config, dataset)
+    team = db.get(CompetitionTeam, job.team_id)
+    if team is None:
+        raise NativeWorkerError("missing_competition_team")
+    project_id = remote_project(api, config, dataset, event)
     # All image datasets/jobs in this Supervisely project share project metadata.
     # Make sure annotation tools exist *before* uploading frames or publishing jobs.
     try:
@@ -241,7 +274,7 @@ def publish_job(db: Session, job: LabelingJob, api, config: SuperviselyConfig) -
     if dataset.native_project_id is None:
         dataset.native_project_id = project_id
         db.commit()
-    remote_ds_id = remote_dataset(api, project_id, job)
+    remote_ds_id = remote_dataset(api, db, project_id, job, team)
     if job.native_dataset_id is None:
         job.native_dataset_id = remote_ds_id
         job.status = "publishing"
@@ -262,7 +295,10 @@ def publish_job(db: Session, job: LabelingJob, api, config: SuperviselyConfig) -
     missing = [uid for uid in roster_ids if uid not in by_user]
     if missing:
         api.labeling_job.create(
-            name="Nightjar video " + job.id if job.assignee_person_id else "Nightjar pair " + job.id,
+            name=labeling_job_name(
+                job, team, job_video_group(db, job),
+                people[0].name if job.assignee_person_id else "Team pair",
+            ),
             dataset_id=remote_ds_id,
             user_ids=missing,
             images_ids=native_media,
