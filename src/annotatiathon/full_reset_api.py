@@ -1,4 +1,4 @@
-"""Organiser-only event reset. Remote archival precedes local deletion.
+"""Organiser-only event reset. Remote job removal and archival precede local deletion.
 
 This resets the selected event, never the Supervisely team/members or other
 Nightjar events. Existing roster identities, team pairs, monitor assignments,
@@ -72,7 +72,12 @@ def reset_preview(db: Session, event: Event) -> dict:
         "workspace_id": config.workspace_id if config else None,
         "team_id": config.team_id if config else None,
         "remote_scope": "Nightjar projects for this event in the configured workspace",
-        "remote_action": "archive_projects",
+        "remote_action": "remove_labeling_jobs_archive_datasets_and_projects",
+        "native_cleanup": {
+            "labeling_jobs": "removed permanently",
+            "datasets": "archived and hidden; permanent purge requires instance root",
+            "projects": "archived and hidden; permanent purge requires instance root",
+        },
         "operation": None if not operation else {
             "status": operation.status, "error_code": operation.error_code,
             "attempts": operation.attempts,
@@ -86,7 +91,7 @@ def reset_preview(db: Session, event: Event) -> dict:
         ],
         "cleared": [
             "Event datasets, uploaded frames, downloaded annotations",
-            "Nightjar and Supervisely labeling jobs under Nightjar projects",
+            "Supervisely labeling jobs removed; Nightjar datasets/projects archived",
             "Plans, reviews, tickets, activities, attendance, results and exports",
         ],
         "confirmation_phrase": "RESET " + event.name,
@@ -142,11 +147,13 @@ def request_reset(
     db.add(AuditEvent(
         staff_id=ctx.staff.id, event_id=event.id,
         action="event.reset.requested", target_type="event", target_id=event.id,
-        details={"scope": "current_event", "archive_remote_projects": True},
+        details={"scope": "current_event", "remove_native_jobs": True,
+                 "archive_remote_datasets_and_projects": True},
     ))
     db.commit()
     return {"status": "pending", "operation_id": operation.id,
-            "message": "Worker will archive Nightjar projects, then clear event data."}
+            "message": "Worker removes native jobs, archives datasets and projects, "
+                       "then clears local event data."}
 
 
 @router.post("/retry", status_code=202)
