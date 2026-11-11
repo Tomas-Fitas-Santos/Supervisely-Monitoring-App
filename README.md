@@ -221,39 +221,81 @@ Do not commit real attendee lists, registration workbooks, media, API tokens, `.
 
 Architecture, scope and remaining acceptance gates are documented under `docs/`.
 
-## SDK-based Supervisely publishing (optional, live operations)
+## Supervisely video preloading, automatic jobs and manual dispatch
 
-The local competition queue uses a **separate explicit SDK worker**, not HTTP requests tied to the page. Install with `python -m pip install -e ".[native]"`. Save the encrypted organiser token in Settings, verify the team and workspace from Settings, reconcile both native participant IDs, upload a local dataset, generate and approve the distribution plan, and click **Launch event**. Start the worker in a third terminal: `python -m annotatiathon.native_worker --loop --poll-seconds 12`. For one cycle only, use `--once`. The server remains responsive; no native writes occur until an organiser launches and a worker is running.
+The **separate SDK worker** performs real Supervisely writes; browser requests
+enqueue durable operations in PostgreSQL. Keep the encrypted organiser token,
+verified team and workspace configured under Settings and run the native
+worker with `python -m annotatiathon.native_worker --loop --poll-seconds 12`
+(or via the native Docker Compose profile). Publishing is not part of an HTTP
+request and does not require the browser to stay open.
 
-Native jobs are published in **two records per two-person team** using `api.labeling_job.create(name, dataset_id, user_ids=[...], images_ids=[...])`. Each pair job receives its own Supervisely dataset of copied image/frame assets, protecting overlapping jobs from other teams from sharing annotation IDs. Both native users receive one native labeling job over that pair-specific dataset. The SDK returns separate job entities and does **not** prove that both users can concurrently edit a single shared answer; perform a live two-account collaboration acceptance test before the official event. Worker errors enter an explicit attention state and never silently retry uncertain remote writes. After inspecting remote state, use the displayed **Retry** command; it reconciles deterministic project/dataset names, media IDs and native jobs rather than blindly duplicating them.
+**Pre-event:** Upload a video-only dataset by root folder or ZIP. Local
+finalisation automatically queues a *full mirror* of all source video frames
+into a single Supervisely image dataset, named **Complete video library · all
+species**, within Nightjar's event-owned project. This mirror creates a stable
+source-frame-ID → remote-image-ID mapping in `native_source_media`, checks
+the nine bird box/visible/occluded keypoint classes, uploads in batches with
+idempotent recovery, and publishes a completion status. Dataset → Upload &
+Manage shows progress and an explicit Retry action if remote synchronization
+is interrupted. **Automatic launch is refused until the entire dataset is
+mirrored.** No annotation jobs are created during the dataset import.
 
-The worker polls two native job statuses. **Both annotators must submit all assigned images AND the monitor must accept the pair job** before the next pair job is released. Local quality scoring and native reviewer actions are separate; returned jobs block subsequent releases. Pause/resume controls affect only future Nightjar releases, not active native Supervisely jobs. The worker never deletes native data, adds members, changes roles or completes jobs on behalf of annotators. See [SDK worker contract](docs/SUPERVISELY_WORKER.md).
+**Automatic distribution:** Every selected complete video goes to **exactly
+one person across the whole event** (no redundant teams/overlap). Every
+two-person competition team receives different videos, at least one per
+teammate. One Supervisely labeling job is created per video/person using only
+the existing `images_ids` subset of the shared, pre-uploaded library.
+No video/image frames are uploaded while automatically publishing jobs.
+Each annotator's next job is released after the previous submission is
+accepted. An explicit organiser-approved plan is still required.
+
+**Manual dispatch during the event:** In Competition & Jobs → Create video
+jobs, choose the team, select the video(s), then choose which of its two
+annotators gets each video. Every row creates one separate native job. Default
+**Lower priority** keeps the normal worker order; optional **Higher priority**
+moves manual jobs ahead of normal pending publishing operations. An explicit
+**Allow duplicate videos** switch permits a deliberate repeated manual
+assignment. Manual jobs use a *separate Supervisely dataset*, **Manual
+assignments · independent video copies**, with image names scoped to the
+individual Nightjar job, so duplicate videos never share annotation state.
+The worker uploads only these deliberate manual copies, not new automatic
+video copies. Held manual jobs are possible and can be released later.
+
+**Reassignment:** An organiser can move an unsubmitted job to any verified
+Supervisely annotator, even from another team. A queued, unstarted job can
+be updated locally; an already published job uses the SDK's
+`labeling_job.set_assignees` and reads the updated native job back before
+changing Nightjar's team, monitor and person association. Uncertain
+publishing/submitted/reviewed jobs cannot be reassigned by this control;
+failed native operations retain an attention/retry state.
+
+**Submission and review:** The worker obtains **only submitted annotation
+JSON** via the corresponding native labeling-job endpoint, not images and
+not a shared project-level annotation read. It writes immutable per-frame
+JSON snapshots referenced to source media ID, local source SHA-256, job ID,
+and native image ID. Nightjar renders these objects over the *original
+locally stored images* for monitor review. The same source image can have
+multiple independent manual annotation submissions without mixing them.
+Pausing automatic releases does not pause an existing native job.
+No Supervisely team membership changes are made by job dispatch.
 
 ## Native annotation archive
 
 After the final accepted jobs are reconciled, close the event in **Results & Exports**. Click **Prepare native annotation export**, and let the optional Supervisely SDK worker download the current JSON annotations. When the task completes, the UI offers a ZIP file containing `full_manifest.jsonl`, `curated_manifest.jsonl`, per-image native annotation JSON, and a README explaining the snapshot. Both manifests retain each source asset SHA-256, morphology, source video group, local team/job identifiers, native image ID and both native job IDs. The curated manifest includes only accepted Nightjar pair jobs and excludes explicitly bad/incomplete sampled frames. Local source media remains in `.nightjar-data` (it is **not** included in the ZIP). The export is **not** a historical annotation-version archive.
 
-## Strict team job lifecycle and monitor-based competition testing
+## Monitor-pair testing and competition lifecycle
 
-Open **People & Teams → Monitor test pairs** to create a competition team
-from exactly two registered monitors. They retain their existing Supervisely
-Admin/Manager/Developer roles and remain on the Monitoring Team. You may
-disband the local pair **before** planning any labeling job or **after** every planned job has been accepted and its native operations are settled. Once jobs
-exist, that pair's historical links must be preserved; use a fresh event
-for a new full-workflow test rather than removing annotated jobs.
+People & Teams supports test pairs made of two existing monitors without
+changing their Supervisely manager/admin privileges. Each person has a
+separate native labeling job and receives a different complete video when
+automatic scheduling is used. The same team and event are reused for manual
+jobs during the live event; no separate event is needed.
 
-After uploading a dataset, generate and approve a plan in **Competition &
-Jobs**. The organiser explicitly launches the event. Only the **first
-pair-level job per team** is published. Both native annotator jobs for
-that pair must reach submitted/reviewed status and complete their media.
-**Monitoring & Review** then allows frame scoring and an explicit monitor
-decision: **Accept** releases the next planned job; **Return for correction**
-keeps the same logical job active, queues a native SDK correction/restart and
-requires both members to resubmit before continuing. Prior native IDs stay
-in the revision-history table and uncertain retries require confirmation.
-
-The SDK creates two native labeling-job rows for two assigned users over
-one pair-specific dataset. It does not guarantee that they can concurrently
-edit one shared answer; verify that behavior with two live accounts before
-the official event. The separate worker command is
-`python -m annotatiathon.native_worker --loop --poll-seconds 12`.
+In Monitoring & Review, every monitor can see all teams' dashboards and
+provisional rankings. Assigned reviewers can inspect the local source frame
+with Supervisely JSON boxes/keypoints overlaid, score the submitted points,
+and Accept or Return the job for correction. The native correction history
+remains tied to the job, and only accepted work releases an annotator's
+next automatic job. A team's assigned monitor can be changed by an organiser
+without moving the underlying native annotation data.
