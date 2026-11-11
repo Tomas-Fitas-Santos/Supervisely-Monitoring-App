@@ -1,5 +1,5 @@
 import { confirmAction } from "./dialogs";
-import { formatLisbonTime, parseLisbonTime } from "./event_time";
+import { formatLisbonInput, formatLisbonTime, parseLisbonTime } from "./event_time";
 import { useCallback, useEffect, useState } from "react";
 import type React from "react";
 import {
@@ -19,6 +19,8 @@ type AwardRecord={id:string;person_id:string;person_name:string;prize_id:string;
   distribution_id:string;awarded_at:number};
 type Detail={activity:Activity;results:Result[];prizes:Prize[];awards:AwardRecord[]};
 type Category={id:string;name:string;active:boolean};
+type EventWindow={start_at:number;end_at:number};
+type EventList={current_event_id:string;items:{id:string;start_at?:number|null;end_at?:number|null}[]};
 const localDate=formatLisbonTime;
 
 export function ActivitiesScreen({auth}:{auth:Auth}) {
@@ -31,6 +33,7 @@ export function ActivitiesScreen({auth}:{auth:Auth}) {
   const [people,setPeople]=useState<Person[]>([]);
   const [teams,setTeams]=useState<Team[]>([]);
   const [categories,setCategories]=useState<Category[]>([]);
+  const [eventWindow,setEventWindow]=useState<EventWindow|null>(null);
   const [error,setError]=useState("");
   const [notice,setNotice]=useState("");
   const [busy,setBusy]=useState(false);
@@ -50,11 +53,15 @@ export function ActivitiesScreen({auth}:{auth:Auth}) {
   const [prizeTo,setPrizeTo]=useState(1);
   const [prizeQty,setPrizeQty]=useState(1);
   const refresh=useCallback(async()=>{
-    const [a,t,c]=await Promise.all([
+    const [a,t,c,events]=await Promise.all([
       api<{items:Activity[]}>("/activities"),
       api<TeamResponse>("/teams"),
       api<{items:Category[]}>("/tickets/categories"),
+      api<EventList>("/events"),
     ]);
+    const event=events.items.find(v=>v.id===events.current_event_id);
+    setEventWindow(typeof event?.start_at==="number"&&typeof event?.end_at==="number"?
+      {start_at:event.start_at,end_at:event.end_at}:null);
     setItems(a.items);
     setSelected(current=>a.items.some(x=>x.id===current)?current:(a.items[0]?.id||""));
     setTeams(t.teams.filter(x=>x.type!=="monitoring"));
@@ -89,8 +96,12 @@ export function ActivitiesScreen({auth}:{auth:Auth}) {
     e.preventDefault();
     setBusy(true);setError("");setNotice("");
     try{
+      const startAt=parseLisbonTime(start),endAt=parseLisbonTime(end);
+      if(eventWindow&&(startAt===null||endAt===null||
+        startAt<eventWindow.start_at||endAt>eventWindow.end_at))
+        throw new Error("Activity must start and end inside the configured event window.");
       const result=await api<Activity>("/activities","POST",{
-        name,description,location,start_at:parseLisbonTime(start),end_at:parseLisbonTime(end),
+        name,description,location,start_at:startAt,end_at:endAt,
       },auth.csrf_token);
       setAddOpen(false);setName("");setDescription("");setLocation("");setStart("");setEnd("");
       await refresh();setSelected(result.id);setNotice("Activity created.");
@@ -163,6 +174,8 @@ export function ActivitiesScreen({auth}:{auth:Auth}) {
     </div>
     {addOpen&&canEdit&&section==="schedule"&&<section className="panel activities-create">
       <span className="eyebrow">SCHEDULE AN ACTIVITY</span><h3>New event activity</h3>
+      {eventWindow&&<p className="muted small">Event window: {formatLisbonTime(eventWindow.start_at)}
+        {" – "+formatLisbonTime(eventWindow.end_at)}.</p>}
       <form className="form-stack" onSubmit={e=>void addActivity(e)}>
         <label>Name<input required maxLength={200} value={name} onChange={e=>setName(e.target.value)}
           placeholder="e.g. Bird morphology challenge"/></label>
@@ -172,9 +185,13 @@ export function ActivitiesScreen({auth}:{auth:Auth}) {
           placeholder="Hall A / Seminar room"/></label>
         <div className="form-grid">
           <label>Start (Lisbon)<input type="datetime-local" value={start}
+              min={eventWindow?formatLisbonInput(eventWindow.start_at):undefined}
+              max={eventWindow?formatLisbonInput(eventWindow.end_at):undefined}
               onChange={e=>setStart(e.target.value)}/></label>
           <label>End (Lisbon)<input type="datetime-local" value={end}
-              min={start||undefined} onChange={e=>setEnd(e.target.value)}/></label>
+              min={start|| (eventWindow?formatLisbonInput(eventWindow.start_at):undefined)}
+              max={eventWindow?formatLisbonInput(eventWindow.end_at):undefined}
+              onChange={e=>setEnd(e.target.value)}/></label>
         </div>
         <p className="muted small">Activity times are interpreted in Europe/Lisbon,
           including Portuguese daylight-saving changes. Ambiguous or nonexistent local times
