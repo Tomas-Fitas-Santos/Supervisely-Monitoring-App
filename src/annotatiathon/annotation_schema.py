@@ -91,4 +91,19 @@ def ensure_project_annotation_classes(api, project_id: int) -> bool:
     desired, changed = merge_annotation_meta(current)
     if changed:
         api.project.update_meta(project_id, desired)
+    # Server read-back is essential: a successful HTTP return does not prove
+    # the labeling editor has all classes, geometry types and colors.
+    confirmed = api.project.get_meta(project_id)
+    if not isinstance(confirmed, dict):
+        raise AnnotationSchemaError("project_meta_not_readable")
+    observed = {
+        item.get("title"): item
+        for item in confirmed.get("classes", [])
+        if isinstance(item, dict)
+    }
+    for name, shape, color, _meaning in ANNOTATION_CLASSES:
+        cls = observed.get(name)
+        if (cls is None or cls.get("shape") != shape
+                or str(cls.get("color", "")).upper() != color):
+            raise AnnotationSchemaError("project_annotation_schema_not_confirmed")
     return changed
