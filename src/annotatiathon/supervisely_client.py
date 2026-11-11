@@ -5,8 +5,8 @@ role edits. Credentials never leave the server.
 """
 import hashlib
 import json
-from dataclasses import dataclass, replace
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, replace
 from urllib.parse import urlsplit
 
 import httpx
