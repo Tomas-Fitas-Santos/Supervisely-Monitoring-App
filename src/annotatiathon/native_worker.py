@@ -35,6 +35,7 @@ from .annotation_schema import (
 from .db import session_factory
 from .events_api import seed_categories
 from .full_reset_api import clear_event_data, safe_dataset_paths
+from .manual_jobs_api import apply_local_reassignment, target_team
 from .models import (
     AuditEvent,
     CompetitionTeam,
@@ -49,7 +50,6 @@ from .models import (
     NativeOperation,
     NativeSourceMedia,
     Person,
-    MonitorAssignment,
     SuperviselyConfig,
     epoch,
 )
@@ -59,7 +59,6 @@ from .native_media_pool import (
     assert_mirror_complete,
     mirror_dataset,
 )
-from .manual_jobs_api import apply_local_reassignment, target_team
 from .native_names import (
     dataset_name,
     labeling_job_name,
