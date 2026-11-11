@@ -117,54 +117,111 @@ function Login({ onLogin }: { onLogin: (auth: Auth) => void }) {
   </main>;
 }
 
-function Overview({ auth }: { auth: Auth }) {
-  const [stats, setStats] = useState<{people:number;monitors:number;competition_teams:number}|null>(null);
-  const [error,setError] = useState("");
-  const refresh = useCallback(async () => {
+function Overview({auth,onNavigate}:{
+  auth:Auth;onNavigate:(tab:Tab)=>void;
+}) {
+  const roles=auth.staff.roles;
+  const organiser=roles.includes("organiser");
+  const reviewer=organiser||roles.includes("monitor");
+  const admits=reviewer||roles.includes("reception");
+  const tickets=reviewer||roles.some(role=>["distribution","reception","activity"].includes(role));
+  const [stats,setStats]=useState<{
+    teams:number;monitors:number;participants:number;
+    present:number;reviewPending:number|null;reviewCompleted:number|null
+  }|null>(null);
+  const [error,setError]=useState("");
+  const refresh=useCallback(async()=>{
     try {
-      const { totals } = await api<{totals:{people:number;monitors:number;competition_teams:number}}>("/teams");
-      setStats(totals); setError("");
-    } catch(exc) {setError((exc as Error).message);}
-  },[]);
-  useEffect(() => {
+      const [teams,attendance,queue]=await Promise.all([
+        api<{totals:{people:number;monitors:number;competition_teams:number}}>("/teams"),
+        api<{registered:number;present:number;not_arrived:number}>("/attendance/summary"),
+        reviewer?api<{pending:number;active:number;completed:number}>("/review-queue/status"):
+          Promise.resolve(null)
+      ]);
+      setStats({
+        teams:teams.totals.competition_teams,monitors:teams.totals.monitors,
+        participants:attendance.registered,present:attendance.present,
+        reviewPending:queue?.pending??null,reviewCompleted:queue?.completed??null
+      });
+      setError("");
+    }catch(exc){setError((exc as Error).message);}
+  },[reviewer]);
+  useEffect(()=>{
     void refresh();
-    const id = window.setInterval(() => {if(!document.hidden)void refresh();}, 5000);
-    return () => window.clearInterval(id);
+    const id=window.setInterval(()=>{if(!document.hidden)void refresh();},12000);
+    return()=>window.clearInterval(id);
   },[refresh]);
-  return <div className="page-body">
-    <div className="page-heading"><div><span className="eyebrow">EVENT OVERVIEW</span>
-      <h2>Good to see you, {auth.staff.name.split(" ")[0]}.</h2>
-      <p className="muted">Your central workspace for the Bird Annotatiathon.</p></div>
-      <button className="btn secondary" onClick={()=>void refresh()}><RefreshCw size={15}/> Refresh</button></div>
-    {error && <div className="alert danger" role="alert">{error}</div>}
-    <div className="stat-grid">
-      {[
-        { label: "Registered people", n: stats?.people, icon: UsersRound, accent: "mint" },
-        { label: "Competition teams", n: stats?.competition_teams, icon: Activity, accent: "lavender" },
-        { label: "Event monitors", n: stats?.monitors, icon: ShieldCheck, accent: "peach" },
-      ].map(card=><div className="stat-card" key={card.label}><div className={"stat-icon "+card.accent}><card.icon size={21}/></div>
-        <span className="muted small">{card.label}</span><strong>{card.n ?? "—"}</strong></div>)}
+  const actions:{tab:Tab;label:string;description:string;icon:typeof UsersRound}[]=[
+    ...(admits?[{
+      tab:"checkin" as Tab,label:"Check-in",description:"Track arrivals and table assignments",icon:CheckCircle2
+    }]:[]),
+    ...(tickets?[{
+      tab:"tickets" as Tab,label:"Tickets & Rewards",description:"Issue and track event tickets",icon:Ticket
+    }]:[]),
+    ...(roles.some(role=>["organiser","monitor","activity","reception"].includes(role))?[{
+      tab:"activities" as Tab,label:"Activities",description:"Schedule sessions and record results",icon:Activity
+    }]:[]),
+    ...(reviewer?[{
+      tab:"quality" as Tab,label:"Shared frame review",description:"Review the next available annotated frame",icon:ClipboardCheck
+    }]:[]),
+    ...(roles.some(role=>["organiser","monitor","observer"].includes(role))?[{
+      tab:"closeout" as Tab,label:"Results & Rankings",description:"View verified team scores and event progress",icon:Award
+    }]:[])
+  ];
+  return <div className="page-body event-overview">
+    <div className="page-heading"><div><span className="eyebrow">EVENT OPERATIONS · LIVE OVERVIEW</span>
+      <h2>Annotatiathon overview</h2>
+      <p className="muted">Attendance, monitoring and results for the selected event.</p></div>
+      <button className="btn secondary" onClick={()=>void refresh()}><RefreshCw size={15}/> Refresh</button>
     </div>
-    <div className="content-grid">
-      <section className="panel">
-        <span className="eyebrow">YOUR WORKSPACE</span><h3>Prepare your event</h3>
-        <p className="muted">Import the roster, organise teams and configure Supervisely independently. No mandatory setup wizard.</p>
-        <div className="step-row"><CheckCircle2 size={18}/><div><strong>Local application</strong>
-          <span>Staff sessions and shared PostgreSQL records</span></div></div>
-        <div className="step-row"><UsersRound size={18}/><div><strong>People & Teams</strong>
-          <span>CSV import, sorting, editing and invitation email selection</span></div></div>
-        <div className="step-row"><Settings2 size={18}/><div><strong>Supervisely Settings</strong>
-          <span>Team and workspace configuration, separate from login</span></div></div>
-      </section>
-      <section className="panel">
-        <span className="eyebrow">IMPLEMENTATION STATUS</span><h3>Building the platform</h3>
-        <p className="muted">The complete local workflow is available as separate operational modules:</p>
-        <div className="coming-row"><Award size={18}/> Activities & prize allocation now available</div>
-        <div className="coming-row"><Cloud size={18}/> Dataset upload and balanced job planning</div>
-        <div className="coming-row"><ClipboardCheck size={18}/> Annotation monitoring and review</div>
-        <div className="coming-row"><CalendarDays size={18}/> Event finalisation and data export</div>
-      </section>
+    {error&&<div className="alert danger" role="alert">{error}</div>}
+    <div className="stat-grid compact">
+      <div className="stat-card"><UsersRound size={20}/><span className="muted small">Participants</span>
+        <strong>{stats?.participants??"—"}</strong></div>
+      <div className="stat-card"><CheckCircle2 size={20}/><span className="muted small">Checked in</span>
+        <strong>{stats?.present??"—"}</strong></div>
+      <div className="stat-card"><Activity size={20}/><span className="muted small">Competition teams</span>
+        <strong>{stats?.teams??"—"}</strong></div>
+      {reviewer&&<>
+        <div className="stat-card"><ClipboardCheck size={20}/><span className="muted small">Frames ready for review</span>
+          <strong>{stats?.reviewPending??"—"}</strong></div>
+        <div className="stat-card"><ShieldCheck size={20}/><span className="muted small">Frames reviewed</span>
+          <strong>{stats?.reviewCompleted??"—"}</strong></div>
+      </>}
     </div>
+    <section className="panel event-overview-actions">
+      <div className="panel-heading"><div>
+        <span className="eyebrow">EVENT WORKSPACES</span>
+        <h3>Event operations</h3>
+        <p className="muted">Open the relevant workspace. All monitors review from one shared queue.</p>
+      </div></div>
+      <div className="overview-quick-actions">
+        {actions.map(action=><button className="overview-quick-action" key={action.tab}
+          onClick={()=>onNavigate(action.tab)}>
+          <action.icon size={22}/><span><strong>{action.label}</strong>
+            <small>{action.description}</small></span><ArrowRight size={17}/>
+        </button>)}
+      </div>
+    </section>
+    {organiser&&<section className="panel event-overview-actions">
+      <div className="panel-heading"><div>
+        <span className="eyebrow">ORGANISER ONLY</span>
+        <h3>Event setup and administration</h3>
+        <p className="muted">Manage the roster, data, jobs and event configuration. Other monitors do not see these workspaces.</p>
+      </div></div>
+      <div className="overview-quick-actions">
+        {([
+          {tab:"people" as Tab,label:"People & Teams",description:"Roster, teams and invitations",icon:UsersRound},
+          {tab:"datasets" as Tab,label:"Dataset",description:"Prepare event media",icon:Database},
+          {tab:"job_setup" as Tab,label:"Job Distribution",description:"Create manual or automatic jobs",icon:Cloud},
+          {tab:"settings" as Tab,label:"Settings",description:"Shared account and event configuration",icon:Settings2}
+        ]).map(action=><button className="overview-quick-action" key={action.tab}
+          onClick={()=>onNavigate(action.tab)}>
+          <action.icon size={22}/><span><strong>{action.label}</strong>
+            <small>{action.description}</small></span><ArrowRight size={17}/>
+        </button>)}
+      </div>
+    </section>}
   </div>;
 }
 
@@ -283,7 +340,7 @@ function App() {
         <div className="topbar-right"><EventSelector auth={auth}/><span className="status-dot"/> Event operations
           <span className="topbar-avatar">{auth.staff.name.slice(0,1).toUpperCase()}</span></div>
       </header>
-      {accessibleTab==="overview"&&<Overview auth={auth}/>}
+      {accessibleTab==="overview"&&<Overview auth={auth} onNavigate={setTab}/>}
       {accessibleTab==="people"&&organiser&&<PeopleScreen auth={auth}/>}
       {accessibleTab==="checkin"&&<AttendanceScreen auth={auth}/>}
       {accessibleTab==="tickets"&&<TicketsScreen auth={auth}/>}

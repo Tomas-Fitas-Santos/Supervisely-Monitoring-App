@@ -473,3 +473,19 @@ input,select{border:1px solid #dfe5ed;border-radius:9px;background:white;padding
   .roster-viewport .roster-team-detail{padding:14px}
   .roster-team-card-members>span{white-space:normal}
 }
+
+
+/* Overview uses real read-only event counters instead of setup/demo marketing text. */
+.event-overview .stat-grid.compact{grid-template-columns:repeat(auto-fit,minmax(165px,1fr));}
+.event-overview-actions{margin-top:22px}
+.overview-quick-actions{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(290px,100%),1fr));gap:12px}
+.overview-quick-action{display:flex;gap:15px;align-items:center;text-align:left;
+  padding:16px;border:1px solid #dfebe3;border-radius:12px;background:#f9fcfa;
+  color:#285d49;min-width:0;transition:border-color .12s,background .12s}
+.overview-quick-action:hover,.overview-quick-action:focus-visible{
+  background:#eef8f2;border-color:#95c6aa}
+.overview-quick-action>svg:first-child{flex:none}
+.overview-quick-action>svg:last-child{margin-left:auto;flex:none}
+.overview-quick-action>span{display:flex;flex:1;flex-direction:column;gap:5px;min-width:0}
+.overview-quick-action strong{font-size:13px;color:#1d5140}
+.overview-quick-action small{font-size:11px;line-height:1.4;color:#607b70}
