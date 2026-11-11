@@ -396,6 +396,17 @@ def reassign_job(
         )
     if person.id == job.assignee_person_id:
         return {"status": "unchanged", "job_id": job.id}
+    publishing = db.scalar(select(NativeOperation).where(
+        NativeOperation.kind == "publish_job",
+        NativeOperation.target_id == job.id,
+    ))
+    if (job.status == "publishing" or
+            (publishing is not None and publishing.status in {"running", "attention"})):
+        raise HTTPException(
+            status_code=409,
+            detail="Job publishing has already begun or requires reconciliation. "
+                   "Finish or retry its Supervisely publication before reassigning.",
+        )
     has_native = db.scalar(select(NativeJobBinding.id).where(
         NativeJobBinding.event_id == event.id,
         NativeJobBinding.job_id == job.id,
