@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { formatLisbonTime } from "./event_time";
 import type React from "react";
 import {
   CheckCircle2, Clock3, RefreshCw, Search, Undo2, UserRoundCheck,
@@ -152,7 +153,7 @@ export function AttendanceScreen({auth}:{auth:Auth}) {
               disabled={working!==null} onClick={()=>openTable(person,"edit")}>Edit</button>}</td>
           <td>{person.check_in_at?
             <span className="membership joined"><CheckCircle2 size={12}/>
-              {new Date(person.check_in_at*1000).toLocaleString()}</span>:
+              {formatLisbonTime(person.check_in_at)}</span>:
             <span className="membership">Not arrived</span>}</td>
           <td>{allowed?
             <button className={"btn "+(person.check_in_at?"secondary":"primary")}

@@ -1,4 +1,5 @@
 import { confirmAction } from "./dialogs";
+import { formatLisbonTime } from "./event_time";
 import { useCallback, useEffect, useState } from "react";
 import type React from "react";
 import {
@@ -280,7 +281,7 @@ export function PeopleScreen({auth}:{auth:Auth}) {
             Linked #{p.supervisely_user_id}</span>:
           p.membership_status==="joined"&&<span className="native-role-chip">ID missing</span>}
           {p.supervisely_role&&<span className="native-role-chip">{p.supervisely_role}</span>}</td>
-        <td>{p.check_in_at?new Date(p.check_in_at*1000).toLocaleTimeString():"Not arrived"}</td>
+        <td>{p.kind==="monitor"?"Not required":p.check_in_at?formatLisbonTime(p.check_in_at):"Not arrived"}</td>
         {admin&&<td><button className="link-button" onClick={()=>openEdit(p)}>Edit</button></td>}
       </tr>)}</tbody>
     </table>{items.length===0&&<div className="empty-table">No people match these filters.</div>}</div>;
