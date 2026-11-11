@@ -5,7 +5,8 @@ role edits. Credentials never leave the server.
 """
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlsplit
 
 import httpx
@@ -192,6 +193,53 @@ def _read_members(client: httpx.Client, base: str, token: str,
     return tuple(members)
 
 
+
+def _enrich_member_emails(base: str, token: str,
+                          members: tuple[NativeMember, ...]) -> tuple[NativeMember, ...]:
+    """Resolve missing team-member emails using the SDK's users.info endpoint.
+
+    members.list may omit emails even for existing invited accounts. Never infer
+    an identity from a username. If the server does not expose emails, leave
+    those members available for the organiser's explicit manual mapping.
+    """
+    missing = [member for member in members if not member.email]
+    if not missing:
+        return members
+
+    def get_email(member: NativeMember) -> tuple[int, str | None, bool]:
+        try:
+            # Each worker owns its connection; no tokens are sent to the browser.
+            with httpx.Client(timeout=httpx.Timeout(8.0, connect=5.0),
+                              follow_redirects=False, trust_env=False) as client:
+                info = _request_json(
+                    client, base, token, "users.info", {"id": member.id},
+                )
+            if info.get("id") != member.id or info.get("login") != member.login:
+                return member.id, None, True
+            email = info.get("email")
+            if not isinstance(email, str):
+                return member.id, None, True
+            email = email.strip().casefold()
+            return member.id, email if "@" in email and len(email) <= 320 else None, True
+        except NativeAPIError as exc:
+            # Unsupported/forbidden user lookup is not a team-sync failure.
+            return member.id, None, exc.code not in {"unauthorised", "not_found"}
+
+    first_id, first_email, permitted = get_email(missing[0])
+    if not permitted:
+        return members
+    resolved: dict[int, str] = {}
+    if first_email:
+        resolved[first_id] = first_email
+    if len(missing) > 1:
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            for uid, email, _ in pool.map(get_email, missing[1:]):
+                if email:
+                    resolved[uid] = email
+    return tuple(replace(member, email=resolved[member.id])
+                 if member.id in resolved else member for member in members)
+
+
 def read_team_snapshot(config: SuperviselyConfig, *, personal_token: str | None = None) -> NativeTeamSnapshot:
     if personal_token is None:
         base, token = require_connection(config)
@@ -237,6 +285,8 @@ def read_team_snapshot(config: SuperviselyConfig, *, personal_token: str | None 
         if not isinstance(name, str) or not isinstance(login, str):
             raise NativeAPIError("bad_response", "Supervisely identity information incomplete.")
         members = _read_members(client, base, token, config.team_id)
+    if personal_token is None:
+        members = _enrich_member_emails(base, token, members)
     return NativeTeamSnapshot(
         team_id=config.team_id, team_name=name,
         workspace_id=workspace_id, account_id=_identifier(user),
