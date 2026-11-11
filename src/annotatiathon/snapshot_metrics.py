@@ -11,12 +11,12 @@ from .models import LabelingJob, MediaDataset
 def cache_snapshot_counts(db: Session, job: LabelingJob, manifest: Path) -> None:
     details = json.loads(manifest.read_text(encoding="utf-8"))
     if not isinstance(details, dict):
-        raise ValueError("Snapshot manifest must be a JSON object.")
+        raise TypeError("Snapshot manifest must be a JSON object.")
     if details.get("job_id", job.id) != job.id or details.get("event_id", job.event_id) != job.event_id:
         raise ValueError("Snapshot identity mismatch")
     media = details.get("media")
     if not isinstance(media, list):
-        raise ValueError("Snapshot frame inventory is missing")
+        raise TypeError("Snapshot frame inventory must be a list")
     identifiers = [entry.get("source_media_id") for entry in media if isinstance(entry, dict)]
     if (len(identifiers) != len(media) or not all(isinstance(value, str) for value in identifiers)
             or len(set(identifiers)) != len(identifiers) or set(identifiers) != set(job.media_ids)
@@ -54,7 +54,7 @@ def backfill_snapshot_counts(db: Session, event_id: str | None = None, batch_siz
                     counts["missing"] += 1
                     continue
                 cache_snapshot_counts(db, job, path)
-            except (ValueError, OSError):
+            except (TypeError, ValueError, OSError):
                 db.rollback()
                 counts["unreadable"] += 1
             else:

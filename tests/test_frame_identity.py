@@ -3,16 +3,18 @@ import io
 import subprocess
 
 import pytest
+import test_dataset_workflows
 from PIL import Image
 from sqlalchemy import select
-
 from test_dataset_workflows import act, teams, upload_archive
-from test_dataset_workflows import ctx as ctx
+
 from annotatiathon.models import MediaAsset, WorkBlock
 
+dataset_ctx = test_dataset_workflows.ctx
 
-def test_event_import_decodes_all_thirty_frames_with_timestamps(ctx, tmp_path):
-    client, maker, csrf = ctx
+
+def test_event_import_decodes_all_thirty_frames_with_timestamps(dataset_ctx, tmp_path):
+    client, maker, csrf = dataset_ctx
     video = tmp_path / "one-second.mkv"
     subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
                     "color=c=red:s=64x48:r=30", "-frames:v", "30", "-c:v", "ffv1", str(video)],
@@ -66,8 +68,8 @@ def test_event_import_decodes_all_thirty_frames_with_timestamps(ctx, tmp_path):
     assert act(client, csrf, "/labeling/plans", {"dataset_id": dataset_id}).status_code == 409
 
 
-def test_supplied_numeric_frames_keep_indices_and_unknown_density(ctx):
-    client, maker, csrf = ctx
+def test_supplied_numeric_frames_keep_indices_and_unknown_density(dataset_ctx):
+    client, maker, csrf = dataset_ctx
     dataset = upload_archive(client, csrf, {
         "bird/clip/10.jpg": b"frame ten", "bird/clip/2.jpg": b"frame two",
     })
@@ -82,8 +84,8 @@ def test_supplied_numeric_frames_keep_indices_and_unknown_density(ctx):
     assert video["missing_frame_count"] == 8  # Includes missing first frame.
 
 
-def test_event_folder_rejects_colliding_ordinals(ctx):
-    client, _, csrf = ctx
+def test_event_folder_rejects_colliding_ordinals(dataset_ctx):
+    client, _, csrf = dataset_ctx
     image = io.BytesIO()
     Image.new("RGB", (32, 24)).save(image, format="JPEG")
     created = act(client, csrf, "/datasets/uploads", {
@@ -97,8 +99,8 @@ def test_event_folder_rejects_colliding_ordinals(ctx):
     assert act(client, csrf, f"/datasets/{dataset_id}/finalize").status_code == 422
 
 
-def test_legacy_folder_discards_all_ordinals_when_any_collide(ctx):
-    client, maker, csrf = ctx
+def test_legacy_folder_discards_all_ordinals_when_any_collide(dataset_ctx):
+    client, maker, csrf = dataset_ctx
     dataset = upload_archive(client, csrf, {
         "bird/clip/1.jpg": b"a", "bird/clip/frame_1.jpg": b"b", "bird/clip/2.jpg": b"c",
     })
@@ -110,8 +112,9 @@ def test_legacy_folder_discards_all_ordinals_when_any_collide(ctx):
 
 
 def test_full_extraction_obeys_frame_budget(tmp_path):
-    from annotatiathon.frame_extraction import extract_full_video
     from fastapi import HTTPException
+
+    from annotatiathon.frame_extraction import extract_full_video
     video = tmp_path / "many.mkv"
     subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
                     "color=c=red:s=64x48:r=30", "-frames:v", "30", "-c:v", "ffv1", str(video)],
@@ -124,6 +127,7 @@ def test_full_extraction_obeys_frame_budget(tmp_path):
 def test_decoded_ordinals_survive_unavailable_timestamps(tmp_path, monkeypatch):
     from pathlib import Path
     from types import SimpleNamespace
+
     from annotatiathon.frame_extraction import extract_full_video
     def decode(command, **kwargs):
         target = Path(command[-1]).parent
@@ -140,6 +144,8 @@ def test_decoded_ordinals_survive_unavailable_timestamps(tmp_path, monkeypatch):
 
 def test_variable_rate_video_preserves_decoded_frame_timing(tmp_path):
     from fractions import Fraction
+    from itertools import pairwise
+
     from annotatiathon.frame_extraction import extract_full_video
     video = tmp_path / "variable.mkv"
     subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
@@ -149,13 +155,13 @@ def test_variable_rate_video_preserves_decoded_frame_timing(tmp_path):
     assert len(result.frames) == 5
     times = [frame.pts for frame in result.frames]
     assert times[0] * Fraction(result.time_base) == 3
-    assert len({b - a for a, b in zip(times, times[1:])}) > 1
+    assert len({b - a for a, b in pairwise(times)}) > 1
 
 
-def test_supplied_manifest_resolves_non_numeric_names(ctx):
+def test_supplied_manifest_resolves_non_numeric_names(dataset_ctx):
     import hashlib
     import json
-    client, maker, csrf = ctx
+    client, _maker, csrf = dataset_ctx
     output = io.BytesIO()
     Image.new("RGB", (32, 24)).save(output, format="JPEG")
     image = output.getvalue()
@@ -176,8 +182,9 @@ def test_supplied_manifest_resolves_non_numeric_names(ctx):
 
 
 def test_manifest_invalid_time_base_is_a_validation_error():
-    from annotatiathon.frame_import import FrameManifest
     from pydantic import ValidationError
+
+    from annotatiathon.frame_import import FrameManifest
     with pytest.raises(ValidationError):
         FrameManifest.model_validate({"version": 1, "source_sha256": "a" * 64,
             "source_frame_count": 1, "all_frames": True, "time_base": "1/0",

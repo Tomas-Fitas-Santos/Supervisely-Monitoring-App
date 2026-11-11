@@ -6,8 +6,14 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .models import (
-    CompetitionTeam, Event, LabelingJob, LabelingPlan, MediaVideo, Person,
-    WorkBlock, WorkPacket,
+    CompetitionTeam,
+    Event,
+    LabelingJob,
+    LabelingPlan,
+    MediaVideo,
+    Person,
+    WorkBlock,
+    WorkPacket,
 )
 from .pair_members import pair_members
 

@@ -1,7 +1,7 @@
 """Numeric folder identity and explicit supplied-frame manifests."""
+import re
 from fractions import Fraction
 from pathlib import Path
-import re
 from typing import Literal
 
 from fastapi import HTTPException

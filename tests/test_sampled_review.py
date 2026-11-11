@@ -1,20 +1,23 @@
 """Exercise the sampled review routers before production route registration."""
 import json
 
+import test_dataset_workflows
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import select
+from test_dataset_workflows import act, ingest, teams
 
 from annotatiathon.app import app
 from annotatiathon.models import LabelingJob, MediaAsset
-from annotatiathon.review_queue_api import ingest_sample, router as review_router
+from annotatiathon.review_queue_api import ingest_sample
+from annotatiathon.review_queue_api import router as review_router
 from annotatiathon.scoring_api import router as scoring_router
-from test_dataset_workflows import act, ingest, teams
-from test_dataset_workflows import ctx as ctx
+
+dataset_ctx = test_dataset_workflows.ctx
 
 
-def test_sample_claim_scoring_and_retry(ctx, tmp_path):
-    client, maker, csrf = ctx
+def test_sample_claim_scoring_and_retry(dataset_ctx, tmp_path):
+    client, maker, csrf = dataset_ctx
     dataset_id = ingest(client, csrf)
     teams(client, csrf)
     planned = act(client, csrf, "/labeling/plans", {"dataset_id": dataset_id})

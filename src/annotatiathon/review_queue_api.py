@@ -17,8 +17,17 @@ from .annotation_schema import annotation_class_view
 from .auth import AuthContext, requires
 from .db import get_db
 from .events_api import current_event
-from .models import (CompetitionTeam, LabelingJob, MediaAsset, MediaDataset,
-                     Person, ReviewRubric, ReviewSample, epoch, identifier)
+from .models import (
+    CompetitionTeam,
+    LabelingJob,
+    MediaAsset,
+    MediaDataset,
+    Person,
+    ReviewRubric,
+    ReviewSample,
+    epoch,
+    identifier,
+)
 from .scoring_api import Weights, latest_rubric
 
 router = APIRouter(prefix="/api/v1/review-queue", tags=["sampled review"])

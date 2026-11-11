@@ -7,9 +7,9 @@ from sqlalchemy import create_engine, event, insert
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from annotatiathon import models as m
 from annotatiathon.app import app
 from annotatiathon.db import get_db
-from annotatiathon import models as m
 from annotatiathon.security import token_digest
 
 
@@ -171,17 +171,18 @@ def test_team_metrics_aggregate_without_snapshot_filesystem_reads(populated, mon
 
 def test_incomplete_snapshot_manifest_is_not_cached_as_complete(populated, tmp_path):
     import json
+
     from annotatiathon.snapshot_metrics import cache_snapshot_counts
     _, maker, _ = populated
     manifest = tmp_path / "manifest.json"
     manifest.write_text(json.dumps({"job_id": "own-0", "media": []}))
-    with maker() as db:
-        with pytest.raises(ValueError):
-            cache_snapshot_counts(db, db.get(m.LabelingJob, "own-0"), manifest)
+    with maker() as db, pytest.raises(ValueError):
+        cache_snapshot_counts(db, db.get(m.LabelingJob, "own-0"), manifest)
 
 
 def test_snapshot_count_backfill_is_idempotent_and_handles_corrections(populated, tmp_path):
     import json
+
     from annotatiathon.snapshot_metrics import backfill_snapshot_counts
     _, maker, _ = populated
     with maker.begin() as db:

@@ -4,7 +4,7 @@ import pytest
 
 @pytest.mark.parametrize("count", [1, 2, 29, 30, 31, 900])
 def test_contiguous_blocks_preserve_every_source_frame(count):
-    from annotatiathon.work_queue import split_video, sample_repeat_frames
+    from annotatiathon.work_queue import sample_repeat_frames, split_video
     frames = [f"frame-{index}" for index in range(count)]
     blocks = split_video(frames)
     assert [frame for block in blocks for frame in block] == frames

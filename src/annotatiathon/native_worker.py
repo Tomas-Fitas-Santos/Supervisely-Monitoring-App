@@ -1376,7 +1376,8 @@ def worker_cycle(lane: str) -> bool:
             if result:
                 logger.info("Nightjar %s worker: %s", lane, result)
             return bool(result)
-        except Exception as exc:  # keep each lane available after a failed cycle
+        # Isolate SDK and database failures so the lane can retry next cycle.
+        except Exception as exc:  # noqa: BLE001
             db.rollback()
             logger.warning("Supervisely %s worker cycle failed (%s).", lane, type(exc).__name__)
             return False

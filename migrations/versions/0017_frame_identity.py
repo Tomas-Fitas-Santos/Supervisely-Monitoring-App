@@ -3,8 +3,8 @@
 Revision ID: 0017_frame_identity
 Revises: 0016_preloaded_media_pool
 """
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision = "0017_frame_identity"
 down_revision = "0016_preloaded_media_pool"
