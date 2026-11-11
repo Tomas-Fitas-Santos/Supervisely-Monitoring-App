@@ -49,6 +49,7 @@ class MockSDK:
         self.project_metas = {}
         self.meta_updates = []
         self.removed_projects = []
+        self.archived_projects = []
         self.removed_datasets = []
         self.removed_jobs = []
         self.datasets = []
@@ -58,12 +59,14 @@ class MockSDK:
         self.fail_job_create_once = False
         self.project = Obj(
             get_list=self.projects_list,
+            get_list_all=self.projects_list_all,
             create=self.project_create,
             remove=self.project_remove,
             get_meta=self.projects_get_meta,
             update_meta=self.projects_update_meta,
             get_info_by_id=lambda ident: next(
-                (p for p in self.projects if p.id == ident), None
+                (p for p in self.projects + self.archived_projects
+                 if p.id == ident), None
             ),
         )
         self.dataset = Obj(
@@ -99,8 +102,17 @@ class MockSDK:
     def projects_list(self, workspace_id):
         return [p for p in self.projects if p.workspace_id == workspace_id]
 
+    def projects_list_all(self, filters, skip_exported):
+        assert filters[0]["field"] == "workspaceId"
+        assert not skip_exported
+        workspace_id = filters[0]["value"]
+        return [p for p in self.projects + self.archived_projects
+                if p.workspace_id == workspace_id]
+
     def project_remove(self, project_id):
         self.removed_projects.append(project_id)
+        archived = next(p for p in self.projects if p.id == project_id)
+        self.archived_projects.append(archived)
         self.projects = [p for p in self.projects if p.id != project_id]
 
     def projects_get_meta(self, project_id):
@@ -148,9 +160,12 @@ class MockSDK:
                 collection.append(Obj(id=self.new_id(), name=name))
         return [next(i for i in collection if i.name == name) for name in names]
 
-    def jobs_list(self, team_id, dataset_id, **kwargs):
+    def jobs_list(self, team_id, dataset_id=None, project_id=None, **kwargs):
         assert team_id == 125980 and kwargs["show_disabled"] is True
-        return [j for j in self.jobs if j.dataset_id == dataset_id]
+        assert dataset_id is not None or project_id is not None
+        return [j for j in self.jobs if
+                (dataset_id is None or j.dataset_id == dataset_id) and
+                (project_id is None or j.project_id == project_id)]
 
     def jobs_remove(self, job_id):
         self.removed_jobs.append(job_id)
@@ -174,6 +189,7 @@ class MockSDK:
         for uid in user_ids:
             j = Obj(
                 id=self.new_id(), name=name, dataset_id=dataset_id,
+                project_id=dataset.project_id,
                 assigned_to_id=uid, status="pending",
                 images_count=len(images_ids), finished_images_count=0,
             )
@@ -191,6 +207,7 @@ class MockSDK:
         assert assignee_ids == [old.assigned_to_id]
         new = Obj(
             id=self.new_id(), name=title, dataset_id=old.dataset_id,
+            project_id=old.project_id,
             assigned_to_id=assignee_ids[0], status="pending",
             images_count=old.images_count, finished_images_count=0,
         )
