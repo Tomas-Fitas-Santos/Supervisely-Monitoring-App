@@ -5,6 +5,11 @@ import { api, type Auth } from "./api";
 
 type NativeExport={operation_id:string|null;status:string;error_code:string|null;
   attempts:number;ready_to_download:boolean;size_bytes:number|null};
+type TeamRank={team_id:string;team_name:string;rank:number;correct_keypoints:number;
+  correct_boxes:number;correct_objects:number;weighted_score:number;
+  reviewed_frames:number;available_frames:number;missing_objects:number;
+  errors:Record<string,number>};
+type ReviewQueueCounts={pending:number;active:number;completed:number};
 type Report={
   event_id:string;event_name:string;event_status:string;
   people:{registered:number;participants:number;monitors:number;checked_in:number};
@@ -21,16 +26,22 @@ export function CloseoutScreen({auth}:{auth:Auth}) {
   const organiser=auth.staff.roles.includes("organiser");
   const [report,setReport]=useState<Report|null>(null);
   const [nativeExport,setNativeExport]=useState<NativeExport|null>(null);
+  const [rankings,setRankings]=useState<TeamRank[]>([]);
+  const [reviewCounts,setReviewCounts]=useState<ReviewQueueCounts|null>(null);
   const [error,setError]=useState("");
   const [notice,setNotice]=useState("");
   const [confirmation,setConfirmation]=useState("");
   const [busy,setBusy]=useState(false);
   const refresh=useCallback(async()=>{
     try{
-      const [result,exportState]=await Promise.all([
-        api<Report>("/closeout/report"),api<NativeExport>("/native/export")
+      const [result,exportState,teamRanks,counts]=await Promise.all([
+        api<Report>("/closeout/report"),
+        api<NativeExport>("/native/export"),
+        api<{items:TeamRank[]}>("/rankings/teams"),
+        api<ReviewQueueCounts>("/review-queue/status")
       ]);
-      setReport(result);setNativeExport(exportState);setError("");
+      setReport(result);setNativeExport(exportState);setRankings(teamRanks.items);
+      setReviewCounts(counts);setError("");
     }
     catch(e){setError((e as Error).message);}
   },[]);
@@ -69,9 +80,9 @@ export function CloseoutScreen({auth}:{auth:Auth}) {
   }
   const phrase=report?"CLOSE "+report.event_name:"";
   return <div className="page-body">
-    <div className="page-heading"><div><span className="eyebrow">EVENT FINALISATION</span>
-      <h2>Results & Exports</h2>
-      <p className="muted">Review event progress, export structured records, and archive the event only after jobs are accepted.</p>
+    <div className="page-heading"><div><span className="eyebrow">EVENT OPERATIONS · TEAM RESULTS</span>
+      <h2>Results & Rankings</h2>
+      <p className="muted">The winner is the team with the highest number of correct keypoints and bounding boxes. Organisers can export records and close the event.</p>
       </div><button className="btn secondary" onClick={()=>void refresh()}>
         <RefreshCw size={15}/> Refresh</button></div>
     {error&&<div role="alert" className="alert danger">{error}</div>}
@@ -79,12 +90,37 @@ export function CloseoutScreen({auth}:{auth:Auth}) {
     {report&&<>
       <div className="stat-grid compact">
         <div className="stat-card"><BarChart3 size={19}/><span className="muted small">Participants checked in</span>
-          <strong>{report.people.checked_in}/{report.people.registered}</strong></div>
+          <strong>{report.people.checked_in}/{report.people.participants}</strong></div>
         <div className="stat-card"><CheckCircle2 size={19}/><span className="muted small">Accepted jobs</span>
           <strong>{report.labeling.jobs_accepted}/{report.labeling.jobs}</strong></div>
-        <div className="stat-card"><Archive size={19}/><span className="muted small">Reviewed frames</span>
-          <strong>{report.reviews.frames_reviewed}</strong></div>
+        <div className="stat-card"><Archive size={19}/><span className="muted small">Shared-queue reviews completed</span>
+          <strong>{reviewCounts?.completed??"—"}</strong></div>
       </div>
+      <section className="panel event-ranking-panel">
+        <div className="review-analytics-header">
+          <div><span className="eyebrow">OFFICIAL OBJECT-COUNT LEADERBOARD</span>
+            <h3>Team rankings</h3>
+            <p className="muted">Primary ranking: correctly annotated keypoints + correctly annotated bounding boxes.
+              Frames without a completed review do not contribute verified objects.</p>
+          </div><BarChart3 size={27}/></div>
+        <div className="table-scroll"><table className="data-table">
+          <thead><tr><th>Rank</th><th>Team</th><th>Correct points</th>
+            <th>Correct boxes</th><th>Total correct</th><th>Reviewed / available frames</th>
+            <th>Class / placement / sabotage errors</th><th>Weighted score</th></tr></thead>
+          <tbody>{rankings.map(team=><tr key={team.team_id}>
+            <td><strong>#{team.rank}</strong></td>
+            <td><strong>{team.team_name}</strong></td>
+            <td>{team.correct_keypoints.toLocaleString()}</td>
+            <td>{team.correct_boxes.toLocaleString()}</td>
+            <td><strong>{team.correct_objects.toLocaleString()}</strong></td>
+            <td>{team.reviewed_frames} / {team.available_frames}</td>
+            <td>{team.errors?.wrong_class||0} / {team.errors?.wrong_placement||0} / {team.errors?.sabotage||0}</td>
+            <td>{team.weighted_score.toLocaleString()}</td>
+          </tr>)}</tbody>
+        </table>{!rankings.length&&<div className="empty-table">Rankings will appear after reviewed frames are available.</div>}</div>
+        <p className="muted small">Currently based on sampled frame reviews from the Supervisely synchronization worker.
+          Every team's review count is shown so differences in review coverage are visible.</p>
+      </section>
       <div className="content-grid closeout-layout">
         <section className="panel">
           <span className="eyebrow">EVENT SUMMARY</span><h3>{report.event_name}</h3>
