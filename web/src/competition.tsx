@@ -3,7 +3,7 @@ import {
   CheckCircle2, ClipboardCheck, Layers3, PlayCircle, RefreshCw,
   Send, Trash2, UsersRound, Video
 } from "lucide-react";
-import { api, type Auth } from "./api";
+import { api, refreshSuperviselyRoster, type Auth } from "./api";
 
 type Dataset={id:string;name:string;status:string;image_count:number;
   frame_count:number;video_count:number};
@@ -89,6 +89,29 @@ export function CompetitionScreen({auth}:{auth:Auth}) {
     }catch(e){setError((e as Error).message);}
   },[dataset]);
   useEffect(()=>{void refresh();},[refresh]);
+  const syncAssignees=useCallback(async()=>{
+    setBusy(true);setError("");
+    try {
+      const result=await refreshSuperviselyRoster(auth.csrf_token,true);
+      const [assigneeData]=await Promise.all([
+        api<{items:AssigneeOption[]}>("/labeling/manual/assignees"),
+        refreshOptions(),
+      ]);
+      setAssignees(assigneeData.items);
+      if(result?.status==="needs_review"){
+        setNotice("Some Supervisely identities need manual matching in People & Teams → Membership sync.");
+      } else {
+        setNotice("Supervisely team accounts refreshed. "+
+          (result?.updated??0)+" identities updated; "+
+          (result?.unmatched_native??0)+" still require review.");
+      }
+    }catch(e){setError("Could not refresh Supervisely team members: "+(e as Error).message);}
+    finally{setBusy(false);}
+  },[auth.csrf_token,refreshOptions]);
+  useEffect(()=>{
+    if(section==="manual"){void syncAssignees();}
+  },[section]); // Reconcile accepted invitations when entering manual assignment.
+
   useEffect(()=>{
     void api<{items:AssigneeOption[]}>("/labeling/manual/assignees")
       .then(result=>setAssignees(result.items)).catch(()=>undefined);
@@ -235,6 +258,8 @@ export function CompetitionScreen({auth}:{auth:Auth}) {
     </div>}
 
     {admin&&section==="manual"&&<section className="panel manual-job-panel">
+      <button className="btn secondary" disabled={busy} onClick={()=>void syncAssignees()}>
+        <RefreshCw size={15}/> Refresh Supervisely accounts</button>
       <div className="panel-heading">
         <div><span className="eyebrow">DURING THE EVENT · MANUAL DISPATCH</span>
           <h3>Assign a video to an annotator</h3>
