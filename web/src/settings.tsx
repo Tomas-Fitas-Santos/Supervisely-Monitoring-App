@@ -102,7 +102,7 @@ export function SettingsScreen({auth}:{auth:Auth}) {
       await api("/settings/reset/request","POST",
         {confirmation:resetPhrase},auth.csrf_token);
       setResetPhrase("");
-      setMessage("Full event reset queued. The Supervisely worker must finish remote archival before local deletion.");
+      setMessage("Full event reset queued. The Supervisely worker must remove native jobs and archive their datasets/projects before local deletion.");
       await loadResetPreview();
     }catch(e){setError((e as Error).message);}
     finally{setResetBusy(false);}
@@ -240,7 +240,7 @@ export function SettingsScreen({auth}:{auth:Auth}) {
           <div><h4>Will be cleared</h4><ul>{resetPreview.cleared.map(x=><li key={x}>{x}</li>)}</ul></div>
           <div><h4>Will be preserved</h4><ul>{resetPreview.preserved.map(x=><li key={x}>{x}</li>)}</ul></div>
         </div>
-        <p className="muted small">Remote operation: archive Nightjar project(s) for this event in workspace #{resetPreview.workspace_id??"—"} of team #{resetPreview.team_id??"—"}. Supervisely project archival is recoverable; local event data and files are deleted.</p>
+        <p className="muted small">Remote cleanup in workspace #{resetPreview.workspace_id??"—"} of team #{resetPreview.team_id??"—"}: permanently remove Nightjar labeling jobs for this event, then archive their Supervisely datasets and projects. Archived datasets/projects are hidden but recoverable; permanent purging requires Supervisely instance-root privileges. Team and joined members are never deleted. Local event data and files are cleared only after remote cleanup succeeds.</p>
         {resetPreview.operation&&<div className="job-plan-row">
           <div><strong>Reset: {resetPreview.operation.status}</strong>
             <span>{resetPreview.operation.error_code||"No reported error"} · {resetPreview.operation.attempts} worker attempts</span></div>
@@ -259,7 +259,7 @@ export function SettingsScreen({auth}:{auth:Auth}) {
               onClick={()=>void requestFullReset()}><Trash2 size={16}/> Reset this event</button>
           </div>}
         {resetPreview.event_status==="resetting"&&
-          <p className="advisory">The event is locked while its remote projects are archived and local data is cleared. Keep the Supervisely worker running; refresh for status.</p>}
+          <p className="advisory">The event is locked while its native jobs are removed, its datasets/projects archived, and local data cleared. Keep the Supervisely worker running; refresh for status.</p>}
       </div>}
     </section>}
     {organiser&&<EventManagement auth={auth}/>}
