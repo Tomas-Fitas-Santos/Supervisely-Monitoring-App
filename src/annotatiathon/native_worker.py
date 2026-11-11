@@ -1288,10 +1288,17 @@ def run_worker(*, once: bool, poll_seconds: int) -> None:
                         return
                     time.sleep(poll_seconds)
                     continue
-                mirror = process_mirror_once(db, api, config)
                 reassignment = process_reassignment_once(db, api, config)
                 correction = process_correction_once(db, api, config)
+                # An organiser's urgent manual publication should not wait
+                # behind another entire pre-event media mirror.
                 operation = process_once(db, api, config)
+                high_pending = db.scalar(select(NativeOperation.id).where(
+                    NativeOperation.kind == "publish_job",
+                    NativeOperation.status == "pending",
+                    NativeOperation.priority > 0,
+                ).limit(1))
+                mirror = None if high_pending else process_mirror_once(db, api, config)
                 export = process_export_once(db, api)
                 sync_result = sync_all(db, api, config)
                 if mirror or reassignment or correction or operation or export or sync_result["changed_jobs"] or sync_result["annotation_snapshots"]:
