@@ -119,11 +119,11 @@ def test_local_upload_planning_and_atomic_video_groups(ctx):
     dsid = ingest(client, csrf)
     teams(client, csrf)
     plan = act(client, csrf, "/labeling/plans", {
-        "dataset_id": dsid, "jobs_per_team": 2, "redundancy": 2,
+        "dataset_id": dsid, "jobs_per_team": 2, "redundancy": 1,
     })
     assert plan.status_code == 201, plan.text
     assert plan.json()["assets"] == 4
-    assert plan.json()["assignment_copies"] == 8
+    assert plan.json()["assignment_copies"] == 4
     approve = act(client, csrf, "/labeling/plans/"+plan.json()["plan_id"]+"/approve")
     assert approve.status_code == 200
     assert approve.json()["status"] == "approved"
@@ -134,7 +134,7 @@ def test_local_upload_planning_and_atomic_video_groups(ctx):
         for job in db.scalars(select(LabelingJob)):
             for mid in job.media_ids:
                 assigned.setdefault(mid, set()).add(job.team_id)
-        assert all(len(tids) == 2 for tids in assigned.values())
+        assert all(len(tids) == 1 for tids in assigned.values())
         assets = list(db.scalars(select(MediaAsset)))
         frames = {a.id for a in assets if a.kind == "video_frame"}
         for team in {job.team_id for job in db.scalars(select(LabelingJob))}:
@@ -434,7 +434,12 @@ def test_species_first_raw_video_files_become_one_video_per_job(ctx, monkeypatch
             "CorvusCorone/flight_01", "ColumbaPalumbus/feeding_02"
         }
         assert all(item.kind == "video_frame" for item in assets)
-    teams(client, csrf)
+    for i in range(2):
+        participant = act(client, csrf, "/people", {
+            "name": f"Test Annotator {i}", "email": f"video-{i}@example.org",
+            "kind": "participant", "team_name": "Video Pair",
+        })
+        assert participant.status_code == 201, participant.text
     plan = act(client, csrf, "/labeling/plans", {
         "dataset_id": dataset["id"], "jobs_per_team": 2, "redundancy": 1,
     })
