@@ -207,12 +207,11 @@ function App() {
   }
   if (loading) return <div className="loading-screen"><Bird size={33}/> Loading Nightjar…</div>;
   if (!auth) return <Login onLogin={a=>{setAuth(a);setTab("overview");}}/>;
-  const organiser = auth.staff.roles.includes("organiser");
   const has=(...roles:string[])=>auth.staff.roles.some(role=>roles.includes(role));
   const navigation: {id:Tab;label:string;icon:typeof LayoutDashboard}[] = [
     {id:"overview",label:"Overview",icon:LayoutDashboard},
     {id:"people",label:"People & Teams",icon:UsersRound},
-    ...(has("organiser","reception","distribution","activity")?
+    ...(has("organiser","monitor","reception","distribution","activity")?
       [{id:"tickets" as Tab,label:"Tickets & Rewards",icon:Ticket}]:[]),
     ...(has("organiser","activity","monitor","reception")?
       [{id:"activities" as Tab,label:"Activities & Prizes",icon:Activity}]:[]),
@@ -222,9 +221,9 @@ function App() {
       [{id:"competition" as Tab,label:"Competition & Jobs",icon:UsersRound}]:[]),
     ...(has("organiser","monitor","observer")?
       [{id:"quality" as Tab,label:"Monitoring & Review",icon:ClipboardCheck}]:[]),
-    ...(has("organiser","observer")?
+    ...(has("organiser","monitor","observer")?
       [{id:"closeout" as Tab,label:"Results & Exports",icon:CalendarDays}]:[]),
-    ...(organiser ? [{id:"staff" as Tab,label:"Staff Access",icon:ShieldCheck}] : []),
+    ...(has("organiser","monitor") ? [{id:"staff" as Tab,label:"Staff Access",icon:ShieldCheck}] : []),
     {id:"settings",label:"Settings",icon:Settings2},
   ];
   const accessibleTab=navigation.some(item=>item.id===tab)?tab:"overview";
@@ -263,7 +262,7 @@ function App() {
       {accessibleTab==="competition"&&<CompetitionScreen auth={auth}/>}
       {accessibleTab==="quality"&&<QualityScreen auth={auth}/>}
       {accessibleTab==="closeout"&&<CloseoutScreen auth={auth}/>}
-      {accessibleTab==="staff"&&organiser&&<div className="page-body"><div className="page-heading"><div><span className="eyebrow">ORGANISER · PERMISSIONS</span><h2>Staff Access</h2><p className="muted">Manage staff roles independently of the attendee roster.</p></div></div><StaffScreen auth={auth}/></div>}
+      {accessibleTab==="staff"&&has("organiser","monitor")&&<div className="page-body"><div className="page-heading"><div><span className="eyebrow">STAFF DIRECTORY</span><h2>Staff Access</h2><p className="muted">All monitors can view staff roles. Only organisers may change account permissions.</p></div></div><StaffScreen auth={auth}/></div>}
       {accessibleTab==="settings"&&<SettingsScreen auth={auth}/>}
       <footer className="page-footer"><Bird size={14}/> Nightjar Annotatiathon · Técnico</footer>
     </div>

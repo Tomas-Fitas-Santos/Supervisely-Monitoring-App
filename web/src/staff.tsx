@@ -21,6 +21,7 @@ const DUTIES:{label:string;roles:Role[]}[]=[
 ];
 type StaffRecord = Staff & {active:boolean};
 export function StaffScreen({auth}:{auth:Auth}) {
+  const organiser=auth.staff.roles.includes("organiser");
   const [people,setPeople]=useState<StaffRecord[]>([]);
   const [error,setError]=useState("");
   const [notice,setNotice]=useState("");
@@ -59,8 +60,8 @@ export function StaffScreen({auth}:{auth:Auth}) {
   const filtered=people.filter(person=>(person.name+" "+person.email).toLowerCase().includes(query.toLowerCase()));
   return <section className="panel">
     <div className="panel-heading"><div><span className="eyebrow">STAFF ACCESS</span>
-      <h3>Assign event duties</h3>
-      <p className="muted">Change who handles check-in, food and drinks, annotation review, or activities at any time. Quick duties are presets; multiple permissions can also be combined manually. Nothing changes in Supervisely.</p>
+      <h3>{organiser?"Assign event duties":"Staff directory and roles"}</h3>
+      <p className="muted">{organiser?"Manage staff duties and permissions. Nothing changes in Supervisely.":"View all staff accounts and their roles. Only organisers may modify permissions."}</p>
       </div><button className="btn secondary" onClick={()=>void refresh()}><RefreshCw size={15}/> Refresh</button></div>
     {error&&<div className="alert danger" role="alert">{error}</div>}
     {notice&&<div className="alert success" role="status">{notice}</div>}
@@ -72,25 +73,25 @@ export function StaffScreen({auth}:{auth:Auth}) {
         <div className="staff-person"><div className="mini-avatar">{person.name[0]?.toUpperCase()}</div>
           <div><strong>{person.name}</strong><span>{person.email} {person.id===auth.staff.id?"· You":""}</span></div></div>
         <div className="staff-duty-editor">
-          <label className="staff-duty-preset">Quick duty
+          {organiser&&<label className="staff-duty-preset">Quick duty
             <select value="" disabled={!person.active} onChange={e=>chooseDuty(person.id,e.target.value)}>
               <option value="">Choose a role preset…</option>
               {DUTIES.map(duty=><option key={duty.label} value={duty.label}>{duty.label}</option>)}
             </select>
-          </label>
+          </label>}
           <div className="role-options">{ROLE_OPTIONS.map(option=>
             <label className="role-choice" key={option.role}
               title={option.purpose}>
-              <input type="checkbox" disabled={!person.active}
+              <input type="checkbox" disabled={!organiser||!person.active}
                 checked={(drafts[person.id]||[]).includes(option.role)}
                 onChange={()=>toggle(person.id,option.role)}/>
               <span><strong>{option.label}</strong><small>{option.purpose}</small></span>
             </label>)}</div>
         </div>
-        <button className="btn primary" onClick={()=>void save(person)}
+        {organiser&&<button className="btn primary" onClick={()=>void save(person)}
           disabled={!person.active||working!==null||JSON.stringify([...(drafts[person.id]||[])].sort())===JSON.stringify([...person.roles].sort())}>
           <Save size={15}/> Save
-        </button>
+        </button>}
       </div>)}
     </div>
     {!filtered.length&&<p className="muted">No staff accounts match this search.</p>}

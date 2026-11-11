@@ -28,7 +28,7 @@ from .models import (
 )
 
 router = APIRouter(prefix="/api/v1/closeout", tags=["event reports"])
-VIEWERS = ("organiser", "observer")
+VIEWERS = ("organiser", "monitor", "observer")
 
 
 def event_report(db: Session, event_id: str) -> dict:
@@ -218,7 +218,7 @@ def export_rows(db: Session, event_id: str, section: str) -> tuple[list[str], li
 @router.get("/exports/{section}")
 def export_csv(
     section: Literal["people", "jobs", "reviews", "media"],
-    ctx: AuthContext = Depends(requires("organiser")),
+    ctx: AuthContext = Depends(requires("organiser", "monitor")),
     db: Session = Depends(get_db),
 ):
     event = current_event(db, ctx)

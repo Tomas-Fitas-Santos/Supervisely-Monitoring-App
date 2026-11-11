@@ -42,7 +42,7 @@ def archive_path(event_id: str) -> Path:
 
 @router.get("")
 def export_status(
-    ctx: AuthContext = Depends(requires("organiser")),
+    ctx: AuthContext = Depends(requires("organiser", "monitor")),
     db: Session = Depends(get_db),
 ):
     event = current_event(db, ctx)
@@ -131,7 +131,7 @@ def retry_export(
 
 @router.get("/download")
 def download_export(
-    ctx: AuthContext = Depends(requires("organiser")),
+    ctx: AuthContext = Depends(requires("organiser", "monitor")),
     db: Session = Depends(get_db),
 ):
     event = current_event(db, ctx)

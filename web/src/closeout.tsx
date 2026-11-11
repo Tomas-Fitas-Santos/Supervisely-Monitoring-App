@@ -17,6 +17,7 @@ type Report={
   ticket_totals:Record<string,number>;generated_at:number;
 };
 export function CloseoutScreen({auth}:{auth:Auth}) {
+  const organiser=auth.staff.roles.includes("organiser");
   const [report,setReport]=useState<Report|null>(null);
   const [nativeExport,setNativeExport]=useState<NativeExport|null>(null);
   const [error,setError]=useState("");
@@ -126,11 +127,11 @@ export function CloseoutScreen({auth}:{auth:Auth}) {
               full and curated source mapping manifests, and no media bytes or historical versions.</p>
             <p className="muted small">Status: <strong>{nativeExport?.status||"not_requested"}</strong>
               {nativeExport?.error_code?" · "+nativeExport.error_code:""}</p>
-            {report.event_status==="archived"&&nativeExport?.status==="not_requested"&&
+            {organiser&&report.event_status==="archived"&&nativeExport?.status==="not_requested"&&
               <button className="btn primary" disabled={busy}
                 onClick={()=>void nativeExportAction(false)}>
                 <Download size={15}/> Prepare native annotation export</button>}
-            {nativeExport&&["attention","blocked"].includes(nativeExport.status)&&
+            {organiser&&nativeExport&&["attention","blocked"].includes(nativeExport.status)&&
               <button className="btn secondary" disabled={busy}
                 onClick={()=>void nativeExportAction(true)}>
                 <RefreshCw size={14}/> Retry export</button>}

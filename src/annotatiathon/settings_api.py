@@ -39,7 +39,7 @@ def as_status(config: SuperviselyConfig | None) -> SuperviselyConnectionStatus:
 
 @router.get("/supervisely", response_model=SuperviselyConnectionStatus)
 def get_supervisely_settings(
-    _ctx: AuthContext = Depends(requires("organiser")),
+    _ctx: AuthContext = Depends(requires("organiser", "monitor")),
     db: Session = Depends(get_db),
 ):
     return as_status(db.get(SuperviselyConfig, 1))
