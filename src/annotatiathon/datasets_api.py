@@ -28,6 +28,7 @@ from .models import (
     MediaDataset,
     epoch,
 )
+from .native_media_pool import enqueue_mirror, mirror_status
 
 router = APIRouter(prefix="/api/v1/datasets", tags=["datasets"])
 VIEWERS = ("organiser", "monitor", "observer", "reception", "activity", "distribution")
@@ -515,6 +516,44 @@ def staged_sources(ds: MediaDataset, files: list[DatasetStagedFile]):
                 yield rel, stream
 
 
+@router.get("/{dataset_id}/mirror-status")
+def dataset_mirror_status(
+    dataset_id: str,
+    ctx: AuthContext = Depends(requires("organiser", "monitor", "observer")),
+    db: Session = Depends(get_db),
+):
+    event = current_event(db, ctx)
+    ds = get_dataset(db, event.id, dataset_id)
+    return mirror_status(db, ds)
+
+
+@router.post("/{dataset_id}/mirror/retry", status_code=202)
+def retry_dataset_mirror(
+    dataset_id: str,
+    ctx: AuthContext = Depends(requires("organiser", mutation=True)),
+    db: Session = Depends(get_db),
+):
+    event = current_event(db, ctx, writable=True)
+    ds = get_dataset(db, event.id, dataset_id, lock=True)
+    if ds.status != "ready":
+        raise HTTPException(status_code=409, detail="Finish local video upload first.")
+    op = enqueue_mirror(db, ds)
+    if op.status == "done":
+        return {"status": "done", "operation_id": op.id}
+    if op.status not in {"attention", "pending"}:
+        raise HTTPException(status_code=409, detail="Dataset mirror already running.")
+    op.status = "pending"
+    op.error_code = None
+    op.claimed_at = None
+    db.add(AuditEvent(
+        staff_id=ctx.staff.id, event_id=event.id,
+        action="dataset.mirror.retry", target_type="media_dataset",
+        target_id=ds.id, details={"operation_id": op.id},
+    ))
+    db.commit()
+    return {"status": "pending", "operation_id": op.id}
+
+
 @router.post("/{dataset_id}/finalize")
 def finalize_dataset(
     dataset_id: str,
@@ -603,6 +642,9 @@ def finalize_dataset(
         ds.video_count = len(videos)
         ds.status = "ready"
         ds.completed_at = epoch()
+        # Preload the complete collection before event launch. The SDK worker
+        # handles actual remote writes independently of this HTTP request.
+        enqueue_mirror(db, ds)
         db.add(AuditEvent(
             staff_id=ctx.staff.id, event_id=event.id, action="dataset.finalize",
             target_type="media_dataset", target_id=ds.id,

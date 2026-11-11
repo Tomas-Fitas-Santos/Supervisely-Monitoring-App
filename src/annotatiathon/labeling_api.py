@@ -46,7 +46,7 @@ class PlanInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     dataset_id: str
     jobs_per_team: int = Field(default=4, ge=1, le=100)
-    redundancy: int = Field(default=3, ge=1, le=100)
+    redundancy: int = Field(default=1, ge=1, le=1)
     video_limit: int | None = Field(default=None, ge=0, le=100000)
 
 
@@ -221,10 +221,38 @@ def create_plan(
     ).order_by(MediaAsset.relative_path)))
     if not assets:
         raise HTTPException(status_code=422, detail="Dataset has no media assets.")
+    # The automatic pool is exclusive across ALL teams; manual video reuse
+    # is the only explicit way to assign duplicate video footage.
+    prior_jobs = list(db.scalars(select(LabelingJob).where(
+        LabelingJob.event_id == event.id,
+        LabelingJob.dataset_id == dataset.id,
+    )))
+    reserved = {mid for job in prior_jobs for mid in job.media_ids}
+    assets = [item for item in assets if item.id not in reserved]
+    whole_video_groups = {asset.video_group for asset in assets if asset.video_group}
+    if assets and all(item.video_group for item in assets):
+        if payload.jobs_per_team < 2:
+            raise HTTPException(
+                status_code=422,
+                detail="At least two jobs per team are required for the two annotators.",
+            )
+        if len(whole_video_groups) < 2 * len(teams):
+            raise HTTPException(
+                status_code=422,
+                detail="There must be at least two different unassigned videos "
+                       "per team for automatic competition.",
+            )
     groups, totals = allocate(
         build_units(assets), [t.id for t in teams], payload.jobs_per_team,
         payload.redundancy, payload.video_limit,
     )
+    if (assets and all(item.video_group for item in assets)
+            and any(totals["video_counts"].get(t.id, 0) < 2 for t in teams)):
+            raise HTTPException(
+                status_code=422,
+                detail="Automatic allocation must give both members of every team "
+                       "different videos. Add more videos or adjust the team count.",
+            )
     assignments = {
         m.team_id: m.monitor_person_id for m in db.scalars(select(MonitorAssignment).where(
             MonitorAssignment.event_id == event.id, MonitorAssignment.active.is_(True),

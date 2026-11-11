@@ -19,11 +19,13 @@ from .models import (
     CompetitionTeam,
     LabelingJob,
     LabelingPlan,
+    MediaDataset,
     NativeJobBinding,
     NativeOperation,
     Person,
     SuperviselyConfig,
 )
+from .native_media_pool import MirrorError, assert_mirror_complete
 from .pair_members import pair_members
 
 router = APIRouter(prefix="/api/v1/native", tags=["Supervisely dispatch"])
@@ -76,16 +78,19 @@ def team_members(db: Session, job: LabelingJob) -> list[Person]:
     return people
 
 
-def queue_publish(db: Session, job: LabelingJob) -> NativeOperation:
+def queue_publish(db: Session, job: LabelingJob, *,
+                  high_priority: bool = False) -> NativeOperation:
     existing = db.scalar(select(NativeOperation).where(
         NativeOperation.kind == "publish_job",
         NativeOperation.target_id == job.id,
     ))
     if existing:
+        if high_priority and existing.status == "pending":
+            existing.priority = 100
         return existing
     op = NativeOperation(
         event_id=job.event_id, kind="publish_job", target_id=job.id,
-        status="pending",
+        status="pending", priority=100 if high_priority else 0,
     )
     db.add(op)
     db.flush()
@@ -145,6 +150,18 @@ def launch_event(
         raise HTTPException(status_code=404, detail="Labeling plan not found.")
     if plan.status not in {"approved", "running"}:
         raise HTTPException(status_code=409, detail="Approve the labeling plan first.")
+    dataset = db.get(MediaDataset, plan.dataset_id)
+    if dataset is None or dataset.event_id != event.id:
+        raise HTTPException(status_code=409, detail="Source dataset is missing.")
+    if plan.jobs_per_team > 0:
+        try:
+            assert_mirror_complete(db, dataset)
+        except MirrorError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail="Complete the full dataset replication to Supervisely "
+                       "before launching automatic jobs.",
+            ) from exc
     jobs = list(db.scalars(select(LabelingJob).where(
         LabelingJob.event_id == event.id, LabelingJob.plan_id == plan.id,
     ).order_by(LabelingJob.team_id, LabelingJob.sequence)))
@@ -300,7 +317,7 @@ def retry_operation(
             status_code=409,
             detail="Job operation cannot be retried in the current plan state.",
         )
-    if op.kind not in {"publish_job", "restart_job"}:
+    if op.kind not in {"publish_job", "restart_job", "reassign_job"}:
         raise HTTPException(status_code=409, detail="Unsupported job operation.")
     op.status = "pending"
     op.error_code = None

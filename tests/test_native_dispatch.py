@@ -26,16 +26,20 @@ from annotatiathon.models import (
     NativeJobRevision,
     NativeMediaInstance,
     NativeOperation,
+    NativeSourceMedia,
     Person,
     StaffAccount,
     SuperviselyConfig,
     epoch,
 )
+from annotatiathon.native_media_pool import enqueue_mirror
 from annotatiathon.native_worker import (
     process_correction_once,
     process_event_reset,
     process_export_once,
+    process_mirror_once,
     process_once,
+    process_reassignment_once,
     sync_all,
 )
 from annotatiathon.security import password_hash
@@ -56,6 +60,7 @@ class MockSDK:
         self.images = {}
         self.jobs = []
         self.nextid = 100
+        self.upload_history = []
         self.fail_job_create_once = False
         self.project = Obj(
             get_list=self.projects_list,
@@ -89,6 +94,9 @@ class MockSDK:
         })
         self.labeling_job = Obj(
             get_list=self.jobs_list,
+            set_assignees=self.jobs_set_assignees,
+            get_annotations=self.jobs_get_annotations,
+            get_project_meta=self.jobs_get_project_meta,
             create=self.jobs_create,
             remove=self.jobs_remove,
             restart=self.jobs_restart,
@@ -150,6 +158,7 @@ class MockSDK:
         return list(self.images.get(dataset_id, []))
 
     def upload_paths(self, dataset_id, names, paths, **kwargs):
+        self.upload_history.append((dataset_id, list(names)))
         assert kwargs["conflict_resolution"] == "skip"
         assert len(names) == len(paths)
         for path in paths:
@@ -167,13 +176,38 @@ class MockSDK:
                 (dataset_id is None or j.dataset_id == dataset_id) and
                 (project_id is None or j.project_id == project_id)]
 
+    def jobs_get_project_meta(self, job_id):
+        job = next(item for item in self.jobs if item.id == job_id)
+        return self.project_metas[job.project_id]
+
+    def jobs_get_annotations(self, job_id, image_ids, project_meta):
+        job = next(item for item in self.jobs if item.id == job_id)
+        assert set(image_ids).issubset(set(job.image_ids))
+        assert project_meta == self.project_metas[job.project_id]
+        return [Obj(to_json=lambda meta, iid=image_id: {
+            "name": str(iid) + ".jpg",
+            "size": {"width": 100, "height": 100},
+            "objects": [{
+                "classTitle": "bird", "geometryType": "rectangle",
+                "points": {"exterior": [[12, 12], [82, 88]], "interior": []},
+                "tags": [{"job_id": job_id, "image_id": iid}],
+            }],
+            "tags": [],
+        }) for image_id in image_ids]
+
+    def jobs_set_assignees(self, job_id, annotator_id):
+        job = next(item for item in self.jobs if item.id == job_id)
+        job.assigned_to_id = annotator_id
+        return job
+
     def jobs_remove(self, job_id):
         self.removed_jobs.append(job_id)
         self.jobs = [j for j in self.jobs if j.id != job_id]
 
     def jobs_create(self, name, dataset_id, user_ids, images_ids,
                     classes_to_label, readme):
-        assert len(images_ids) == len(self.images[dataset_id])
+        assert images_ids
+        assert set(images_ids).issubset({item.id for item in self.images[dataset_id]})
         assert classes_to_label == [
             "bird", "left_eye", "left_eye_occ", "right_eye", "right_eye_occ",
             "beak", "beak_occ", "crown", "crown_occ",
@@ -197,6 +231,7 @@ class MockSDK:
                 id=self.new_id(), name=name, dataset_id=dataset_id,
                 project_id=dataset.project_id,
                 classes_to_label=list(classes_to_label),
+                image_ids=list(images_ids),
                 assigned_to_id=uid, status="pending",
                 images_count=len(images_ids), finished_images_count=0,
             )
@@ -216,6 +251,7 @@ class MockSDK:
             id=self.new_id(), name=title, dataset_id=old.dataset_id,
             project_id=old.project_id,
             assigned_to_id=assignee_ids[0], status="pending",
+            image_ids=list(old.image_ids),
             images_count=old.images_count, finished_images_count=0,
         )
         self.jobs.append(new)
@@ -272,6 +308,7 @@ def configured(monkeypatch, tmp_path):
             upload_kind="folder", status="ready", root_path=str(root),
             created_by=staff.id,
         )
+        dataset.image_count = len(assets)
         db.add(dataset)
         db.add_all(assets)
         db.flush()
@@ -322,7 +359,16 @@ def configured(monkeypatch, tmp_path):
             "email": "organiser@example.org", "password": "SafeTestingPassword!",
         })
         assert login.status_code == 200
-        yield http, maker, login.json()["csrf_token"], plan_id, MockSDK()
+        sdk = MockSDK()
+        with maker() as db:
+            dataset = db.get(MediaDataset, "dataset01")
+            enqueue_mirror(db, dataset)
+            db.commit()
+            result = process_mirror_once(
+                db, sdk, db.get(SuperviselyConfig, 1),
+            )
+            assert result["status"] == "done", result
+        yield http, maker, login.json()["csrf_token"], plan_id, sdk
     app.dependency_overrides.clear()
     engine.dispose()
 
@@ -364,12 +410,16 @@ def test_initial_release_and_next_after_both_submit(configured):
         assert len(sdk.datasets) == 1
         assert len(sdk.jobs) == 2
         assert sync_all(db, sdk, config)["changed_jobs"] == 0
-        ops = list(db.scalars(select(NativeOperation)))
+        ops = list(db.scalars(select(NativeOperation).where(
+            NativeOperation.kind == "publish_job",
+        )))
         assert len(ops) == 1
         sdk.jobs[0].status = "on_review"
         sdk.jobs[0].finished_images_count = 2
         sync_all(db, sdk, config)
-        assert len(db.scalars(select(NativeOperation)).all()) == 1
+        assert len(db.scalars(select(NativeOperation).where(
+            NativeOperation.kind != "mirror_dataset",
+        )).all()) == 1
         sdk.jobs[1].status = "on_review"
         sdk.jobs[1].finished_images_count = 1
         assert sync_all(db, sdk, config)["changed_jobs"] == 0
@@ -377,7 +427,9 @@ def test_initial_release_and_next_after_both_submit(configured):
         sdk.jobs[1].finished_images_count = 2
         result = sync_all(db, sdk, config)
         assert result["changed_jobs"] == 1
-        assert len(db.scalars(select(NativeOperation)).all()) == 1
+        assert len(db.scalars(select(NativeOperation).where(
+            NativeOperation.kind != "mirror_dataset",
+        )).all()) == 1
         # The second job must NOT be published before monitor acceptance.
         assert process_once(db, sdk, config) is None
         first_job = db.scalar(select(LabelingJob).where(
@@ -403,17 +455,26 @@ def test_initial_release_and_next_after_both_submit(configured):
     with maker() as db:
         config = db.get(SuperviselyConfig, 1)
         sync_all(db, sdk, config)
-        assert len(db.scalars(select(NativeOperation)).all()) == 2
+        assert len(db.scalars(select(NativeOperation).where(
+            NativeOperation.kind != "mirror_dataset",
+        )).all()) == 2
         next_run = process_once(db, sdk, config)
         assert next_run["status"] == "done"
-        assert len(sdk.datasets) == 2
+        assert len(sdk.datasets) == 1
         assert len(sdk.jobs) == 4
         assert len(sdk.meta_updates) == 1  # No redundant metadata write per job.
-        images_by_dataset = [{i.id for i in sdk.images[d.id]} for d in sdk.datasets]
-        assert images_by_dataset[0].isdisjoint(images_by_dataset[1])
+        # One shared remote dataset, distinct video-frame subsets per job.
+        assert len(sdk.datasets) == 1
+        first_video_ids = set(sdk.jobs[0].image_ids)
+        second_video_ids = set(sdk.jobs[2].image_ids)
+        assert first_video_ids.isdisjoint(second_video_ids)
+        assert first_video_ids | second_video_ids == {
+            row.id for row in sdk.images[sdk.datasets[0].id]
+        }
     overview = http.get("/api/v1/native/overview").json()
     assert overview["native_bindings"] == 4
-    assert len(overview["operations"]) == 2
+    assert len([item for item in overview["operations"]
+                if item["kind"] == "publish_job"]) == 2
 
 
 def test_returned_pair_job_restarts_and_blocks_next_release(configured):
@@ -470,7 +531,9 @@ def test_returned_pair_job_restarts_and_blocks_next_release(configured):
     with maker() as db:
         config = db.get(SuperviselyConfig, 1)
         sync_all(db, sdk, config)
-        assert len(db.scalars(select(NativeOperation)).all()) == 3
+        assert len(db.scalars(select(NativeOperation).where(
+            NativeOperation.kind != "mirror_dataset",
+        )).all()) == 3
         assert process_once(db, sdk, config)["status"] == "done"
 
 
@@ -486,7 +549,9 @@ def test_uncertain_native_create_is_reconciled_without_duplicates(configured):
         assert result["status"] == "attention"
         assert len(sdk.projects) == 1 and len(sdk.datasets) == 1
         assert len(sdk.jobs) == 2
-        op = db.scalar(select(NativeOperation))
+        op = db.scalar(select(NativeOperation).where(
+            NativeOperation.kind == "publish_job",
+        ))
         opid = op.id
         assert op.status == "attention"
     retry = call(http, csrf, "/native/operations/"+opid+"/retry")
@@ -494,7 +559,7 @@ def test_uncertain_native_create_is_reconciled_without_duplicates(configured):
     with maker() as db:
         assert process_once(db, sdk, db.get(SuperviselyConfig, 1))["status"] == "done"
         assert len(sdk.jobs) == 2
-        assert len(sdk.images[sdk.datasets[0].id]) == 2
+        assert len(sdk.images[sdk.datasets[0].id]) == 3
         assert len(db.scalars(select(NativeJobBinding)).all()) == 2
 
 
@@ -505,7 +570,7 @@ def test_pause_blocks_releasing_new_native_jobs(configured):
     assert response.status_code == 200
     with maker() as db:
         assert process_once(db, sdk, db.get(SuperviselyConfig, 1)) is None
-        assert len(sdk.projects) == 0
+        assert len(sdk.projects) == 1
     resume = call(http, csrf, "/native/plans/"+plan_id+"/resume")
     assert resume.status_code == 200
     with maker() as db:
@@ -592,7 +657,8 @@ def test_manual_assignments_publish_independent_videos(configured):
         assert process_once(db, sdk, conf)["native_jobs"] == 1
         assert process_once(db, sdk, conf)["native_jobs"] == 1
         assert len(sdk.jobs) == 2
-        assert len({j.dataset_id for j in sdk.jobs}) == 2
+        assert len({j.dataset_id for j in sdk.jobs}) == 1
+        assert sdk.jobs[0].dataset_id != sdk.datasets[0].id
         for native in sdk.jobs:
             native.status = "on_review"
             native.finished_images_count = 0
@@ -858,3 +924,196 @@ def test_reset_can_retry_after_remote_job_removal_interruption(configured):
         assert not list(db.scalars(select(MediaDataset)))
         assert not list(db.scalars(select(LabelingJob)))
     assert not sdk.jobs
+
+
+def test_pre_event_mirror_is_complete_and_job_publish_uploads_zero_frames(configured):
+    """Production path: all frames preloaded once, job uses a selected subset."""
+    http, maker, csrf, plan_id, sdk = configured
+    assert len(sdk.upload_history) == 1
+    with maker() as db:
+        assert len(list(db.scalars(select(NativeSourceMedia)))) == 3
+        source_ds = db.get(MediaDataset, "dataset01")
+        assert source_ds.native_dataset_id == sdk.datasets[0].id
+    preview = http.get("/api/v1/datasets/dataset01/mirror-status")
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["ready_for_automatic_jobs"] is True
+    launch(http, csrf, plan_id)
+    with maker() as db:
+        result = process_once(db, sdk, db.get(SuperviselyConfig, 1))
+        assert result["status"] == "done", result
+        job = db.scalar(select(LabelingJob).where(LabelingJob.sequence == 1))
+        mapped = list(db.scalars(select(NativeMediaInstance).where(
+            NativeMediaInstance.job_id == job.id,
+        )))
+        assert len(mapped) == 2
+        assert all(m.native_dataset_id == source_ds.native_dataset_id for m in mapped)
+    # Publishing to Supervisely creates only labeling-job records, never uploads.
+    assert len(sdk.upload_history) == 1
+    assert len(sdk.datasets) == 1
+    assert len(sdk.images[sdk.datasets[0].id]) == 3
+
+
+def test_manual_duplicate_jobs_use_independent_copies_and_annotator_mappings(configured):
+    http, maker, csrf, _plan_id, sdk = configured
+    with maker.begin() as db:
+        ds = db.get(MediaDataset, "dataset01")
+        source = Path(ds.root_path) / "media" / "videos" / "sparrows" / "flight01"
+        source.mkdir(parents=True, exist_ok=True)
+        (source / "0001.jpg").write_bytes(b"one video frame")
+        asset = MediaAsset(
+            event_id=DEFAULT_EVENT_ID, dataset_id=ds.id,
+            relative_path="videos/sparrows/flight01/0001.jpg",
+            morphology="sparrows", kind="video_frame", video_group="sparrows/flight01",
+            size_bytes=15, sha256="a" * 64,
+        )
+        db.add(asset)
+        db.flush()
+        members = list(db.scalars(select(Person).where(Person.kind == "participant")))
+        team_id = members[0].team_id
+        asset_id = asset.id
+    response = call(http, csrf, "/labeling/manual/jobs", {
+        "dataset_id": "dataset01", "dispatch": "publish",
+        "allow_duplicates": True,
+        "high_priority": True,
+        "assignments": [
+            {"team_id": team_id, "assignee_person_id": members[0].id,
+             "video_group": "sparrows/flight01"},
+            {"team_id": team_id, "assignee_person_id": members[1].id,
+             "video_group": "sparrows/flight01"},
+        ],
+    })
+    assert response.status_code == 201, response.text
+    assert response.json()["priority"] == "higher"
+    with maker() as db:
+        ops = list(db.scalars(select(NativeOperation).where(
+            NativeOperation.kind == "publish_job",
+            NativeOperation.target_id.in_(response.json()["job_ids"]),
+        )))
+        assert len(ops) == 2
+        assert all(op.priority == 100 for op in ops)
+        assert process_once(db, sdk, db.get(SuperviselyConfig, 1))["status"] == "done"
+        assert process_once(db, sdk, db.get(SuperviselyConfig, 1))["status"] == "done"
+        ds = db.get(MediaDataset, "dataset01")
+        assert ds.native_manual_dataset_id is not None
+        assert ds.native_manual_dataset_id != ds.native_dataset_id
+        maps = list(db.scalars(select(NativeMediaInstance).where(
+            NativeMediaInstance.media_id == asset_id,
+        )))
+        assert len(maps) == 2
+        assert len({x.native_image_id for x in maps}) == 2
+        assert {x.native_dataset_id for x in maps} == {ds.native_manual_dataset_id}
+    assert len(sdk.jobs) == 2
+    assert len(sdk.datasets) == 2
+    assert len(sdk.upload_history) == 3  # source upload + two manual copies
+    for native_job in sdk.jobs:
+        native_job.status = "on_review"
+    with maker() as db:
+        result = sync_all(db, sdk, db.get(SuperviselyConfig, 1))
+        assert result["changed_jobs"] == 2
+        dataset = db.get(MediaDataset, "dataset01")
+        original_path = (Path(dataset.root_path) / "media" /
+                         "videos/sparrows/flight01/0001.jpg")
+        assert original_path.read_bytes() == b"one video frame"
+        for job_id in response.json()["job_ids"]:
+            native_id = db.scalar(select(NativeJobBinding.native_job_id).where(
+                NativeJobBinding.job_id == job_id,
+            ))
+            snapshot = (Path(dataset.root_path) / "annotations" / job_id /
+                        "round-0" / (asset_id + ".json"))
+            assert snapshot.is_file()
+            data = json.loads(snapshot.read_text(encoding="utf-8"))
+            assert data["source_media_id"] == asset_id
+            assert data["native_job_id"] == native_id
+            assert data["annotation"]["objects"][0]["tags"][0]["job_id"] == native_id
+            assert not (snapshot.parent / "images").exists()
+            assert not (snapshot.parent / "videos").exists()
+
+
+
+def test_live_reassignment_updates_supervisely_before_local_team(configured):
+    http, maker, csrf, _plan_id, sdk = configured
+    with maker.begin() as db:
+        origin = db.scalar(select(CompetitionTeam).where(
+            CompetitionTeam.event_id == DEFAULT_EVENT_ID,
+        ))
+        team = CompetitionTeam(event_id=DEFAULT_EVENT_ID, name="Replacement Pair")
+        db.add(team)
+        db.flush()
+        replacement = Person(
+            event_id=DEFAULT_EVENT_ID, name="Replacement Annotator",
+            email="replacement@example.org", kind="participant",
+            team_id=team.id, membership_status="joined", active=True,
+            supervisely_user_id=4040, supervisely_role="annotator",
+            native_verified_at=epoch(),
+        )
+        db.add(replacement)
+        source = Path(db.get(MediaDataset, "dataset01").root_path) / "media" / "videos" / "sparrows"
+        source.mkdir(parents=True, exist_ok=True)
+        (source / "new.jpg").write_bytes(b"new test frame")
+        db.add(MediaAsset(
+            event_id=DEFAULT_EVENT_ID, dataset_id="dataset01",
+            relative_path="videos/sparrows/new.jpg",
+            morphology="sparrows", kind="video_frame",
+            video_group="sparrows/flight02",
+            size_bytes=14, sha256="b" * 64,
+        ))
+        origin_member = db.scalar(select(Person).where(Person.team_id == origin.id))
+        origin_id, target_id = origin.id, replacement.id
+    created = call(http, csrf, "/labeling/manual/jobs", {
+        "dataset_id": "dataset01", "dispatch": "publish",
+        "assignments": [{
+            "team_id": origin_id, "assignee_person_id": origin_member.id,
+            "video_group": "sparrows/flight02",
+        }],
+    })
+    assert created.status_code == 201, created.text
+    job_id = created.json()["job_ids"][0]
+    with maker() as db:
+        assert process_once(db, sdk, db.get(SuperviselyConfig, 1))["status"] == "done"
+        native_id = db.scalar(select(NativeJobBinding.native_job_id).where(
+            NativeJobBinding.job_id == job_id,
+        ))
+        assert sdk.labeling_job.get_info_by_id(native_id).assigned_to_id == 3001
+    requested = call(http, csrf, "/labeling/manual/jobs/"+job_id+"/reassign", {
+        "person_id": target_id,
+    })
+    assert requested.status_code == 202, requested.text
+    with maker() as db:
+        job = db.get(LabelingJob, job_id)
+        assert job.team_id == origin_id
+        assert job.assignee_person_id == origin_member.id
+        assert process_reassignment_once(
+            db, sdk, db.get(SuperviselyConfig, 1),
+        )["status"] == "done"
+        job = db.get(LabelingJob, job_id)
+        assert job.team_id == team.id
+        assert job.assignee_person_id == target_id
+        binding = db.scalar(select(NativeJobBinding).where(
+            NativeJobBinding.job_id == job_id,
+        ))
+        assert binding.person_id == target_id
+        assert sdk.labeling_job.get_info_by_id(native_id).assigned_to_id == 4040
+    assert len(sdk.jobs) == 1  # no new duplicate native job
+
+
+def test_queue_priority_prefers_manual_high_priority(configured):
+    from annotatiathon.native_operations_api import queue_publish
+
+    _http, maker, _csrf, _plan_id, sdk = configured
+    with maker.begin() as db:
+        jobs = list(db.scalars(select(LabelingJob).order_by(LabelingJob.sequence)))
+        for job in jobs:
+            job.assignee_person_id = db.scalar(select(Person.id).where(
+                Person.team_id == job.team_id
+            ))
+            job.release_mode = "manual_released"
+            db.get(LabelingPlan, job.plan_id).status = "running"
+        low = queue_publish(db, jobs[0])
+        high = queue_publish(db, jobs[1], high_priority=True)
+        assert low.priority == 0 and high.priority == 100
+        higher_id = jobs[1].id
+    with maker() as db:
+        done = process_once(db, sdk, db.get(SuperviselyConfig, 1))
+        assert done["status"] == "done"
+        op = db.get(NativeOperation, done["operation_id"])
+        assert op.target_id == higher_id

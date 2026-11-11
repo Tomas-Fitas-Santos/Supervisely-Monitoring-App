@@ -13,6 +13,8 @@ type Dataset={id:string;name:string;upload_kind:"zip"|"folder";
   status:string;source_bytes:number;image_count:number;frame_count:number;
   video_count:number;created_at:number;last_activity_at:number;error_code:string|null;
   native_project_id:number|null};
+type MirrorStatus={state:string;uploaded_frames:number;total_frames:number;
+  ready_for_automatic_jobs:boolean;error_code:string|null};
 type Morph={name:string;kind:string;count:number};
 type Summary={dataset:Dataset;morphologies:Morph[];total_assets:number};
 const formatBytes=(n:number)=>n>=1e9?(n/1e9).toFixed(2)+" GB":n>=1e6?
@@ -23,6 +25,7 @@ export function DatasetScreen({auth}:{auth:Auth}) {
   const [datasets,setDatasets]=useState<Dataset[]>([]);
   const [selected,setSelected]=useState("");
   const [summary,setSummary]=useState<Summary|null>(null);
+  const [mirror,setMirror]=useState<MirrorStatus|null>(null);
   const [mode,setMode]=useState<"zip"|"folder">("zip");
   const [name,setName]=useState("");
   const [files,setFiles]=useState<File[]>([]);
@@ -48,6 +51,29 @@ export function DatasetScreen({auth}:{auth:Auth}) {
     void api<Summary>("/datasets/"+selected+"/summary").then(setSummary)
       .catch(e=>setError((e as Error).message));
   },[selected,datasets]);
+  useEffect(()=>{
+    if(!selected){setMirror(null);return;}
+    let live=true;
+    async function updateMirror(){
+      try{
+        const result=await api<MirrorStatus>("/datasets/"+selected+"/mirror-status");
+        if(live)setMirror(result);
+      }catch(e){if(live)setMirror(null);}
+    }
+    void updateMirror();
+    const timer=window.setInterval(()=>{if(!document.hidden)void updateMirror();},12000);
+    return()=>{live=false;window.clearInterval(timer);};
+  },[selected]);
+  async function retryMirror(){
+    if(!dataset||busy)return;
+    setBusy(true);setError("");setNotice("");
+    try{
+      await api("/datasets/"+dataset.id+"/mirror/retry","POST",undefined,auth.csrf_token);
+      setNotice("Full-dataset Supervisely replication queued for the worker.");
+      setMirror(await api<MirrorStatus>("/datasets/"+dataset.id+"/mirror-status"));
+    }catch(e){setError((e as Error).message);}
+    finally{setBusy(false);}
+  }
   const dataset=datasets.find(d=>d.id===selected);
   const groups=useMemo(()=>summary?.morphologies.reduce<Record<string,{frames:number}>>(
     (acc,m)=>{
@@ -72,7 +98,7 @@ export function DatasetScreen({auth}:{auth:Auth}) {
         datasetId:created.id,name:created.name,kind:mode,
         files,csrf:auth.csrf_token,resume:false
       });
-      setNotice("Transfer started. You can navigate to other Nightjar pages.");
+      setNotice("Transfer started. When local validation completes, the native worker will replicate every frame to Supervisely before event launch.");
       setFiles([]);setName("");
       await refresh();
     }catch(e) {
@@ -144,7 +170,7 @@ export function DatasetScreen({auth}:{auth:Auth}) {
     </div>
     <div className="content-grid datasets-layout">
       {admin&&<section className="panel">
-        <span className="eyebrow">PRIVATE LOCAL STORAGE</span><h3>Import dataset</h3>
+        <span className="eyebrow">PRE-EVENT MEDIA LIBRARY</span><h3>Import and preload videos</h3>
         <p className="muted small">Video-only structure: <code>dataset-name/bird-species/video.mp4</code> or <code>dataset-name/bird-species/video-title/frame.jpg</code>. Multiple species folders are supported. Do not create separate <code>images</code> or <code>videos</code> folders. You can upload the root folder or a ZIP containing it. Raw videos are sampled at 1 frame per second for Supervisely labeling; already extracted frames retain their original sampling.</p>
         <form className="form-stack" onSubmit={e=>void ingest(e)}>
           <label>Dataset name<input maxLength={200} value={name} placeholder="BirdGaze 2026"
@@ -179,8 +205,9 @@ export function DatasetScreen({auth}:{auth:Auth}) {
           </button>
         </form>
         <div className="settings-note" style={{marginTop:16}}><AlertTriangle size={17}/>
-          <p>This import stays on local disk. It does not create a Supervisely project or
-            publish any job until an organiser authorises that separately. Keep backups of local media.</p></div>
+          <p>After local import, the worker uploads all frames into one Supervisely dataset.
+            The automatic jobs later select those existing frames without uploading duplicates.
+            No labeling job is created by the dataset upload. Keep backups of local media.</p></div>
       </section>}
       <section className="panel">
         <span className="eyebrow">LOCAL DATASETS</span><h3>Imported collections</h3>
@@ -193,7 +220,22 @@ export function DatasetScreen({auth}:{auth:Auth}) {
         {dataset&&<div className="dataset-detail"><h4>{dataset.name}</h4>
           <p className="muted small">{dataset.video_count} videos ·
             {dataset.frame_count} frames available for annotation</p>
-          <p className="muted small">Local status: {dataset.status} · Native project: {dataset.native_project_id||"Not published"}</p>
+          <p className="muted small">Local status: {dataset.status} · Native project: {dataset.native_project_id||"Not created yet"}</p>
+          {dataset.status==="ready"&&<div className="dataset-mirror-status">
+            <strong>Supervisely pre-event replication: {mirror?.ready_for_automatic_jobs?
+              "Ready":"Not ready"}</strong>
+            <p className="muted small">{mirror?.state||"Checking…"} · {mirror?.uploaded_frames??0} /
+              {mirror?.total_frames??dataset.frame_count} frames mirrored</p>
+            <progress value={mirror?.uploaded_frames??0}
+              max={mirror?.total_frames||dataset.frame_count||1}/>
+            {mirror?.error_code&&<p role="alert" className="alert danger">{mirror.error_code}</p>}
+            {admin&&mirror&&["attention","not_started"].includes(mirror.state)&&
+              <button className="btn secondary" type="button" disabled={busy}
+                onClick={()=>void retryMirror()}><RotateCcw size={15}/> Retry Supervisely upload</button>}
+            {mirror?.ready_for_automatic_jobs&&<p className="muted small">
+              All source frames are replicated; automatic job creation now uses the same remote images.
+              Manual assignments can independently duplicate a video in their separate remote dataset.</p>}
+          </div>}
           {transfer?.datasetId===dataset.id&&transfer.error&&
             <p className="alert danger" role="alert">{transfer.error}</p>}
           {admin&&dataset.status!=="ready"&&<div className="dataset-recovery-actions">

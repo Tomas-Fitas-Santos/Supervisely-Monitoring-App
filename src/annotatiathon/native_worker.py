@@ -35,6 +35,7 @@ from .annotation_schema import (
 from .db import session_factory
 from .events_api import seed_categories
 from .full_reset_api import clear_event_data, safe_dataset_paths
+from .manual_jobs_api import apply_local_reassignment, target_team
 from .models import (
     AuditEvent,
     CompetitionTeam,
@@ -47,10 +48,17 @@ from .models import (
     NativeJobRevision,
     NativeMediaInstance,
     NativeOperation,
+    NativeSourceMedia,
+    Person,
     SuperviselyConfig,
     epoch,
 )
 from .native_export_api import export_event_zip
+from .native_media_pool import (
+    MirrorError,
+    assert_mirror_complete,
+    mirror_dataset,
+)
 from .native_names import (
     dataset_name,
     labeling_job_name,
@@ -153,8 +161,9 @@ def remote_dataset(api, db: Session, project_id: int,
     return created.id
 
 
-def media_name(asset: MediaAsset) -> str:
-    return asset.id + PurePosixPath(asset.relative_path).suffix.lower()
+def media_name(asset: MediaAsset, job: LabelingJob | None = None) -> str:
+    suffix = PurePosixPath(asset.relative_path).suffix.lower()
+    return (job.id + "_" if job else "") + asset.id + suffix
 
 
 def upload_media(db: Session, api, job: LabelingJob, ds: MediaDataset,
@@ -180,7 +189,7 @@ def upload_media(db: Session, api, job: LabelingJob, ds: MediaDataset,
     pending: list[tuple[MediaAsset, str, str]] = []
     for media_id in job.media_ids:
         asset = assets[media_id]
-        name = media_name(asset)
+        name = media_name(asset, job if native_dataset_id == ds.native_manual_dataset_id else None)
         remote_id = existing.get(name)
         current = linked.get(media_id)
         if current:
@@ -251,6 +260,98 @@ def assigned_people(db: Session, job: LabelingJob):
     return [person]
 
 
+def process_mirror_once(db: Session, api, config: SuperviselyConfig) -> dict | None:
+    """Mirror a whole source library once, before any labeling job can be issued."""
+    op = db.scalar(select(NativeOperation).where(
+        NativeOperation.kind == "mirror_dataset",
+        NativeOperation.status == "pending",
+    ).order_by(NativeOperation.created_at, NativeOperation.id)
+      .with_for_update(skip_locked=True))
+    if op is None:
+        db.rollback()
+        return None
+    op.status = "running"
+    op.claimed_at = epoch()
+    op.attempts += 1
+    opid, dsid = op.id, op.target_id
+    db.commit()
+    try:
+        ds = db.get(MediaDataset, dsid)
+        if ds is None:
+            raise MirrorError("source_dataset_not_found")
+        result = mirror_dataset(db, api, config, ds)
+    except Exception as exc:  # noqa: BLE001 - uncertain writes stay retryable
+        db.rollback()
+        failed = db.get(NativeOperation, opid)
+        failed.status = "attention"
+        failed.error_code = (
+            exc.code if isinstance(exc, (MirrorError, NativeAPIError))
+            else "mirror_remote_uncertain"
+        )
+        db.commit()
+        logger.warning("Supervisely source mirror %s needs reconciliation (%s)",
+                       opid, type(exc).__name__)
+        return {"status": "attention", "operation_id": opid}
+    finished = db.get(NativeOperation, opid)
+    finished.status = "done"
+    finished.completed_at = epoch()
+    finished.error_code = None
+    db.commit()
+    return {"status": "done", "operation_id": opid, **result}
+
+
+def source_media_for_job(db: Session, job: LabelingJob,
+                         native_dataset_id: int) -> list[int]:
+    """Build job-local references to mirrored images without uploading files."""
+    source = {row.media_id: row for row in db.scalars(
+        select(NativeSourceMedia).where(
+            NativeSourceMedia.event_id == job.event_id,
+            NativeSourceMedia.dataset_id == job.dataset_id,
+            NativeSourceMedia.media_id.in_(job.media_ids),
+        )
+    )}
+    if len(source) != len(job.media_ids):
+        raise NativeWorkerError("job_source_frames_not_mirrored")
+    mappings = {row.media_id: row for row in db.scalars(select(
+        NativeMediaInstance,
+    ).where(NativeMediaInstance.job_id == job.id))}
+    for media_id in job.media_ids:
+        remote = source[media_id]
+        if remote.native_dataset_id != native_dataset_id:
+            raise NativeWorkerError("source_dataset_changed")
+        old = mappings.get(media_id)
+        if old:
+            if (old.native_image_id != remote.native_image_id
+                    or old.native_dataset_id != native_dataset_id):
+                raise NativeWorkerError("native_job_image_mapping_changed")
+        else:
+            db.add(NativeMediaInstance(
+                event_id=job.event_id, job_id=job.id, media_id=media_id,
+                native_dataset_id=native_dataset_id,
+                native_image_id=remote.native_image_id,
+            ))
+    db.commit()
+    return [source[media_id].native_image_id for media_id in job.media_ids]
+
+
+def manual_media_dataset(api, dataset: MediaDataset, project_id: int) -> int:
+    name = "Manual assignments · independent video copies"
+    if dataset.native_manual_dataset_id is not None:
+        ds = api.dataset.get_info_by_id(dataset.native_manual_dataset_id)
+        if ds is None or ds.project_id != project_id or ds.name != name:
+            raise NativeWorkerError("manual_dataset_identity_changed")
+        return ds.id
+    options = [item for item in api.dataset.get_list(project_id)
+               if item.name == name]
+    if len(options) > 1:
+        raise NativeWorkerError("ambiguous_manual_media_dataset")
+    ds = options[0] if options else api.dataset.create(
+        project_id, name, change_name_if_conflict=False,
+    )
+    dataset.native_manual_dataset_id = ds.id
+    return ds.id
+
+
 def publish_job(db: Session, job: LabelingJob, api, config: SuperviselyConfig) -> dict:
     """Idempotent by deterministic project/dataset names and native user IDs."""
     if job.status not in {"queued", "publishing", "in_progress"}:
@@ -278,19 +379,47 @@ def publish_job(db: Session, job: LabelingJob, api, config: SuperviselyConfig) -
     if dataset.native_project_id is None:
         dataset.native_project_id = project_id
         db.commit()
-    remote_ds_id = remote_dataset(api, db, project_id, job, team)
+    if job.native_dataset_id is not None and job.native_dataset_id not in {
+        dataset.native_dataset_id, dataset.native_manual_dataset_id,
+    }:
+        # Existing pre-upgrade per-job native datasets remain readable and
+        # recoverable; do not attempt to move an in-progress native job.
+        remote_ds_id = remote_dataset(api, db, project_id, job, team)
+        native_media = upload_media(db, api, job, dataset, remote_ds_id)
+    elif job.release_mode == "automatic":
+        try:
+            assert_mirror_complete(db, dataset)
+        except MirrorError as exc:
+            raise NativeWorkerError(exc.code) from exc
+        remote_ds_id = dataset.native_dataset_id
+        native_media = source_media_for_job(db, job, remote_ds_id)
+    else:
+        remote_ds_id = manual_media_dataset(api, dataset, project_id)
+        db.commit()
+        native_media = upload_media(db, api, job, dataset, remote_ds_id)
     if job.native_dataset_id is None:
         job.native_dataset_id = remote_ds_id
         job.status = "publishing"
         db.commit()
-    native_media = upload_media(db, api, job, dataset, remote_ds_id)
     roster_ids = {p.supervisely_user_id: p for p in people}
-    # One immutable dataset and one native job per assigned annotator.
+    # Automatic jobs reference subsets of the shared preloaded dataset.
+    # Manual jobs reference their own copied frames in a separate dataset.
+    # Only jobs with this deterministic Nightjar title belong to this job.
+    expected_title = labeling_job_name(
+        job, team, job_video_group(db, job),
+        people[0].name if job.assignee_person_id else "Team pair",
+    )
     current = api.labeling_job.get_list(
         config.team_id, dataset_id=remote_ds_id, show_disabled=True,
     )
     by_user = defaultdict(list)
+    bound_ids = {x.native_job_id for x in db.scalars(select(NativeJobBinding).where(
+        NativeJobBinding.event_id == job.event_id,
+        NativeJobBinding.job_id == job.id,
+    ))}
     for remote in current:
+        if remote.name != expected_title and remote.id not in bound_ids:
+            continue
         if remote.dataset_id != remote_ds_id:
             raise NativeWorkerError("native_dataset_mismatch")
         by_user[remote.assigned_to_id].append(remote)
@@ -299,10 +428,7 @@ def publish_job(db: Session, job: LabelingJob, api, config: SuperviselyConfig) -
     missing = [uid for uid in roster_ids if uid not in by_user]
     if missing:
         api.labeling_job.create(
-            name=labeling_job_name(
-                job, team, job_video_group(db, job),
-                people[0].name if job.assignee_person_id else "Team pair",
-            ),
+            name=expected_title,
             dataset_id=remote_ds_id,
             user_ids=missing,
             images_ids=native_media,
@@ -320,7 +446,8 @@ def publish_job(db: Session, job: LabelingJob, api, config: SuperviselyConfig) -
         )
         by_user = defaultdict(list)
         for remote in current:
-            by_user[remote.assigned_to_id].append(remote)
+            if remote.name == expected_title or remote.id in bound_ids:
+                by_user[remote.assigned_to_id].append(remote)
     if set(by_user) != set(roster_ids) or any(len(rows) != 1 for rows in by_user.values()):
         raise NativeWorkerError("native_job_confirmation_failed")
     for uid, person in roster_ids.items():
@@ -443,6 +570,39 @@ def capture_job_annotations(db: Session, api, job: LabelingJob) -> bool:
         raise NativeWorkerError("annotation_media_mapping_incomplete")
     if any(m.native_dataset_id != job.native_dataset_id for m in mappings.values()):
         raise NativeWorkerError("annotation_dataset_mapping_changed")
+    # With a shared pre-uploaded image pool, annotations must be requested
+    # from the *submitted labeling job*, not from the project's image API.
+    # The latter could include a different annotator's work on the same ID.
+    bindings = list(db.scalars(select(NativeJobBinding).where(
+        NativeJobBinding.job_id == job.id,
+        NativeJobBinding.event_id == job.event_id,
+    )))
+    ordered_ids = [mappings[media_id].native_image_id for media_id in job.media_ids]
+    if job.assignee_person_id is None:
+        # Historical pair jobs predate single-assignee frames. Their legacy
+        # per-job dataset owns these images; preserve old read behavior only
+        # for those records, never for shared source-frame jobs.
+        if len(bindings) != 2:
+            raise NativeWorkerError("legacy_job_binding_count_mismatch")
+        native_job_id = None
+        annotation_json = [
+            api.annotation.download_json(image_id) for image_id in ordered_ids
+        ]
+    else:
+        # Job-scoped annotations are essential when multiple jobs share the
+        # same immutable source frame in one pre-uploaded dataset.
+        if len(bindings) != 1 or bindings[0].person_id != job.assignee_person_id:
+            raise NativeWorkerError("submitted_job_binding_not_unique")
+        native_job_id = bindings[0].native_job_id
+        project_meta = api.labeling_job.get_project_meta(native_job_id)
+        downloaded = api.labeling_job.get_annotations(
+            native_job_id, image_ids=ordered_ids, project_meta=project_meta,
+        )
+        if len(downloaded) != len(ordered_ids):
+            raise NativeWorkerError("job_annotation_count_mismatch")
+        annotation_json = [ann.to_json(project_meta) for ann in downloaded]
+    if any(not isinstance(ann, dict) for ann in annotation_json):
+        raise NativeWorkerError("job_annotation_invalid")
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_name(destination.name + ".partial")
     if temporary.exists():
@@ -452,12 +612,9 @@ def capture_job_annotations(db: Session, api, job: LabelingJob) -> bool:
     try:
         rows = []
         annotated_frames = 0
-        for media_id in job.media_ids:
+        for media_id, annotation in zip(job.media_ids, annotation_json):
             asset = assets[media_id]
             native = mappings[media_id]
-            annotation = api.annotation.download_json(native.native_image_id)
-            if not isinstance(annotation, dict):
-                raise NativeWorkerError("native_annotation_invalid")
             # Supervisely JSON uses "objects"; accept the legacy "labels"
             # field as well for snapshots created by earlier SDK versions.
             objects = annotation.get("objects")
@@ -471,6 +628,7 @@ def capture_job_annotations(db: Session, api, job: LabelingJob) -> bool:
                 "source_sha256": asset.sha256,
                 "native_dataset_id": native.native_dataset_id,
                 "native_image_id": native.native_image_id,
+                "native_job_id": native_job_id,
                 "annotation": annotation,
             }
             with (temporary / (media_id + ".json")).open(
@@ -487,6 +645,7 @@ def capture_job_annotations(db: Session, api, job: LabelingJob) -> bool:
                 "schema": "nightjar-annotation-snapshot-v1",
                 "event_id": job.event_id, "dataset_id": dataset.id,
                 "job_id": job.id, "correction_round": job.correction_round,
+                "native_job_id": native_job_id,
                 "captured_at": captured, "media": rows,
                 "annotated_frames": annotated_frames,
                 "annotation_state": "current_supervisely_snapshot",
@@ -571,7 +730,10 @@ def process_once(db: Session, api, config: SuperviselyConfig) -> dict | None:
             NativeOperation.kind == "publish_job",
             LabelingPlan.status == "running",
             Event.status == "active",
-        ).order_by(NativeOperation.created_at).with_for_update(skip_locked=True).limit(200)
+        ).order_by(
+            NativeOperation.priority.desc(),
+            NativeOperation.created_at, NativeOperation.id,
+        ).with_for_update(skip_locked=True).limit(200)
     ))
     op = next((
         row for row in operations
@@ -617,6 +779,88 @@ def process_once(db: Session, api, config: SuperviselyConfig) -> dict | None:
     finished.error_code = None
     db.commit()
     return {"operation_id": opid, "status": "done", **details}
+
+
+def process_reassignment_once(db: Session, api,
+                              config: SuperviselyConfig) -> dict | None:
+    """Update real native annotator before changing the Nightjar owner/team.
+
+    A lost response is safe to retry because the native job ID and desired
+    assignee are immutable in the queued operation payload.
+    """
+    op = db.scalar(select(NativeOperation).where(
+        NativeOperation.kind == "reassign_job",
+        NativeOperation.status == "pending",
+    ).order_by(NativeOperation.created_at, NativeOperation.id)
+      .with_for_update(skip_locked=True))
+    if op is None:
+        db.rollback()
+        return None
+    op.status = "running"
+    op.attempts += 1
+    op.claimed_at = epoch()
+    oid, jid, payload = op.id, op.target_id, dict(op.payload or {})
+    db.commit()
+    try:
+        job = db.get(LabelingJob, jid)
+        person = db.get(Person, payload.get("person_id"))
+        if job is None or person is None or job.event_id != person.event_id:
+            raise NativeWorkerError("reassign_target_identity_mismatch")
+        if job.status in {"on_review", "completed", "needs_correction"}:
+            raise NativeWorkerError("reassign_job_already_submitted")
+        team = target_team(db, job.event_id, person)
+        if team.id != payload.get("team_id") or not person.supervisely_user_id:
+            raise NativeWorkerError("reassign_team_or_member_changed")
+        native = list(db.scalars(select(NativeJobBinding).where(
+            NativeJobBinding.event_id == job.event_id,
+            NativeJobBinding.job_id == job.id,
+        )))
+        if len(native) != 1:
+            raise NativeWorkerError("reassign_expected_single_native_job")
+        binding = native[0]
+        current = api.labeling_job.get_info_by_id(binding.native_job_id)
+        if (current is None or current.dataset_id != job.native_dataset_id):
+            raise NativeWorkerError("reassign_native_job_identity_changed")
+        if (current.assigned_to_id != person.supervisely_user_id
+                and current.status in {"on_review", "completed", "review_completed"}):
+            raise NativeWorkerError("reassign_native_job_already_submitted")
+        if current.assigned_to_id != person.supervisely_user_id:
+            api.labeling_job.set_assignees(
+                binding.native_job_id,
+                annotator_id=person.supervisely_user_id,
+            )
+        confirmed = api.labeling_job.get_info_by_id(binding.native_job_id)
+        if confirmed is None or confirmed.assigned_to_id != person.supervisely_user_id:
+            raise NativeWorkerError("reassign_native_confirmation_failed")
+        old = {"person_id": job.assignee_person_id, "team_id": job.team_id}
+        binding.person_id = person.id
+        binding.native_status = confirmed.status
+        binding.last_synced_at = epoch()
+        apply_local_reassignment(db, job, person, team)
+        db.add(AuditEvent(
+            event_id=job.event_id,
+            action="native.job.reassigned",
+            target_type="labeling_job", target_id=job.id,
+            details={"previous": old, "person_id": person.id,
+                     "team_id": team.id, "native_job_id": binding.native_job_id},
+        ))
+        db.commit()
+    except Exception as exc:  # noqa: BLE001 - idempotent retry
+        db.rollback()
+        failed = db.get(NativeOperation, oid)
+        failed.status = "attention"
+        failed.error_code = (
+            exc.code if isinstance(exc, NativeWorkerError)
+            else "reassign_remote_uncertain"
+        )
+        db.commit()
+        return {"operation_id": oid, "status": "attention"}
+    finished = db.get(NativeOperation, oid)
+    finished.status = "done"
+    finished.completed_at = epoch()
+    finished.error_code = None
+    db.commit()
+    return {"operation_id": oid, "status": "done", "job_id": jid}
 
 
 def process_correction_once(db: Session, api, config: SuperviselyConfig) -> dict | None:
@@ -1044,13 +1288,15 @@ def run_worker(*, once: bool, poll_seconds: int) -> None:
                         return
                     time.sleep(poll_seconds)
                     continue
+                mirror = process_mirror_once(db, api, config)
+                reassignment = process_reassignment_once(db, api, config)
                 correction = process_correction_once(db, api, config)
                 operation = process_once(db, api, config)
                 export = process_export_once(db, api)
                 sync_result = sync_all(db, api, config)
-                if correction or operation or export or sync_result["changed_jobs"] or sync_result["annotation_snapshots"]:
-                    logger.info("Nightjar worker: correction=%s publish=%s export=%s sync=%s",
-                                correction, operation, export, sync_result)
+                if mirror or reassignment or correction or operation or export or sync_result["changed_jobs"] or sync_result["annotation_snapshots"]:
+                    logger.info("Nightjar worker: mirror=%s reassign=%s correction=%s publish=%s export=%s sync=%s",
+                                mirror, reassignment, correction, operation, export, sync_result)
             except Exception as exc:  # noqa: BLE001 - keep long-lived worker alive
                 db.rollback()
                 logger.warning("Supervisely worker cycle failed (type %s); "
