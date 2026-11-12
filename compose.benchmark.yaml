@@ -15,6 +15,10 @@ x-runtime: &runtime
     PYTHONUNBUFFERED: "1"
     PYTHONPATH: /bench
     BENCHMARK_FRAMES: ${BENCHMARK_FRAMES:-30}
+    BENCHMARK_ANNOTATORS: ${BENCHMARK_ANNOTATORS:-300}
+    BENCHMARK_MONITORS: ${BENCHMARK_MONITORS:-12}
+    BENCHMARK_SECONDS_PER_FRAME: ${BENCHMARK_SECONDS_PER_FRAME:-90}
+    BENCHMARK_PROFILE_PATH: ${BENCHMARK_PROFILE_PATH:-}
     BENCHMARK_BURST: ${BENCHMARK_BURST:-0}
     BENCHMARK_UPLOAD: ${BENCHMARK_UPLOAD:-0}
   volumes:
@@ -66,6 +70,9 @@ services:
       retries: 30
   worker:
     <<: *runtime
+    environment:
+      <<: *environment
+      NIGHTJAR_WORKER_TIMING_FILE: /data/results/worker-timing.jsonl
     command: [python, -m, annotatiathon.native_worker, --loop, --poll-seconds, "12"]
     cpus: 1.5
     mem_limit: 2g
