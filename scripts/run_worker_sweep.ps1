@@ -2,7 +2,7 @@
 # NO PUBLIC SUPERVISELY API CALLS: internal fake Supervisely, separate PostgreSQL.
 [CmdletBinding()]
 param(
-  [int[]]$Workers = @(1, 2, 3, 4),
+  [int[]]$Workers = @(1, 2, 3),
   [ValidateRange(60, 7200)][int]$Seconds = 480,
   [ValidateSet("burst", "staggered")][string]$Scenario = "burst",
   [ValidateRange(0.1, 10.0)][double]$ProfileScale = 1.0,
