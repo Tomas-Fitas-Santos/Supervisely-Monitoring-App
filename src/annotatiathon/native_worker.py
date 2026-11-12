@@ -1204,7 +1204,7 @@ def process_correction_once(db: Session, api, config: SuperviselyConfig) -> dict
                                           in ANNOTATION_CLASSES],
                         readme=(
                             "INCOMPLETE SUBMISSION: finish these remaining images. "
-                            "For EACH image annotate exactly one bird rectangle "
+                            "For EACH image annotate exactly one bird bounding box (rectangle) "
                             "and one left_eye, right_eye, beak and crown point. "
                             "Use the *_occ variant for occluded landmarks. "
                             "Previously complete images are already accepted."
