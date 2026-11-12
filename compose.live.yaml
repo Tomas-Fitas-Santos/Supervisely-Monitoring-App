@@ -13,6 +13,8 @@ x-backend: &backend
     APP_ENV: production
     LOCAL_DATA_DIR: /data
     NIGHTJAR_ENCRYPTION_KEY: ${NIGHTJAR_ENCRYPTION_KEY:?Run scripts/init-live-test.ps1 first}
+    NIGHTJAR_DEDICATED_INDEXER: "1"
+    NIGHTJAR_DEDICATED_MIRROR: "1"
   volumes:
     - type: bind
       source: ${NIGHTJAR_MEDIA_DIR:-./.nightjar-live-data}
@@ -63,6 +65,8 @@ services:
 
   indexer:
     <<: *backend
+    # Cap heavy local video decoding, leaving host CPU time for remote users.
+    cpus: "1.5"
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -95,6 +99,21 @@ services:
       - "127.0.0.1:${NIGHTJAR_LIVE_TEST_PORT:-8080}:80"
     restart: unless-stopped
     # Only this combined web/API origin is reachable from the host/tunnel.
+
+  mirror-worker:
+    <<: *backend
+    profiles: ["native"]
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.api
+      target: native
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    # Dedicated, bounded media I/O. Never publishes jobs or polls submissions.
+    cpus: "1.0"
+    command: ["python", "-m", "annotatiathon.native_worker", "--loop",
+              "--role", "mirror", "--poll-seconds", "8"]
 
   worker:
     <<: *backend
