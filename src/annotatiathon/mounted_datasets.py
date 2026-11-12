@@ -363,3 +363,52 @@ def process_mounted_index_once(db: Session) -> dict | None:
             (Path(ds.root_path) / "media").mkdir(exist_ok=True)
         return {"status": "attention", "operation_id": op_id,
                 "dataset_id": ds_id, "error": type(exc).__name__}
+
+
+def run_indexer(*, once: bool = False, poll_seconds: int = 8) -> None:
+    """Index mounted source folders independently of Supervisely credentials.
+
+    The separate lightweight Docker service runs this loop during ordinary
+    Nightjar deployment. Supervisely mirroring stays a distinct native-worker
+    operation. A DB row lock ensures the legacy native worker can safely race
+    this indexer without claiming the same pending job.
+    """
+    import time
+
+    from .db import session_factory
+
+    if poll_seconds < 1:
+        raise ValueError("poll_seconds_must_be_positive")
+    while True:
+        try:
+            with session_factory()() as db:
+                result = process_mounted_index_once(db)
+            if result is not None:
+                logger.info(
+                    "Mounted indexing job %s ended with %s",
+                    result["dataset_id"], result["status"],
+                )
+        except Exception:
+            logger.exception("Mounted indexer cycle failed; will retry")
+            result = None
+        if once:
+            return
+        if result is None:
+            time.sleep(poll_seconds)
+
+
+def main() -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Nightjar local dataset indexer")
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--once", action="store_true")
+    group.add_argument("--loop", action="store_true")
+    parser.add_argument("--poll-seconds", type=int, default=8)
+    options = parser.parse_args()
+    logging.basicConfig(level=logging.INFO)
+    run_indexer(once=options.once, poll_seconds=options.poll_seconds)
+
+
+if __name__ == "__main__":
+    main()
