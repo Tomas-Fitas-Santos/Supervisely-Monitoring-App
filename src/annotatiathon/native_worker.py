@@ -11,8 +11,8 @@ The official SDK calls used here are:
 Jobs and datasets are removed only when an organiser explicitly confirms a
 full event reset. No team-member deletion or forced job completion is performed.
 
-Each new video job belongs to exactly one verified annotator. Two members
-of a team receive separate videos and separate native jobs. Historical pair
+Each new labeling job belongs to exactly one verified annotator. Automatic
+30-frame jobs may span the boundary of two source videos. Historical pair
 jobs with two native bindings remain readable and can finish normally.
 """
 import argparse
@@ -140,12 +140,25 @@ def remote_project(api, config: SuperviselyConfig,
 def job_video_group(db: Session, job: LabelingJob) -> str | None:
     if not job.media_ids or job.release_mode == "shared_repeat":
         return None
-    return db.scalar(select(MediaAsset.video_group).where(
+    # Display both sources for automatic jobs crossing a video boundary.
+    # Use ordered media_ids rather than an unordered SQL LIMIT 1 so retries
+    # always look up the same deterministic Supervisely job name.
+    source_groups = dict(db.execute(select(
+        MediaAsset.id, MediaAsset.video_group,
+    ).where(
         MediaAsset.event_id == job.event_id,
         MediaAsset.dataset_id == job.dataset_id,
         MediaAsset.id.in_(job.media_ids),
-        MediaAsset.video_group.is_not(None),
-    ).limit(1))
+    )))
+    groups = list(dict.fromkeys(
+        source_groups[media_id] for media_id in job.media_ids
+        if source_groups.get(media_id)
+    ))
+    if not groups:
+        return None
+    if len(groups) == 1:
+        return groups[0]
+    return " + ".join(PurePosixPath(group).name for group in groups)
 
 
 def remote_dataset(api, db: Session, project_id: int,
