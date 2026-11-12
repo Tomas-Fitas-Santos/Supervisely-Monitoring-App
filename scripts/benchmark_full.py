@@ -142,16 +142,18 @@ def annotation(identifier):
     from annotatiathon.annotation_schema import ANNOTATION_CLASSES
 
     objects = []
-    for bird in range(3):
-        for title, shape, _, _ in ANNOTATION_CLASSES:
-            if title.endswith("_occ"):
-                continue
-            points = [[50 + bird * 250, 60], [200 + bird * 250, 220]]
-            if shape == "point":
-                points = points[:1]
-            objects.append({"id": identifier * 100 + len(objects), "classTitle": title,
-                            "geometryType": shape, "tags": [], "description": "",
-                            "points": {"exterior": points, "interior": []}})
+    # A structurally valid single-bird frame: exactly one box and one
+    # visible-or-occluded instance of each of the four anatomical landmarks.
+    # The earlier 3-bird fixture was always rejected by the real validator.
+    for title, shape, _, _ in ANNOTATION_CLASSES:
+        if title.endswith("_occ"):
+            continue
+        points = [[50, 60], [200, 220]]
+        if shape == "point":
+            points = points[:1]
+        objects.append({"id": identifier * 100 + len(objects), "classTitle": title,
+                        "geometryType": shape, "tags": [], "description": "",
+                        "points": {"exterior": points, "interior": []}})
     return {"description": "Synthetic bird annotations", "tags": [],
             "size": {"width": 1600, "height": 1200}, "objects": objects}
 
