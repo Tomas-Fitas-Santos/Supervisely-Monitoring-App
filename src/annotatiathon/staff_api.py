@@ -1,6 +1,7 @@
 """Authenticated staff-role editing, independent of the attendee roster."""
 import hashlib
 import secrets
+from collections import defaultdict
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
@@ -30,10 +31,11 @@ def list_approved_app_emails(
     db: Session = Depends(get_db),
 ):
     approvals = db.scalars(select(ApprovedStaffEmail).order_by(ApprovedStaffEmail.email)).all()
-    accounts = {
-        account.email: account
-        for account in db.scalars(select(StaffAccount)).all()
-    }
+    # Old installations may have preserved email capitalization. Count all
+    # case-folded candidates so an ambiguous duplicate can never look ready.
+    accounts = defaultdict(list)
+    for account in db.scalars(select(StaffAccount)).all():
+        accounts[account.email.strip().lower()].append(account)
     last_successful_login = dict(db.execute(
         select(AuditEvent.staff_id, func.max(AuditEvent.created_at))
         .where(AuditEvent.action == "staff.login", AuditEvent.staff_id.is_not(None))
@@ -42,7 +44,9 @@ def list_approved_app_emails(
     now = epoch()
     items = []
     for approval in approvals:
-        account = accounts.get(approval.email)
+        matches = accounts.get(approval.email.strip().lower(), [])
+        account = matches[0] if len(matches) == 1 else None
+        ambiguous_email = len(matches) > 1
         expected_roles = (
             ["admin", "organiser"] if approval.role == "admin" else ["organiser"]
         )
@@ -53,6 +57,8 @@ def list_approved_app_emails(
         )
         if not approval.enabled:
             issue = "access_disabled"
+        elif ambiguous_email:
+            issue = "duplicate_email_records"
         elif account is None:
             issue = "not_registered"
         elif not account.active:
@@ -67,7 +73,7 @@ def list_approved_app_emails(
             "email": approval.email,
             "role": approval.role,
             "enabled": approval.enabled,
-            "registered": account is not None,
+            "registered": bool(matches),
             "active": bool(account and account.active),
             "login_ready": can_sign_in,
             "login_issue": issue,
