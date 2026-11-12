@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type React from "react";
 import {
   CheckCircle2, ChevronRight, ClipboardCheck, PauseCircle, PlayCircle,
   RefreshCw, RotateCcw, ZoomIn, ZoomOut
@@ -21,11 +20,6 @@ type ReviewClaim={
 type QueueStatus={pending:number;active:number;completed:number;
   teams:{team_id:string;team_name:string;pending:number;active:number;completed:number}[]};
 type VerdictDraft={correct:boolean;reason:Reason|null;corrected_class:string};
-type Weights={
-  visible_keypoint:number;occluded_keypoint:number;box:number;
-  wrong_class:number;wrong_placement:number;sabotage:number;
-};
-type Rubric={version:number;weights:Weights};
 type Ranking={rank:number|null;team_id:string;team_name:string;
   correct_keypoints:number;correct_visible_keypoints:number;
   correct_occluded_keypoints:number;correct_boxes:number;correct_objects:number;
@@ -33,18 +27,6 @@ type Ranking={rank:number|null;team_id:string;team_name:string;
   estimated_points:number|null;average_frame_points:number|null;coverage_pct:number;
   submission_share_pct:number;review_share_pct:number;
   missing_objects:number;errors:Record<string,number>};
-const emptyWeights:Weights={
-  visible_keypoint:1,occluded_keypoint:3,box:1,
-  wrong_class:1,wrong_placement:2,sabotage:3
-};
-const fieldLabels:Record<keyof Weights,string>={
-  visible_keypoint:"Correct visible keypoint (+ points)",
-  occluded_keypoint:"Correct occluded keypoint (+ points)",
-  box:"Correct bird bounding box (+ points)",
-  wrong_class:"Wrong keypoint class (− points)",
-  wrong_placement:"Wrong keypoint placement (− points)",
-  sabotage:"Sabotage / no serious attempt (− points)"
-};
 const reasons:{value:Reason;label:string}[]=[
   {value:"wrong_class",label:"Wrong keypoint class"},
   {value:"wrong_placement",label:"Wrong keypoint placement"},
@@ -55,14 +37,11 @@ const isLeaseConflict=(error:unknown)=>/claim expired|not owned by this claim|al
   .test((error as Error).message||"");
 
 export function SharedReviewScreen({auth}:{auth:Auth}){
-  const organiser=auth.staff.roles.includes("organiser");
-  const [tab,setTab]=useState<"review"|"rankings"|"scoring">("review");
+  const [tab,setTab]=useState<"review"|"rankings">("review");
   const [claim,setClaim]=useState<ReviewClaim|null>(null);
   const activeClaimRef=useRef<ReviewClaim|null>(null);
   const [status,setStatus]=useState<QueueStatus|null>(null);
   const [rankings,setRankings]=useState<Ranking[]>([]);
-  const [rubric,setRubric]=useState<Rubric|null>(null);
-  const [weights,setWeights]=useState<Weights>(emptyWeights);
   const [verdicts,setVerdicts]=useState<Record<number,VerdictDraft>>({});
   const [missingClasses,setMissingClasses]=useState<string[]>([]);
   const [zoom,setZoom]=useState(1);
@@ -114,14 +93,6 @@ export function SharedReviewScreen({auth}:{auth:Auth}){
     },15000);
     return()=>window.clearInterval(interval);
   },[tab,refreshRankings]);
-  useEffect(()=>{
-    if(tab!=="scoring")return;
-    let active=true;
-    void api<Rubric>("/scoring/rubric").then(value=>{
-      if(active){setRubric(value);setWeights(value.weights);}
-    }).catch(e=>{if(active)setError((e as Error).message);});
-    return()=>{active=false;};
-  },[tab]);
 
   // Leases renew while the claimed frame remains on this browser.
   // If the browser closes unexpectedly, the backend reclaims it after expiry.
@@ -227,25 +198,12 @@ export function SharedReviewScreen({auth}:{auth:Auth}){
     finally{setBusy(false);}
   }
 
-  async function saveRubric(e:React.FormEvent){
-    e.preventDefault();
-    if(!organiser||busy)return;
-    setBusy(true);setError("");setNotice("");
-    try{
-      const result=await api<Rubric>("/scoring/rubric","PUT",weights,auth.csrf_token);
-      setRubric(result);setWeights(result.weights);
-      setNotice("Scoring rubric saved as version "+result.version+
-        ". The weighted quality metric is recalculated with this version.");
-    }catch(e){setError((e as Error).message);}
-    finally{setBusy(false);}
-  }
-
   const pointClasses=(claim?.classes||[]).filter(c=>c.shape==="point");
   return <div className="page-body shared-review-workspace">
     <div className="page-heading">
       <div><span className="eyebrow">EVENT OPERATIONS · SHARED QUALITY REVIEW</span>
         <h2>Monitoring & Review</h2>
-        <p className="muted">Every monitor draws randomly from the same pool of submitted frames. More submitted frames means more opportunities to earn verified correct-annotation points. Claims are exclusive.</p>
+        <p className="muted">Review allocation follows each team's share of submitted frames. Each monitor receives a random available frame from the selected team, with exclusive claims.</p>
       </div>
       <button className="btn secondary" disabled={busy}
         onClick={()=>{void refreshStatus();if(tab==="rankings")void refreshRankings();}}>
@@ -256,7 +214,6 @@ export function SharedReviewScreen({auth}:{auth:Auth}){
     <nav className="workspace-subtabs" aria-label="Monitoring workspaces">
       <button className={tab==="review"?"active":""} onClick={()=>setTab("review")}>Review frames</button>
       <button className={tab==="rankings"?"active":""} onClick={()=>setTab("rankings")}>Team rankings</button>
-      <button className={tab==="scoring"?"active":""} onClick={()=>setTab("scoring")}>Scoring rubric</button>
     </nav>
 
     {error&&<div className="alert danger" role="alert">{error}</div>}
@@ -394,15 +351,18 @@ export function SharedReviewScreen({auth}:{auth:Auth}){
 
     {tab==="rankings"&&<section className="panel shared-review-rankings">
       <div className="shared-review-grade-heading"><div>
-        <span className="eyebrow">EVENT RESULTS · WEIGHTED ANNOTATION POINTS</span>
+        <span className="eyebrow">EVENT RESULTS · ESTIMATED PRIZE POINTS</span>
         <h3>Team leaderboard</h3>
-        <p className="muted">Estimated points = eligible submitted frames × average review score (0–5).
-          Compare submission share with review share to check balance. Review share includes active claims.</p>
+        <p className="muted">Prize scoring counts up to five distinct correct anatomical labels per reviewed frame:
+          bird box, left eye, right eye, beak and crown. Visible and occluded variants each count as one.
+          Estimated points = eligible automatic-primary submitted frames × average reviewed prize points (0–5).
+          Incorrect labels earn zero; the legacy weighted quality rubric does not affect prize ranks.
+          Review allocation follows submission share, and frames are randomized within each team.</p>
       </div><button className="btn secondary" onClick={()=>void refreshRankings()}>
         <RefreshCw size={15}/> Update</button></div>
       <div className="table-scroll"><table className="data-table">
-        <thead><tr><th>Rank</th><th>Team</th><th>Visible points</th>
-          <th>Occluded points</th><th>Correct boxes</th><th>Correct annotations</th>
+        <thead><tr><th>Rank</th><th>Team</th><th>Correct visible keypoints</th>
+          <th>Correct occluded keypoints</th><th>Correct boxes</th><th>Raw correct annotations</th>
           <th>Reviewed / Submitted</th><th>Coverage</th><th>Submission share</th><th>Review share</th>
           <th>Average / 5</th><th>Errors (class / placement / sabotage)</th>
           <th>Estimated points</th></tr></thead>
@@ -425,28 +385,5 @@ export function SharedReviewScreen({auth}:{auth:Auth}){
         The estimated score becomes available after the first review.</p>
     </section>}
 
-    {tab==="scoring"&&<section className="panel shared-review-scoring">
-      <div className="shared-review-grade-heading"><div>
-        <span className="eyebrow">SCORING · VERSIONED RUBRIC</span>
-        <h3>Weighted quality settings</h3>
-        <p className="muted">Only event organisers (admins) can change scoring weights here.
-          All monitors can view them. Saved rubric versions apply uniformly to every
-          reviewed submission, including earlier completed reviews.</p>
-      </div><span className="soft-pill">Version {rubric?.version??"—"}</span></div>
-      <form className="form-stack" onSubmit={e=>void saveRubric(e)}>
-        <div className="shared-review-weights">
-          {(Object.keys(fieldLabels) as (keyof Weights)[]).map(key=><label key={key}>
-            {fieldLabels[key]}
-            <input type="number" required min={0} max={100} step={1}
-              disabled={!organiser||busy} value={weights[key]}
-              onChange={e=>setWeights(old=>({...old,[key]:Number(e.target.value)}))}/>
-          </label>)}
-        </div>
-        <p className="muted small">These weights apply to the separate quality metric.
-          The prize score uses one point each for the box and four landmarks.</p>
-        {organiser&&<button type="submit" className="btn primary" disabled={busy}>
-          Save scoring configuration</button>}
-      </form>
-    </section>}
   </div>;
 }
