@@ -155,9 +155,16 @@ def mirror_dataset(db: Session, api, config: SuperviselyConfig,
                 native_dataset_id=remote_ds.id, native_image_id=indexed[name],
             ))
             continue
-        path = (root / item.relative_path).resolve()
-        if not path.is_relative_to(root) or not path.is_file():
-            raise MirrorError("local_frame_missing")
+        if ds.upload_kind == "mounted":
+            from .mounted_datasets import media_file
+            try:
+                path = media_file(ds, item.relative_path)
+            except (OSError, HTTPException) as exc:
+                raise MirrorError("mounted_frame_missing") from exc
+        else:
+            path = (root / item.relative_path).resolve()
+            if not path.is_relative_to(root) or not path.is_file():
+                raise MirrorError("local_frame_missing")
         pending.append((item, name, str(path)))
     db.commit()
     for offset in range(0, len(pending), 24):
