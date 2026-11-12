@@ -59,7 +59,7 @@ def test_equal_current_round_frame_reviews_gate_final_closeout(dataset_ctx):
                 assignee_person_id=person.id, release_mode="shared_primary",
                 media_ids=[asset.id], frame_count=1, video_count=1,
                 morphology_counts={"bird": 1}, status="on_review",
-                annotation_snapshot_round=0,
+                annotation_snapshot_round=0, annotation_snapshot_frames=1,
             )
             db.add(job)
             db.flush()
@@ -104,3 +104,5 @@ def test_equal_current_round_frame_reviews_gate_final_closeout(dataset_ctx):
     coverage = successful.json()["report"]["review_fairness"]
     assert coverage["ready_for_winner"]
     assert coverage["reviewed_frames_per_team"] == 1
+    assert successful.json()["report"]["labeling"]["jobs_accepted"] == 3
+    assert successful.json()["report"]["labeling"]["jobs_needing_action"] == 0
