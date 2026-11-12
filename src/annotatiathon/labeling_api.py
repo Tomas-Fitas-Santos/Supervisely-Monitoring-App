@@ -216,7 +216,7 @@ def shared_source_readiness(
     if ds.status != "ready":
         issues.append("Local dataset import/indexing is not complete.")
     if total == 0:
-        issues.append("Dataset has no frames. Import source-video frames first.")
+        issues.append("Dataset has no imported frames.")
     unlinked = db.scalar(select(MediaAsset.relative_path).where(
         *scope, MediaAsset.video_id.is_(None),
     ).order_by(MediaAsset.relative_path).limit(1))
@@ -231,32 +231,30 @@ def shared_source_readiness(
     if missing_ordinal:
         issues.append(
             f"Frame '{missing_ordinal}' has no source-frame position. "
-            "Select Every source frame when importing."
+            "Imported frames must have a sortable position in their source video."
         )
     groups = db.execute(select(
         MediaAsset.video_id, func.count(MediaAsset.id),
-        func.min(MediaAsset.frame_index), func.max(MediaAsset.frame_index),
+        func.count(func.distinct(MediaAsset.frame_index)),
     ).where(*scope, MediaAsset.video_id.is_not(None))
       .group_by(MediaAsset.video_id)).all()
-    for video_id, count, first, last in groups:
+    # Sampled videos are supported: gaps in original frame numbers are
+    # intentional. Verify the *imported* frames have distinct, ordered
+    # positions; never insist on every original video frame being present.
+    for video_id, count, unique_positions in groups:
         video = videos.get(video_id)
         if video is None:
             issues.append(f"Frame group '{video_id}' refers to an unknown source video.")
             continue
-        if video.density not in {"full", "declared_full"}:
+        if count != video.frame_count:
             issues.append(
-                f"Video '{video.video_group}' is '{video.density}' rather than full-density."
+                f"Video '{video.video_group}' has {count} imported frames, "
+                f"but its dataset record declares {video.frame_count}."
             )
-        if video.identity_status != "complete":
+        if unique_positions != count:
             issues.append(
-                f"Video '{video.video_group}' has identity '{video.identity_status}' "
-                f"(missing source frames: {video.missing_frame_count})."
-            )
-        if (not count or first is None or last is None
-                or count != video.frame_count or last - first + 1 != count):
-            issues.append(
-                f"Video '{video.video_group}' has inconsistent frame counts or "
-                "nonconsecutive source positions."
+                f"Video '{video.video_group}' has missing or duplicate imported "
+                "frame positions."
             )
     from .native_media_pool import mirror_status
     mirror = mirror_status(db, ds) if ds.status == "ready" else None
@@ -341,30 +339,9 @@ def create_plan(
                     detail=(
                         f"Frame '{asset.relative_path}' is not linked to a source video. "
                         "For automatic 30-frame jobs, import dataset/species/video.mp4 "
-                        "or dataset/species/video-name/frame_000001.jpg (consecutive "
-                        "frames from one video). Mirroring to Supervisely alone does "
-                        "not establish video/frame identity."
-                    ),
-                )
-            if video.density not in {"full", "declared_full"}:
-                raise HTTPException(
-                    status_code=422,
-                    detail=(
-                        f"Video '{video.video_group}' has frame density "
-                        f"'{video.density}'. Shared 30-frame jobs require full "
-                        "source-frame density. Import the original video with "
-                        "'Every source frame', or provide an uninterrupted "
-                        "extracted-frame folder with that extraction setting."
-                    ),
-                )
-            if video.identity_status != "complete":
-                raise HTTPException(
-                    status_code=422,
-                    detail=(
-                        f"Video '{video.video_group}' has frame identity "
-                        f"'{video.identity_status}' (missing frames: "
-                        f"{video.missing_frame_count}). Supply consecutive "
-                        "source frames without gaps, or import the original video."
+                        "or dataset/species/video-name/frame_000001.jpg. "
+                        "Source frames may be intentionally sampled, but each "
+                        "imported frame must belong to a video."
                     ),
                 )
             if asset.frame_index is None:
@@ -373,32 +350,34 @@ def create_plan(
                     detail=(
                         f"Frame '{asset.relative_path}' in video "
                         f"'{video.video_group}' has no source-frame number. "
-                        "Reimport with full-density frame extraction or "
-                        "consecutive numbered source frames."
+                        "Imported frames need a sortable position; sampled "
+                        "frame numbers do not need to be consecutive."
                     ),
                 )
             by_video[video.id].append(asset)
 
-        # Official automatic distribution is one ordered stream: finish Video A,
-        # carry its remainder into Video B, and keep slicing at exactly 30 frames.
-        # Each frame retains its own immutable MediaAsset.video_id and ordinal.
+        # The ordered stream uses only the frames IN THE UPLOADED DATASET.
+        # Sampled frames may have any ascending original frame numbers.
+        # Never invent or require the omitted source-video frames.
         # Only the final dataset-wide block may contain fewer than 30 frames.
         stream: list[tuple[str, str]] = []
         for video_id in sorted(by_video, key=lambda vid: (videos[vid].video_group, vid)):
             source_frames = sorted(by_video[video_id], key=lambda asset: asset.frame_index)
-            first_index = source_frames[0].frame_index
-            if (len(source_frames) != videos[video_id].frame_count
-                    or any(asset.frame_index != first_index + index
-                           for index, asset in enumerate(source_frames))):
+            if len(source_frames) != videos[video_id].frame_count:
                 raise HTTPException(
                     status_code=422,
                     detail=(
                         f"Video '{videos[video_id].video_group}' contains "
-                        f"{len(source_frames)} indexed frames, but its metadata "
-                        f"declares {videos[video_id].frame_count}; its frame "
-                        "indices must also be consecutive. Correct the source "
-                        "frames before creating the shared queue."
+                        f"{len(source_frames)} imported frames, but its dataset "
+                        f"record declares {videos[video_id].frame_count}."
                     ),
+                )
+            if any(source_frames[index].frame_index == source_frames[index - 1].frame_index
+                   for index in range(1, len(source_frames))):
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Video '{videos[video_id].video_group}' has duplicate "
+                           "imported frame positions.",
                 )
             stream.extend((video_id, asset.id) for asset in source_frames)
 
