@@ -26,7 +26,8 @@ type Report={
     policy:string;
     teams:{team_id:string;team_name:string;reviewed_frames:number;available_frames:number}[];
   };
-  closeout_readiness:{ready:boolean;blocking_jobs:number;verified_reviews_available:boolean;message:string};
+  closeout_readiness:{ready:boolean;blocking_jobs:number;unfinished_unscored_jobs:number;
+    verified_reviews_available:boolean;message:string};
   ticket_totals:Record<string,number>;generated_at:number;
 };
 export function CloseoutScreen({auth}:{auth:Auth}) {
@@ -227,7 +228,10 @@ export function CloseoutScreen({auth}:{auth:Auth}) {
         {!report.closeout_readiness.ready?<div className="advisory"><ShieldAlert size={18}/>
           {report.closeout_readiness.message}</div>:
           <div className="settings-note"><CheckCircle2 size={17}/>
-            <p>All required job submissions are captured and verified annotation reviews exist.
+            <p>Completed submissions have their annotation JSON captured and some reviews are verified.
+              {report.closeout_readiness.unfinished_unscored_jobs>0?
+                " "+report.closeout_readiness.unfinished_unscored_jobs+
+                " unfinished jobs remain unscored.":""}
               Equal reviewed-frame counts are not required for finalisation.</p></div>}
         <label>Type <strong>{phrase}</strong> to confirm
           <input value={confirmation} onChange={e=>setConfirmation(e.target.value)}
