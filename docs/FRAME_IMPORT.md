@@ -52,14 +52,17 @@ These measurements exclude network transport, browser rendering and the
 Supervisely worker; the original full-stack benchmark used a different
 request path. The migration retained all 6,240 jobs and cached 87 snapshots.
 
-The current worker still publishes the existing job format. The new 30-frame
-splitter and repeat selector are ready for the later queue and do not publish
-anything by themselves.
+The official automatic queue now publishes consecutive 30-frame jobs from a
+deterministic dataset-wide video stream. When a video ends before the next
+30-frame boundary, that job continues with the beginning of the following
+video. Every frame keeps its own original video ID, source ordinal and
+annotation provenance. The last job of the entire dataset may be shorter
+than 30 frames; its exact frame count is used for completion checks.
+Manual assignment remains single-video 30-frame selection.
 
-Before wiring the queue to Supervisely, use a disposable workspace and two
-test annotators. Verify which per-image signals distinguish untouched, saved
-partial, individually confirmed, confirmed empty and submitted images in a
-30-image job. Verify that two copies of the same source image have separate
-native IDs and independent annotations. Finally, stop one disposable job
-and check whether saved annotations remain readable and whether editing
-is blocked. Keep credentials in the app settings.
+Before launching real distribution, use a disposable Supervisely workspace
+and two real annotator accounts. Verify that native jobs can include source
+images from two videos, that returning an incomplete job preserves its
+annotations, and that the worker retrieves only the latest complete job's
+annotation JSON. Rehearse the short final job separately and confirm
+published/restarted jobs retain the correct source mappings.
