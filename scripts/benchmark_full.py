@@ -183,6 +183,7 @@ def simulate():
     rng = random.Random(20261110)
     state = {"started": None, "latency": .05, "fail_rate": 0.0,
              "profile_scale": 1.0, "timeout_rate": 0.0, "timeouts": 0,
+             "assumed_publish_ms": 1000,
              "calls": Counter(), "failures": 0, "unhandled": [], "published": 0,
              "binary_upload_bytes": 0, "binary_upload_files": 0}
     remote_datasets = set(range(ANNOTATORS if UPLOAD else ANNOTATORS * 2))
@@ -270,6 +271,8 @@ def simulate():
         state["fail_rate"] = body.get("fail_rate", 0)
         state["profile_scale"] = max(.1, min(10.0, float(body.get("profile_scale", 1))))
         state["timeout_rate"] = max(0.0, min(.25, float(body.get("timeout_rate", 0))))
+        state["assumed_publish_ms"] = max(100, min(20000,
+            float(body.get("assumed_publish_ms", 1000))))
         state["started"] = time.monotonic()
         state["started_unix_ms"] = round(time.time() * 1000)
         state["burst"] = body.get("burst", False)
@@ -297,6 +300,10 @@ def simulate():
                 seconds = rng.uniform(p50, p95) / 1000
             else:
                 seconds = rng.uniform(p95, p99 * 1.25) / 1000
+        elif category == "publish":
+            # No live writes are made during real read-only calibration.
+            # Publish duration is an EXPLICIT model assumption, not a sample.
+            seconds = state["assumed_publish_ms"] / 1000 * rng.uniform(.6, 1.5)
         else:
             seconds = state["latency"] * rng.uniform(.5, 1.5)
         await asyncio.sleep(min(30.0, seconds * state["profile_scale"]))
@@ -537,7 +544,8 @@ def profile_queries():
     print(json.dumps(result), flush=True)
 
 
-def load(seconds, latency, fail_rate, profile_scale=1.0, timeout_rate=0.0):
+def load(seconds, latency, fail_rate, profile_scale=1.0, timeout_rate=0.0,
+         assumed_publish_ms=1000):
     context = ssl.create_default_context(cafile=str(DATA / "tls/ca.pem"))
     records = []
     lock = threading.Lock()
@@ -576,6 +584,7 @@ def load(seconds, latency, fail_rate, profile_scale=1.0, timeout_rate=0.0):
         control.post("https://supervisely-sim/control/start",
                      json={"latency": latency, "fail_rate": fail_rate,
                            "profile_scale": profile_scale, "timeout_rate": timeout_rate,
+                           "assumed_publish_ms": assumed_publish_ms,
                            "burst": os.environ.get("BENCHMARK_BURST") == "1"}).raise_for_status()
     deadline = time.monotonic() + seconds
 
@@ -666,6 +675,7 @@ def load(seconds, latency, fail_rate, profile_scale=1.0, timeout_rate=0.0):
         "latency_seconds": latency, "failure_rate": fail_rate,
         "profile_mode": bool(PROFILE_PATH), "profile_scale": profile_scale,
         "timeout_rate": timeout_rate,
+        "publish_latency_ms_is_assumed_not_measured": assumed_publish_ms,
         "requests": len(records), "status_counts": dict(Counter(str(item["status"]) for item in records)),
         "p95_ms": latencies[int(len(latencies) * .95)] if latencies else None,
         "p99_ms": latencies[int(len(latencies) * .99)] if latencies else None,
@@ -729,6 +739,7 @@ def main():
     parser.add_argument("--fail-rate", type=float, default=0)
     parser.add_argument("--profile-scale", type=float, default=1.0)
     parser.add_argument("--timeout-rate", type=float, default=0.0)
+    parser.add_argument("--assumed-publish-ms", type=int, default=1000)
     args = parser.parse_args()
     if args.mode == "seed":
         seed(args.frames)
@@ -736,7 +747,7 @@ def main():
         simulate()
     elif args.mode == "load":
         load(args.seconds, args.latency, args.fail_rate,
-             args.profile_scale, args.timeout_rate)
+             args.profile_scale, args.timeout_rate, args.assumed_publish_ms)
     elif args.mode == "profile":
         profile_queries()
     elif args.mode == "history":
