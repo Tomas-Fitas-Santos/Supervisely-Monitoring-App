@@ -30,12 +30,11 @@ nothing; the computer running Docker Desktop must stay powered on.
   that option has produced plain 401 responses on login POST requests:
   https://github.com/cloudflare/cloudflared/issues/1752
 - This makes the *login page* publicly accessible to anyone with the
-  temporary tunnel URL. Account access still requires real credentials or
-  an approved roster email and a Nightjar password. **The app does not verify
-  control of the entered email:** someone who knows an unclaimed roster email
-  could claim that account first. Use only a trusted, small test audience,
-  non-sensitive data and a short tunnel session. For the official event, add
-  an organiser-issued one-time invite code or another ownership check.
+  temporary tunnel URL. Account access requires real credentials or an
+  approved monitor roster email, a private organiser-issued single-use
+  registration code, and an app password. This code must be delivered privately;
+  it is not proof of email ownership. Use only authorised users and test data,
+  and verify stable HTTPS hosting before the official event.
 - No ports or port-forwarding need to be opened in your router. The URL is
   temporary and stops working when `cloudflared` exits.
 
