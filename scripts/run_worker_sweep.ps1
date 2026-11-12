@@ -152,6 +152,20 @@ try {
       Write-Host "Starting isolated benchmark: $Phase, $count publisher(s), $Validators validator(s), $Correctors corrector(s), $StatusWorkers status worker(s), $Scenario, $Seconds seconds"
       & docker @compose up -d --no-build --scale "worker=$count" --scale "validation-worker=$Validators" --scale "correction-worker=$Correctors" --scale "status-worker=$StatusWorkers" web worker status-worker validation-worker correction-worker recovery-worker bulk-worker
       if ($LASTEXITCODE -ne 0) { throw "Benchmark environment failed to start." }
+      # A capacity comparison is invalid if Compose silently starts fewer
+      # replicas than requested. Confirm the actual live role counts.
+      foreach ($role in @(
+        @{ Name = "worker"; Expected = $count },
+        @{ Name = "validation-worker"; Expected = $Validators },
+        @{ Name = "correction-worker"; Expected = $Correctors },
+        @{ Name = "status-worker"; Expected = $StatusWorkers }
+      )) {
+        $actual = @(& docker ps --filter "label=com.docker.compose.project=$project" --filter "label=com.docker.compose.service=$($role.Name)" --format '{{.ID}}') | Where-Object { $_ }
+        if ($actual.Count -ne $role.Expected) {
+          throw "Expected $($role.Expected) running $($role.Name) containers, found $($actual.Count). Capacity data would be invalid."
+        }
+      }
+
       $invariant = [System.Globalization.CultureInfo]::InvariantCulture
       $latencyArg = $FallbackLatency.ToString($invariant)
       $failureArg = $FailureRate.ToString($invariant)
