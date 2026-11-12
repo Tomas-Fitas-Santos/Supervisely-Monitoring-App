@@ -42,6 +42,11 @@ def main() -> None:
     )
     resolve.add_argument("--obsolete-email", required=True)
     resolve.add_argument("--keep-email", required=True)
+    resolve.add_argument(
+        "--reconcile-kept-access", action="store_true",
+        help="Explicitly activate the corrected existing Organiser account and reconcile its role "
+             "with the approved staff role; never automatically grant Admin",
+    )
     reset = cmd.add_parser(
         "reset-password",
         help="Securely reset an existing staff password and revoke sessions",
@@ -103,15 +108,38 @@ def main() -> None:
             expected_roles = (
                 ["admin", "organiser"] if old_approval.role == "admin" else ["organiser"]
             )
-            if target.roles != expected_roles or not target.active:
+            must_reconcile = target.roles != expected_roles or not target.active
+            if must_reconcile and not args.reconcile_kept_access:
                 parser.error(
-                    "Corrected account roles or active status do not match the approved role; "
-                    "review accounts before making changes."
+                    "Corrected account roles or active status do not match the approved role "
+                    "(current roles: " + ", ".join(target.roles or []) +
+                    "; active: " + str(target.active) + "). "
+                    "To retain this account and explicitly give it the approved Organiser role, "
+                    "rerun with --reconcile-kept-access. No changes made."
                 )
-            if previous and previous[0].roles != expected_roles:
+            if must_reconcile and old_approval.role != "organiser":
                 parser.error(
-                    "Obsolete account has unexpected roles; review before retiring its access."
+                    "Cannot automatically reconcile an Admin account. Review approvals first."
                 )
+            if "admin" in target.roles and old_approval.role != "admin":
+                parser.error("Corrected account has Admin privilege; refusing to demote it.")
+            if previous and "admin" in previous[0].roles and old_approval.role != "admin":
+                parser.error("Obsolete account has Admin privilege; refusing to retire it.")
+            if previous and previous[0].roles != expected_roles and not args.reconcile_kept_access:
+                parser.error(
+                    "Obsolete account has unexpected roles; rerun with "
+                    "--reconcile-kept-access only after verifying the two emails."
+                )
+            kept_roles_before = list(target.roles)
+            kept_active_before = target.active
+            if must_reconcile:
+                target.roles = expected_roles
+                target.active = True
+                target.login_failures = 0
+                target.locked_until = None
+                db.execute(delete(StaffSession).where(
+                    StaffSession.staff_id == target.id,
+                ))
             if keep_approval is None:
                 db.add(ApprovedStaffEmail(
                     email=keep_email, role=old_approval.role,
@@ -129,7 +157,11 @@ def main() -> None:
                 details={
                     "obsolete_email": obsolete_email,
                     "kept_email": keep_email,
-                    "roles_preserved": True,
+                    "roles_preserved": not must_reconcile,
+                    "approved_role_applied": must_reconcile,
+                    "kept_prior_roles": kept_roles_before,
+                    "kept_prior_active": kept_active_before,
+                    "kept_sessions_revoked": must_reconcile,
                     "password_preserved": True,
                     "obsolete_account_disabled": bool(previous),
                     "obsolete_sessions_revoked": bool(previous),
@@ -138,7 +170,12 @@ def main() -> None:
             ))
         print("Corrected staff account kept:", keep_email)
         print("Obsolete email access disabled:", obsolete_email)
-        print("Kept account ID, password and role unchanged; accounts were not merged.")
+        if must_reconcile:
+            print("Corrected account activated and role reconciled:", ", ".join(expected_roles))
+            print("Corrected account sessions revoked; existing password and ID preserved.")
+        else:
+            print("Kept account ID, password and role unchanged.")
+        print("Accounts were not merged; obsolete account retained but disabled.")
         print("Use the corrected email and its existing Nightjar password to sign in.")
         return
     if args.action == "change-staff-email":
