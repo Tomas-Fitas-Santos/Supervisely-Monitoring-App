@@ -40,7 +40,7 @@
 | Timing | Per-image active annotation duration not exposed by native SDK | Show “unavailable” rather than a fabricated duration; report only verified native statistics |
 | Event | Activities scheduled outside event dates or at ambiguous Lisbon DST transitions | Test organiser create/edit/move-window, archive, and different local timezones |
 | Role safety | Monitors discover organiser-only routes by directly calling the API | 403 on roster import, role edits, resets, destructive actions and scoring-rule changes |
-| Closeout | Event archived with unfinished native jobs, missing review coverage, or incomplete export | Agree acceptance gate before final export; backup and test restore; do not force-clear history |
+| Closeout | Event blocked by unfinished participant jobs or finalized before complete submissions have annotation JSON | Unsubmitted/returned incomplete jobs earn zero and do not block; completed native submissions must have all current-round JSON frames mirrored, and at least one frame review must be verified |
 | Hosting | Cloudflare Quick Tunnel disconnects mid-event; local PC sleeps; Wi-Fi saturation | Use stable HTTPS, device uptime, backups, disk monitoring and full-event stress rehearsal |
 | UI | Internal roster scroll regresses or reviewer zoom is slow at full resolution | Test 1920×1080 and laptop widths; verify full-width frame and annotation selection |
 
