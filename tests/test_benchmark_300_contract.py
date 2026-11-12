@@ -22,3 +22,22 @@ def test_300_person_simulator_defaults_and_valid_frame_shape():
     assert len(objects) == 5
     assert sum(item["geometryType"] == "rectangle" for item in objects) == 1
     assert sum(item["geometryType"] == "point" for item in objects) == 4
+
+
+def test_worker_resource_analyzer_distinguishes_status_validation_and_publishers():
+    script = Path(__file__).resolve().parents[1] / "scripts" / "analyze_full_benchmark.py"
+    spec = importlib.util.spec_from_file_location("nightjar_benchmark_analyzer", script)
+    assert spec is not None and spec.loader is not None
+    analyzer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(analyzer)
+    names = {
+        "nightjar-bench-300-test-p2-v2-status-worker-1": "status-worker",
+        "nightjar-bench-300-test-p2-v2-validation-worker-2": "validation-worker",
+        "nightjar-bench-300-test-p2-v2-worker-1": "worker",
+        "nightjar-bench-300-test-p2-v2-recovery-worker-1": "recovery-worker",
+        "nightjar-bench-300-test-p2-v2-bulk-worker-1": "bulk-worker",
+        "nightjar-bench-300-test-p2-v2-api-1": "api",
+        "nightjar-bench-300-test-p2-v2-db-1": "db",
+    }
+    for container, expected in names.items():
+        assert analyzer.service_name(container) == expected
