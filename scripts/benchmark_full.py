@@ -370,8 +370,8 @@ def simulate():
         if method == "jobs.list":
             index = next((item["value"] - 2000 for item in body.get("filter", [])
                           if item["field"] == "datasetId"), None)
-            items = [job(index)] if index is not None and index < ANNOTATORS
-                     and index in submitted_times else []
+            items = ([job(index)] if index is not None and index < ANNOTATORS
+                     and index in submitted_times else [])
             items.extend(created_job(record) for record in created_jobs.values()
                          if index is None or record["dataset_id"] == 2000 + index)
             return page(items, body)
