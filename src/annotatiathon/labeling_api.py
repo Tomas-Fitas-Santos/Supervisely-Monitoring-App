@@ -247,11 +247,47 @@ def create_plan(
         by_video: dict[str, list[MediaAsset]] = defaultdict(list)
         for asset in assets:
             video = videos.get(asset.video_id)
-            if (not video or video.density not in {"full", "declared_full"}
-                    or video.identity_status != "complete" or asset.frame_index is None):
+            if not video:
                 raise HTTPException(
                     status_code=422,
-                    detail="Shared queue requires complete source-frame identity and full-density footage.",
+                    detail=(
+                        f"Frame '{asset.relative_path}' is not linked to a source video. "
+                        "For automatic 30-frame jobs, import dataset/species/video.mp4 "
+                        "or dataset/species/video-name/frame_000001.jpg (consecutive "
+                        "frames from one video). Mirroring to Supervisely alone does "
+                        "not establish video/frame identity."
+                    ),
+                )
+            if video.density not in {"full", "declared_full"}:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"Video '{video.video_group}' has frame density "
+                        f"'{video.density}'. Shared 30-frame jobs require full "
+                        "source-frame density. Import the original video with "
+                        "'Every source frame', or provide an uninterrupted "
+                        "extracted-frame folder with that extraction setting."
+                    ),
+                )
+            if video.identity_status != "complete":
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"Video '{video.video_group}' has frame identity "
+                        f"'{video.identity_status}' (missing frames: "
+                        f"{video.missing_frame_count}). Supply consecutive "
+                        "source frames without gaps, or import the original video."
+                    ),
+                )
+            if asset.frame_index is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"Frame '{asset.relative_path}' in video "
+                        f"'{video.video_group}' has no source-frame number. "
+                        "Reimport with full-density frame extraction or "
+                        "consecutive numbered source frames."
+                    ),
                 )
             by_video[video.id].append(asset)
 
@@ -268,7 +304,13 @@ def create_plan(
                            for index, asset in enumerate(source_frames))):
                 raise HTTPException(
                     status_code=422,
-                    detail="Shared queue requires a gap-free, fully imported source video.",
+                    detail=(
+                        f"Video '{videos[video_id].video_group}' contains "
+                        f"{len(source_frames)} indexed frames, but its metadata "
+                        f"declares {videos[video_id].frame_count}; its frame "
+                        "indices must also be consecutive. Correct the source "
+                        "frames before creating the shared queue."
+                    ),
                 )
             stream.extend((video_id, asset.id) for asset in source_frames)
 
