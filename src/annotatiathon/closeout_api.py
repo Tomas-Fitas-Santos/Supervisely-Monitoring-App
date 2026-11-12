@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from .auth import AuthContext, requires
 from .db import get_db
 from .events_api import current_event
+from .scoring_api import correct_point_types
 from .models import (
     AuditEvent,
     CompetitionTeam,
@@ -332,7 +333,8 @@ def export_rows(db: Session, event_id: str, section: str) -> tuple[list[str], li
         headers = [
             "job_id", "team_id", "media_id", "correction_round",
             "latest_round", "reviewer_id", "reviewed_at",
-            "correct_keypoints", "correct_boxes", "weighted_score_at_review",
+            "correct_keypoints", "correct_visible_keypoints",
+            "correct_occluded_keypoints", "correct_boxes", "weighted_score_at_review",
             "incorrect_reasons_json", "missing_classes_json",
             "verdicts_json", "source_snapshot_sha256",
         ]
@@ -349,14 +351,16 @@ def export_rows(db: Session, event_id: str, section: str) -> tuple[list[str], li
         for sample in samples:
             decision = sample.decision if sample.completed_at is not None else None
             decision = decision if isinstance(decision, dict) else {}
+            visible, occluded = correct_point_types(decision, sample.snapshot)
             rows.append([
                 sample.job_id, sample.team_id, sample.media_id,
                 sample.correction_round,
                 sample.correction_round == rounds.get(sample.job_id),
                 sample.reviewer_id if sample.completed_at else None,
                 sample.completed_at,
-                decision.get("correct_keypoints"), decision.get("correct_boxes"),
-                decision.get("weighted_score"),
+                decision.get("correct_keypoints"),
+                visible if decision else None, occluded if decision else None,
+                decision.get("correct_boxes"), decision.get("weighted_score"),
                 json.dumps(decision.get("errors", {}), ensure_ascii=False),
                 json.dumps(decision.get("missing_classes", []), ensure_ascii=False),
                 json.dumps(decision.get("verdicts", []), ensure_ascii=False),
