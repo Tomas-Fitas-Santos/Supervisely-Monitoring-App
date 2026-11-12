@@ -1,4 +1,4 @@
-"""Official competition closeout needs fully captured submissions and fair reviews."""
+"""Official closeout allows unequal random-review coverage; scores only reviewed annotations."""
 
 from sqlalchemy import select
 from test_dataset_workflows import act, teams
@@ -19,7 +19,7 @@ from annotatiathon.models import (
 dataset_ctx = __import__("test_dataset_workflows").ctx
 
 
-def test_equal_current_round_frame_reviews_gate_final_closeout(dataset_ctx):
+def test_unequal_current_round_frame_reviews_allow_final_closeout(dataset_ctx):
     client, maker, csrf = dataset_ctx
     teams(client, csrf)
     with maker.begin() as db:
@@ -77,21 +77,9 @@ def test_equal_current_round_frame_reviews_gate_final_closeout(dataset_ctx):
     with maker() as db:
         fairness = frame_review_fairness(db, DEFAULT_EVENT_ID)
         assert sorted(x["reviewed_frames"] for x in fairness["teams"]) == [0, 1, 1]
-        assert not fairness["ready_for_winner"]
-        assert sum(x["additional_reviews_needed"] for x in
-                   fairness["frames_to_equalize"]) == 1
-    denied = act(client, csrf, "/closeout/finalize", {
-        "confirmation": "CLOSE Initial Event",
-    })
-    assert denied.status_code == 409
-    assert "same positive number" in denied.json()["detail"]
-    with maker.begin() as db:
-        item = db.scalar(select(ReviewSample).where(
-            ReviewSample.completed_at.is_(None),
-        ))
-        item.completed_at = 500
-        item.decision = {"correct_boxes": 1, "correct_keypoints": 0,
-                         "errors": {}, "missing_classes": [], "weighted_score": 1}
+        assert fairness["ready_for_winner"]
+        assert fairness["total_reviewed_frames"] == 2
+        assert fairness["total_available_frames"] == 3
     successful = act(client, csrf, "/closeout/finalize", {
         "confirmation": "CLOSE Initial Event",
     })
@@ -103,6 +91,7 @@ def test_equal_current_round_frame_reviews_gate_final_closeout(dataset_ctx):
     assert len(export.text.splitlines()) >= 4
     coverage = successful.json()["report"]["review_fairness"]
     assert coverage["ready_for_winner"]
-    assert coverage["reviewed_frames_per_team"] == 1
+    assert coverage["total_reviewed_frames"] == 2
+    assert sorted(item["reviewed_frames"] for item in coverage["teams"]) == [0, 1, 1]
     assert successful.json()["report"]["labeling"]["jobs_accepted"] == 3
     assert successful.json()["report"]["labeling"]["jobs_needing_action"] == 0
