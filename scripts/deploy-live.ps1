@@ -36,6 +36,14 @@ try {
   & docker compose @compose config --quiet
   Check-LastExit "Compose configuration validation"
 
+  # Remember whether the native worker was active before deployment. Previously
+  # this script ALWAYS stopped it and silently left it stopped unless the
+  # organiser passed -StartWorker, stranding queued dataset mirrors.
+  $workerWasRunning = $false
+  $runningWorkerIds = @(& docker compose @compose --profile native ps --status running -q worker)
+  Check-LastExit "Checking current Supervisely worker state"
+  $workerWasRunning = @($runningWorkerIds | Where-Object { $_ }).Count -gt 0
+
   # Pause native writes before the consistent PostgreSQL backup and upgrade.
   & docker compose @compose --profile native stop worker api web
   Check-LastExit "Stopping web/API/native worker"
@@ -76,15 +84,20 @@ try {
   Write-Host ""
   Write-Host "Nightjar web/API is healthy on port 8080."
 
-  if ($StartWorker) {
-    # Use only after the organiser has verified the native team/workspace
-    # integration token and intended Supervisely target in Settings.
+  if ($StartWorker -or $workerWasRunning) {
+    # Preserve the pre-deployment running state, or start explicitly after the
+    # organiser has verified the integration. Do not silently disable queued
+    # pre-event media mirroring during otherwise successful deployments.
     & docker compose @compose --profile native up -d --build worker
     Check-LastExit "Starting Supervisely worker"
-    Write-Host "Native worker started."
+    & docker compose @compose --profile native ps --status running -q worker
+    Check-LastExit "Checking restarted Supervisely worker"
+    Write-Host "Native worker started; pending dataset replication will resume automatically."
   }
   else {
-    Write-Host "Native worker remains stopped. Re-run with -StartWorker after verifying live Supervisely Settings."
+    Write-Host "Native worker was not running before this deployment and remains stopped."
+    Write-Host "After verifying Supervisely Team ID and Workspace ID in Settings, run:"
+    Write-Host "docker compose --env-file .env.live -f compose.live.yaml --profile native up -d --build worker"
   }
 }
 finally {
