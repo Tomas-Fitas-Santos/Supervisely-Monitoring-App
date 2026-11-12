@@ -117,7 +117,7 @@ export function DatasetScreen({auth}:{auth:Auth}) {
       validateDatasetSources(files,mode);
       created=await api<Dataset>("/datasets/uploads","POST",{
         name:name.trim()||(mode==="folder"?
-          files[0].webkitRelativePath.split("/")[0]:
+          (files[0].webkitRelativePath.split("/")[0]||files[0].name):
           files[0].name.replace(/\.zip$/i,"")),
         upload_kind:mode,extraction_policy:extractionPolicy
       },auth.csrf_token);
