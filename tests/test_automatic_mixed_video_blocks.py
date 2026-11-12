@@ -2,7 +2,6 @@
 from types import SimpleNamespace
 
 from sqlalchemy import select
-
 from test_dataset_workflows import act, teams
 
 from annotatiathon.models import (
