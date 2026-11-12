@@ -18,6 +18,7 @@ x-runtime: &runtime
     SSL_CERT_FILE: /data/tls/ca.pem
     PYTHONUNBUFFERED: "1"
     PYTHONPATH: /bench
+    NIGHTJAR_WORKER_TIMING_FILE: /data/results/worker-timing.jsonl
     BENCHMARK_FRAMES: ${BENCHMARK_FRAMES:-30}
     BENCHMARK_ANNOTATORS: ${BENCHMARK_ANNOTATORS:-300}
     BENCHMARK_MONITORS: ${BENCHMARK_MONITORS:-12}
@@ -77,9 +78,6 @@ services:
   # the old worker duplicated polling and snapshot activity.
   worker:
     <<: *runtime
-    environment:
-      <<: *environment
-      NIGHTJAR_WORKER_TIMING_FILE: /data/results/worker-publish.jsonl
     command: [python, -m, annotatiathon.native_worker, --loop, --role, publish, --poll-seconds, "12"]
     cpus: 0.75
     mem_limit: 768m
