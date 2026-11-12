@@ -239,7 +239,7 @@ export function SharedReviewScreen({auth}:{auth:Auth}){
     <div className="page-heading">
       <div><span className="eyebrow">EVENT OPERATIONS · SHARED QUALITY REVIEW</span>
         <h2>Monitoring & Review</h2>
-        <p className="muted">Every monitor reviews from the same fair queue. Frame claims are exclusive; no team assignment is required.</p>
+        <p className="muted">Every monitor draws randomly from the same pool of submitted frames. More submitted frames means more opportunities to earn verified correct-annotation points. Claims are exclusive.</p>
       </div>
       <button className="btn secondary" disabled={busy}
         onClick={()=>{void refreshStatus();if(tab==="rankings")void refreshRankings();}}>
@@ -266,12 +266,12 @@ export function SharedReviewScreen({auth}:{auth:Auth}){
         <section className="panel shared-review-empty">
           <ClipboardCheck size={35}/>
           <h3>{paused?"Reviewing paused":"Ready to review a frame?"}</h3>
-          <p className="muted">Choose the next available frame from a team with the fewest completed and active reviews.
-            Ties and frames within that team are selected randomly.</p>
+          <p className="muted">Choose a random eligible frame from all submitted jobs, regardless of team.
+            Frames already claimed by another monitor are excluded.</p>
           <button className="btn primary large" disabled={busy} onClick={()=>void claimNext()}>
             <PlayCircle size={18}/>{busy?"Claiming…":paused?"Resume · Next frame":"Get next frame"}
           </button>
-          <p className="muted small">The worker queues individual frames from submitted jobs, including independent repeats. Reviews are assigned across teams fairly.</p>
+          <p className="muted small">The worker queues every frame from complete submitted jobs. Random pool selection lets teams with more submitted frames receive more reviews without any equal-team quota.</p>
         </section>:
         <>
           <section className="shared-review-frame-heading">
