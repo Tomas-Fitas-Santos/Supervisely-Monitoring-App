@@ -166,3 +166,127 @@ def test_admin_only_approved_email_list_and_no_legacy_registration(setup, monkey
     assert by_email["owner@example.org"]["role"] == "admin"
     assert by_email["coadmin@example.org"]["registered"] is False
     assert by_email["organiser@example.org"]["role"] == "organiser"
+
+
+
+def test_nine_approved_staff_can_register_or_sign_in_and_admin_sees_proof(setup):
+    """Seven active staff logins + two first-time registrations; no real emails/passwords."""
+    http, maker = setup
+    password = "LocalTestPassword!2026"
+    admins = ["owner@example.org", "coadmin@example.org"]
+    organisers = [f"organiser{n}@example.org" for n in range(1, 8)]
+    expected = {
+        **{email: ["admin", "organiser"] for email in admins},
+        **{email: ["organiser"] for email in organisers},
+    }
+    with maker.begin() as db:
+        for email in admins + organisers:
+            db.add(ApprovedStaffEmail(
+                email=email,
+                role="admin" if email in admins else "organiser",
+                enabled=True,
+            ))
+        # Seven registered accounts: 2 admins and five organisers.
+        for email in [admins[1], *organisers[:5]]:
+            db.add(StaffAccount(
+                email=email, name=email.split("@")[0],
+                roles=expected[email], active=True,
+                password_hash=password_hash(password),
+            ))
+        owner = db.scalar(select(StaffAccount).where(
+            StaffAccount.email == admins[0],
+        ))
+        owner.roles = expected[admins[0]]
+        owner.active = True
+
+    for email in [admins[0], admins[1], *organisers[:5]]:
+        secret = "ExistingSecretPhrase123" if email == admins[0] else password
+        result = http.post("/api/v1/auth/login", json={
+            "email": email, "password": secret,
+        })
+        assert result.status_code == 200, (email, result.text)
+        assert result.json()["staff"]["roles"] == expected[email]
+        me = http.get("/api/v1/auth/me")
+        assert me.status_code == 200
+        assert me.json()["staff"]["email"] == email
+        # An organiser account is valid but cannot see the admin-only approval list.
+        if email in organisers:
+            assert http.get("/api/v1/staff/approved").status_code == 403
+
+    # Only staff with Admin privileges may see all nine approval statuses.
+    admin_login = http.post("/api/v1/auth/login", json={
+        "email": admins[0], "password": "ExistingSecretPhrase123",
+    })
+    assert admin_login.status_code == 200
+    records = {
+        row["email"]: row for row in http.get("/api/v1/staff/approved").json()["items"]
+    }
+    assert len(records) == 9
+    assert sum(bool(v["login_ready"]) for v in records.values()) == 7
+    assert sum(v["last_login_at"] is not None for v in records.values()) == 7
+    for email in organisers[5:]:
+        assert records[email]["login_issue"] == "not_registered"
+        assert records[email]["last_login_at"] is None
+
+    for email in organisers[5:]:
+        created = http.post("/api/v1/auth/setup/register", json={
+            "email": email, "name": "New Organiser", "password": password,
+        })
+        assert created.status_code == 201, (email, created.text)
+        signed_in = http.post("/api/v1/auth/login", json={
+            "email": email, "password": password,
+        })
+        assert signed_in.status_code == 200, (email, signed_in.text)
+        assert signed_in.json()["staff"]["roles"] == ["organiser"]
+        assert http.get("/api/v1/auth/me").status_code == 200
+
+    http.post("/api/v1/auth/login", json={
+        "email": admins[0], "password": "ExistingSecretPhrase123",
+    })
+    after = {
+        row["email"]: row for row in http.get("/api/v1/staff/approved").json()["items"]
+    }
+    assert sum(v["login_ready"] for v in after.values()) == 9
+    assert all(v["last_login_at"] is not None for v in after.values())
+
+
+def test_staff_access_readiness_reports_lockout_and_role_mismatch(setup):
+    http, maker = setup
+    import time
+
+    with maker.begin() as db:
+        db.add(ApprovedStaffEmail(email="owner@example.org", role="admin", enabled=True))
+        db.add(ApprovedStaffEmail(email="locked@example.org", role="organiser", enabled=True))
+        db.add(ApprovedStaffEmail(email="mismatch@example.org", role="organiser", enabled=True))
+        db.add(StaffAccount(
+            email="locked@example.org", name="Locked",
+            password_hash=password_hash("LockedAccountPassword2026"),
+            roles=["organiser"], locked_until=int(time.time()) + 900,
+        ))
+        db.add(StaffAccount(
+            email="mismatch@example.org", name="Wrong Role",
+            password_hash=password_hash("MismatchPassword2026"),
+            roles=["monitor"],
+        ))
+        owner = db.scalar(select(StaffAccount).where(
+            StaffAccount.email == "owner@example.org",
+        ))
+        owner.active = True
+        owner.roles = ["admin", "organiser"]
+
+    assert http.post("/api/v1/auth/login", json={
+        "email": "owner@example.org", "password": "ExistingSecretPhrase123",
+    }).status_code == 200
+    by_email = {
+        row["email"]: row for row in http.get("/api/v1/staff/approved").json()["items"]
+    }
+    assert by_email["locked@example.org"]["login_issue"] == "temporarily_locked"
+    assert by_email["locked@example.org"]["login_ready"] is False
+    assert by_email["mismatch@example.org"]["login_issue"] == "role_mismatch"
+    assert by_email["mismatch@example.org"]["login_ready"] is False
+    assert http.post("/api/v1/auth/login", json={
+        "email": "locked@example.org", "password": "LockedAccountPassword2026",
+    }).status_code == 401
+    assert http.post("/api/v1/auth/login", json={
+        "email": "mismatch@example.org", "password": "MismatchPassword2026",
+    }).status_code == 401
