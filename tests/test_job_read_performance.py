@@ -102,18 +102,21 @@ def test_large_page_has_constant_query_budget(populated):
     assert response.json()["items"][0]["native_submissions"][0]["person_name"] == "Person 0"
 
 
-def test_monitor_scope_applies_before_global_limit(populated):
+def test_monitors_can_read_shared_event_jobs_with_global_limit(populated):
     client, _, engine = populated
     client.cookies.set("annotatiathon_session", "monitor")
     for path in ("/api/v1/review/assigned-jobs", "/api/v1/labeling/jobs"):
         with sql_count(engine) as statements:
             response = client.get(path)
         assert response.status_code == 200
-        assert {job["id"] for job in response.json()["items"]} == {f"own-{i}" for i in range(5)}
+        assert [job["id"] for job in response.json()["items"]] == [
+            f"foreign-{i}" for i in range(250)
+        ]
+        assert response.json()["next_cursor"] is not None
         assert len(statements) <= 10
 
 
-def test_cursor_pages_are_stable_and_keep_authorization(populated):
+def test_cursor_pages_are_stable_across_shared_event_teams(populated):
     client, _, _ = populated
     client.cookies.set("annotatiathon_session", "monitor")
     first = client.get("/api/v1/review/assigned-jobs?limit=2").json()
@@ -122,23 +125,26 @@ def test_cursor_pages_are_stable_and_keep_authorization(populated):
         "limit": 2, "cursor": first["next_cursor"]}).json()
     third = client.get("/api/v1/review/assigned-jobs", params={
         "limit": 2, "cursor": second["next_cursor"]}).json()
-    assert [row["id"] for page in (first, second, third) for row in page["items"]] == [f"own-{i}" for i in range(5)]
-    assert third["next_cursor"] is None
+    assert [row["id"] for page in (first, second, third) for row in page["items"]] == [
+        f"foreign-{i}" for i in range(6)
+    ]
+    assert third["next_cursor"] is not None
     assert client.get("/api/v1/labeling/jobs?cursor=invalid").status_code == 422
 
 
-def test_legacy_media_membership_is_exact_and_scoped(populated):
+def test_media_membership_is_exact_across_all_teams_in_selected_event(populated):
     client, maker, engine = populated
     client.cookies.set("annotatiathon_session", "monitor")
     with sql_count(engine) as statements:
         response = client.get("/api/v1/review/datasets/dataset/assets/owned/image")
     assert response.status_code == 200
     assert len(statements) <= 10
-    assert client.get("/api/v1/review/datasets/dataset/assets/foreign/image").status_code == 403
+    assert client.get("/api/v1/review/datasets/dataset/assets/foreign/image").status_code == 200
     with maker.begin() as db:
         for index in range(5):
             db.get(m.LabelingJob, f"own-{index}").media_ids = ["foreign-suffix"]
-    assert client.get("/api/v1/review/datasets/dataset/assets/foreign/image").status_code == 403
+    assert client.get("/api/v1/review/datasets/dataset/assets/owned/image").status_code == 403
+    assert client.get("/api/v1/review/datasets/dataset/assets/foreign/image").status_code == 200
 
 
 def test_team_metrics_aggregate_without_snapshot_filesystem_reads(populated, monkeypatch):
