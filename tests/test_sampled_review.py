@@ -73,9 +73,18 @@ def test_sample_claim_scoring_and_retry(dataset_ctx, tmp_path):
             completed = act(http, csrf, f"/review-queue/{review_id}/complete", payload)
             assert completed.status_code == 200, completed.text
         top = http.get("/api/v1/rankings/teams").json()["items"][0]
-        assert top["correct_objects"] == top["correct_boxes"] == top["weighted_score"] == 1
+        assert top["correct_objects"] == top["correct_boxes"] == 1
+        assert top["weighted_score"] == 20
         assert top["reviewed_frames"] == 1
         assert top["errors"] == {"wrong_class": 1}
+        # Changing the scoring policy during the event does not rewrite
+        # decisions, but recalculates every team's weighted tie breaker.
+        assert act(http, csrf, "/scoring/rubric", {
+            "keypoint": 1, "box": 3, "wrong_class": 1,
+        }, method="PUT").status_code == 200
+        rescored = http.get("/api/v1/rankings/teams").json()
+        assert rescored["rubric_version"] == 2
+        assert rescored["items"][0]["weighted_score"] == 2
         state = http.get("/api/v1/review-queue/status").json()
         assert state["pending"] == frames - 1
         assert state["completed"] == 1

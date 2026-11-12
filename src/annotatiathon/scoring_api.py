@@ -57,6 +57,8 @@ def set_rubric(weights: Weights,
 def rankings(ctx: AuthContext = Depends(requires("organiser", "monitor")),
              db: Session = Depends(get_db)):
     event = current_event(db, ctx)
+    current_rubric = latest_rubric(db, event.id)
+    current_weights = current_rubric.weights if current_rubric else Weights().model_dump()
     teams = {
         team_id: {"team_id": team_id, "team_name": name, "correct_keypoints": 0,
                   "correct_boxes": 0, "weighted_score": 0, "reviewed_frames": 0,
@@ -71,10 +73,21 @@ def rankings(ctx: AuthContext = Depends(requires("organiser", "monitor")),
         row["available_frames"] += 1
         if decision is not None:
             row["reviewed_frames"] += 1
-            for key in ("correct_keypoints", "correct_boxes", "weighted_score"):
+            for key in ("correct_keypoints", "correct_boxes"):
                 row[key] += decision[key]
             row["errors"].update(decision["errors"])
             row["missing_objects"] += len(decision["missing_classes"])
+            # Compare teams under a *single current event rubric*, regardless
+            # of when each review was completed. Persisted review decisions
+            # and the original rubric reference are never rewritten.
+            row["weighted_score"] += (
+                decision["correct_keypoints"] * current_weights["keypoint"]
+                + decision["correct_boxes"] * current_weights["box"]
+                - sum(
+                    count * current_weights.get(reason, 0)
+                    for reason, count in decision["errors"].items()
+                )
+            )
     for row in teams.values():
         row["correct_objects"] = row["correct_keypoints"] + row["correct_boxes"]
     items = sorted(teams.values(), key=lambda row: (
@@ -82,4 +95,8 @@ def rankings(ctx: AuthContext = Depends(requires("organiser", "monitor")),
     ))
     for position, row in enumerate(items, start=1):
         row["rank"] = position
-    return {"items": items}
+    return {
+        "items": items,
+        "rubric_version": current_rubric.version if current_rubric else 0,
+        "weighted_scoring_policy": "Current rubric applies uniformly to all completed verdicts",
+    }
