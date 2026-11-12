@@ -12,7 +12,7 @@
 - **Staff Access:** organiser-only multi-role editing; you can add Monitor to your existing organiser staff account without creating a second login. The application refuses to remove the last active organiser.
 - Automated backend/security tests, real PostgreSQL migrations and TypeScript build checks.
 
-**Implemented locally:** manual identity-confirmed check-in and shared team table assignments (no QR), activities and prizes, real ZIP/folder dataset import, balanced pair job planning, native job dispatch and status polling, monitor scoring/correction, and closing/exporting events. **Not yet live-verified:** two-account collaborative annotation semantics, native login-based invitation handling, load tests and deployment. Reported invitations are never treated as verified membership.
+**Implemented locally:** manual identity-confirmed check-in and shared team table assignments (no QR), activities and prizes, real ZIP/folder dataset import, automatic continuous 30-frame distribution across video boundaries, native job dispatch and status polling, monitor scoring/correction, and closing/exporting events. **Not yet live-verified:** two-account collaborative annotation semantics, native login-based invitation handling, load tests and deployment. Reported invitations are never treated as verified membership.
 
 ## Secure self-registration and configuration
 
@@ -44,8 +44,12 @@ supplied images; add a [frame manifest](docs/FRAME_IMPORT.md) to declare source
 ordinals and sampling density. The original compressed videos are retained privately in the dataset
 directory. All new imports are video-specific frame groups internally
 (`videos/<species>/<video-title>/<frame>`) because the Supervisely labeling
-workflow operates on image frames. A labeling job contains one video assigned
-to one annotator. Pre-existing legacy imports remain readable.
+workflow operates on image frames. An official automatic labeling job contains 30 consecutive stream frames assigned
+to one annotator. Frames at a video boundary can be combined in that job (for
+example, 14 frames from Video A followed by 16 from Video B). Only the final
+dataset-wide job may contain fewer than 30 frames. Manual jobs continue to
+select 30 consecutive frames from one video. Source video IDs and frame
+ordinals remain attached to every frame. Pre-existing legacy imports remain readable.
 
 Coverage includes unique frames, video groups, species/source folders and the
 **16 ecomorphologies** from the Annotatiathon Bird Morphology & Head Motion
