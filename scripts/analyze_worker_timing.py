@@ -54,6 +54,9 @@ def summarize(records: list[dict]) -> tuple[dict, dict]:
     spans: dict[str, list[float]] = defaultdict(list)
     for job in stages.values():
         for key, first, last in [
+            ("detected_to_validation", "submission_detected", "validation_started"),
+            ("validation_duration", "validation_started", "validation_completed"),
+            ("publish_queue_wait", "publish_queued", "publish_started"),
             ("detected_to_correction_queued", "submission_detected", "correction_queued"),
             ("correction_queue_to_publish", "correction_queued", "correction_publish_started"),
             ("correction_publish_duration", "correction_publish_started", "correction_publish_confirmed"),
