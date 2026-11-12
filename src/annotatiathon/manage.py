@@ -7,8 +7,8 @@ from sqlalchemy import delete, select
 from .auth import ROLES, normalized_email
 from .db import session_factory
 from .models import AuditEvent, StaffAccount, StaffSession
+from .organiser_access import access_roles, configured_emails, is_restricted_mode
 from .security import password_hash
-from .organiser_access import configured_emails, access_roles, is_restricted_mode
 
 
 def prompted_password() -> str:
