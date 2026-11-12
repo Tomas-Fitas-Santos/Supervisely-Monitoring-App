@@ -392,3 +392,39 @@ def test_manifest_invalid_time_base_is_a_validation_error():
         FrameManifest.model_validate({"version": 1, "source_sha256": "a" * 64,
             "source_frame_count": 1, "all_frames": True, "time_base": "1/0",
             "frames": [{"file": "one.jpg", "ordinal": 1}]})
+
+
+def test_thirty_sampled_frames_follow_imported_temporal_order_without_original_gaps(dataset_ctx):
+    """30-frame jobs refer to 30 selected images, not 30 adjacent video frames."""
+    client, maker, csrf = dataset_ctx
+    sample_indices = [7 + 5 * n for n in range(31)]
+    # Deliberately reverse the archive insertion order: ordering comes from
+    # frame ordinals rather than upload or file-system enumeration.
+    dataset = upload_archive(client, csrf, {
+        f"BirdGaze/ColumbaPalumbus/sampled_clip/frame_{i:06d}.jpg": b"img"
+        for i in reversed(sample_indices)
+    })
+    finalized = act(client, csrf, f"/datasets/{dataset['id']}/finalize")
+    assert finalized.status_code == 200, finalized.text
+    with maker() as db:
+        frames = list(db.scalars(select(MediaAsset).where(
+            MediaAsset.dataset_id == dataset["id"],
+        ).order_by(MediaAsset.frame_index)))
+    assert [frame.frame_index for frame in frames] == sample_indices
+    readiness = client.get(f"/api/v1/labeling/datasets/{dataset['id']}/shared-readiness")
+    assert readiness.status_code == 200, readiness.text
+    assert readiness.json()["source_ready"] is True
+    teams(client, csrf)
+    result = act(client, csrf, "/labeling/plans", {
+        "dataset_id": dataset["id"], "mode": "shared_30_v1",
+    })
+    assert result.status_code == 201, result.text
+    assert result.json()["primary_blocks"] == 2
+    assert result.json()["unique_frames"] == 31
+    with maker() as db:
+        blocks = list(db.scalars(select(WorkBlock).where(
+            WorkBlock.plan_id == result.json()["plan_id"],
+        ).order_by(WorkBlock.ordinal)))
+    assert [b.frame_count for b in blocks] == [30, 1]
+    assert blocks[0].media_ids == [frame.id for frame in frames[:30]]
+    assert blocks[1].media_ids == [frames[-1].id]
