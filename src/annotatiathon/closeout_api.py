@@ -23,12 +23,49 @@ from .models import (
     MediaAsset,
     MediaDataset,
     Person,
+    ReviewSample,
     TicketLedgerEntry,
     epoch,
 )
 
 router = APIRouter(prefix="/api/v1/closeout", tags=["event reports"])
 VIEWERS = ("organiser", "monitor", "observer")
+
+
+def frame_review_fairness(db: Session, event_id: str) -> dict:
+    """Current-round completed-frame counts across all active competition teams."""
+    teams = list(db.execute(select(CompetitionTeam.id, CompetitionTeam.name).where(
+        CompetitionTeam.event_id == event_id,
+        CompetitionTeam.active.is_(True),
+    ).order_by(CompetitionTeam.name)))
+    counts = dict(db.execute(
+        select(ReviewSample.team_id, func.count(ReviewSample.id))
+        .join(LabelingJob, LabelingJob.id == ReviewSample.job_id)
+        .where(
+            ReviewSample.event_id == event_id,
+            ReviewSample.correction_round == LabelingJob.correction_round,
+            ReviewSample.completed_at.is_not(None),
+            ReviewSample.decision.is_not(None),
+        ).group_by(ReviewSample.team_id)
+    ))
+    per_team = [
+        {"team_id": team_id, "team_name": name,
+         "reviewed_frames": int(counts.get(team_id, 0))}
+        for team_id, name in teams
+    ]
+    totals = [item["reviewed_frames"] for item in per_team]
+    equal = bool(totals) and len(set(totals)) == 1
+    target = max(totals, default=0)
+    return {
+        "teams": per_team, "equal": equal,
+        "reviewed_frames_per_team": target if equal else None,
+        "frames_to_equalize": [
+            {**item, "additional_reviews_needed": target - item["reviewed_frames"]}
+            for item in per_team
+        ],
+        "ready_for_winner": equal and target > 0,
+        "policy": "Only latest-round completed frame reviews; equal team counts required",
+    }
 
 
 def event_report(db: Session, event_id: str) -> dict:
@@ -59,6 +96,7 @@ def event_report(db: Session, event_id: str) -> dict:
     ).where(TicketLedgerEntry.event_id == event_id).group_by(TicketLedgerEntry.kind)):
         ledger_totals[kind] = int(total)
     statuses = Counter(j.status for j in jobs)
+    fairness = frame_review_fairness(db, event_id)
     return {
         "event_id": event_id, "event_name": event.name, "event_status": event.status,
         "people": {
@@ -97,6 +135,7 @@ def event_report(db: Session, event_id: str) -> dict:
                 r.temporal_consistency is False for r in reviewed
             ),
         },
+        "review_fairness": fairness,
         "ticket_totals": dict(ledger_totals),
         "generated_at": epoch(),
     }
@@ -131,10 +170,44 @@ def finalize_event(
     if existing:
         raise HTTPException(status_code=409, detail="This event is already closed.")
     report_data = event_report(db, event.id)
-    if report_data["labeling"]["jobs_needing_action"]:
+    # The new event mode has independent frame reviews, not a manual
+    # whole-job "accept" button. A complete native submission can therefore
+    # be on_review while its review frames are processed asynchronously.
+    jobs = list(db.scalars(select(LabelingJob).where(
+        LabelingJob.event_id == event.id, LabelingJob.status != "cancelled",
+    )))
+    frame_counts = dict(db.execute(
+        select(ReviewSample.job_id, func.count(ReviewSample.id))
+        .join(LabelingJob, LabelingJob.id == ReviewSample.job_id)
+        .where(
+            ReviewSample.event_id == event.id,
+            ReviewSample.correction_round == LabelingJob.correction_round,
+        ).group_by(ReviewSample.job_id)
+    ))
+    blocking = []
+    for job in jobs:
+        if job.assignee_person_id is not None and job.release_mode in {
+            "shared_primary", "shared_repeat", "manual_released", "manual_hold",
+        }:
+            complete_submission = (
+                job.status in {"on_review", "completed"}
+                and job.annotation_snapshot_round == job.correction_round
+                and frame_counts.get(job.id, 0) == job.frame_count
+            )
+            if not complete_submission:
+                blocking.append(job.id)
+        elif job.status != "completed" or job.review_status != "accepted":
+            blocking.append(job.id)
+    if blocking:
         raise HTTPException(
             status_code=409,
-            detail="Some labeling jobs are not accepted. Resolve them before closeout.",
+            detail=f"{len(blocking)} jobs remain unfinished or have incomplete annotation JSON.",
+        )
+    if jobs and not report_data["review_fairness"]["ready_for_winner"]:
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot declare a winner until each active team has "
+                   "the same positive number of completed frame reviews.",
         )
     item = EventCloseout(
         event_id=event.id, snapshot_json=report_data, closed_by=ctx.staff.id,
@@ -147,7 +220,11 @@ def finalize_event(
         action="event.closeout", target_type="event", target_id=event.id,
         details={
             "jobs": report_data["labeling"]["jobs"],
-            "frames_reviewed": report_data["reviews"]["frames_reviewed"],
+            "frames_reviewed": sum(
+                item["reviewed_frames"]
+                for item in report_data["review_fairness"]["teams"]
+            ),
+            "review_fairness": report_data["review_fairness"],
             "closeout_id": item.id,
         },
     ))
