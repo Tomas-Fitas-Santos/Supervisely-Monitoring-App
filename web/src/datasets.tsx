@@ -15,7 +15,8 @@ type Dataset={id:string;name:string;upload_kind:"zip"|"folder";
   video_count:number;created_at:number;last_activity_at:number;error_code:string|null;
   native_project_id:number|null};
 type MirrorStatus={state:string;uploaded_frames:number;total_frames:number;
-  ready_for_automatic_jobs:boolean;error_code:string|null};
+  ready_for_automatic_jobs:boolean;error_code:string|null;
+  pending_seconds:number|null;started_seconds_ago:number|null;attempts:number};
 type Morph={name:string;kind:string;count:number};
 type Summary={dataset:Dataset;morphologies:Morph[];total_assets:number};
 type SourceVideo={id:string;video_group:string;density:string;extraction_policy:string;
@@ -255,7 +256,24 @@ export function DatasetScreen({auth}:{auth:Auth}) {
             <strong>Supervisely pre-event replication: {mirror?.ready_for_automatic_jobs?
               "Ready":"Not ready"}</strong>
             <p className="muted small">{mirror?.state||"Checking…"} · {mirror?.uploaded_frames??0} /
-              {mirror?.total_frames??dataset.frame_count} frames mirrored</p>
+              {mirror?.total_frames??dataset.frame_count} frames mirrored
+              {mirror?.attempts? " · attempt "+mirror.attempts:""}</p>
+            {mirror?.state==="pending"&&mirror.pending_seconds!=null&&mirror.pending_seconds>90&&
+              <p role="status" className="alert warning">
+                Replication has been queued for {Math.floor(mirror.pending_seconds/60)} minutes
+                without starting. The Supervisely worker may be stopped or busy.
+                Check the native worker container and its logs. This does not require
+                reuploading the local dataset.
+              </p>}
+            {mirror?.state==="running"&&mirror.uploaded_frames===0&&
+              <p className="muted small">The worker is preparing the Supervisely project or
+                sending its first batch. Progress updates when a batch is saved.</p>}
+            {mirror?.state==="running"&&mirror.started_seconds_ago!=null&&
+              mirror.started_seconds_ago>1800&&mirror.uploaded_frames===0&&
+              <p role="status" className="alert warning">
+                Replication has been running without recorded frame progress for more than
+                30 minutes. Inspect the worker logs before restarting anything.
+              </p>}
             <progress value={mirror?.uploaded_frames??0}
               max={mirror?.total_frames||dataset.frame_count||1}/>
             {mirror?.error_code&&<p role="alert" className="alert danger">{mirror.error_code}</p>}
