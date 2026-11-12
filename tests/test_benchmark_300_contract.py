@@ -53,6 +53,10 @@ def test_worker_sweep_caches_builds_without_reusing_test_databases():
     assert "docker image inspect" in script
     assert "build api worker web" in script
     assert "up -d --no-build --scale" in script
+    # docker compose run with load's depends_on graph had silently removed all
+    # scaled replica-2/3 containers during the actual 300-job tests.
+    assert "run -d --no-deps --name $loadName" in script
+    assert "Benchmark load altered worker scaling" in script
     assert "up -d --build" not in script
     assert '"nightjar-bench-300-$stamp-$Phase-p$count-v$Validators-c$Correctors-s$StatusWorkers"' in script
     assert "down --volumes --remove-orphans" in script
