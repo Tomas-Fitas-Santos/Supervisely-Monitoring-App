@@ -113,7 +113,6 @@ def read_native_annotation(
     """Read the latest completed local annotation snapshot for an assigned frame."""
     event = current_event(db, ctx)
     job = get_job(db, event.id, job_id)
-    verify_monitor(db, ctx, job)
     if media_id not in job.media_ids:
         raise HTTPException(status_code=404, detail="Frame not assigned to this job.")
     ds = db.get(MediaDataset, job.dataset_id)
@@ -176,8 +175,6 @@ def list_reviews(
 ):
     event = current_event(db, ctx)
     job = get_job(db, event.id, job_id)
-    if "monitor" in ctx.staff.roles and "organiser" not in ctx.staff.roles:
-        verify_monitor(db, ctx, job)
     items = db.scalars(select(JobReview).where(
         JobReview.event_id == event.id, JobReview.job_id == job.id
     ).order_by(JobReview.reviewed_at.desc())).all()
