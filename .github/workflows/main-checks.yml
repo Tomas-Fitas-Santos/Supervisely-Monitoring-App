@@ -56,7 +56,7 @@ jobs:
       - name: Validate Windows deployment scripts syntax
         shell: pwsh
         run: |
-          foreach ($path in @('scripts/deploy-live.ps1', 'scripts/init-live-test.ps1')) {
+          foreach ($path in @('scripts/deploy-live.ps1', 'scripts/init-live-test.ps1', 'scripts/run_worker_sweep.ps1')) {
             $tokens = $null
             $errors = $null
             [System.Management.Automation.Language.Parser]::ParseFile(
