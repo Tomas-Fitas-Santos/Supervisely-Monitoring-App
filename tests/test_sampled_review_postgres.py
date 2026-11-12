@@ -13,7 +13,7 @@ from annotatiathon.review_queue_api import claim_next
 
 
 @pytest.mark.skipif(not os.getenv("NIGHTJAR_QUEUE_TEST_URL"), reason="requires disposable PostgreSQL")
-def test_two_monitors_claim_distinct_samples_and_balance_teams():
+def test_two_monitors_claim_distinct_samples_from_global_random_pool():
     engine = create_engine(os.environ["NIGHTJAR_QUEUE_TEST_URL"])
     event_id = m.identifier()
     with Session(engine) as db, db.begin():
@@ -75,7 +75,8 @@ def test_two_monitors_claim_distinct_samples_and_balance_teams():
 
     first = simultaneous(monitor_ids[:2])
     assert len({review["review_id"] for review in first}) == 2
-    assert {review["team_name"] for review in first} == {"Team 0", "Team 1"}
+    assert {review["team_name"] for review in first} <= {"Team 0", "Team 1"}
+    # A global random pool permits both claims to come from the same team.
     repeated = simultaneous([monitor_ids[2], monitor_ids[2]])
     assert repeated[0]["review_id"] == repeated[1]["review_id"]
     assert repeated[0]["claim_token"] == repeated[1]["claim_token"]
