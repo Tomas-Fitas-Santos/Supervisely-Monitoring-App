@@ -32,6 +32,7 @@ def test_sample_claim_scoring_and_retry(dataset_ctx, tmp_path):
             Person.team_id == job.team_id,
         ).limit(1))
         assert job.assignee_person_id is not None
+        reviewed_job_id = job.id
         for asset_id in job.media_ids:
             asset = db.get(MediaAsset, asset_id)
             snapshot = {
@@ -79,9 +80,7 @@ def test_sample_claim_scoring_and_retry(dataset_ctx, tmp_path):
         assert state["pending"] == frames - 1
         assert state["completed"] == 1
         with maker.begin() as db:
-            job = db.scalar(select(LabelingJob).where(
-                LabelingJob.plan_id == planned.json()["plan_id"],
-            ))
+            job = db.get(LabelingJob, reviewed_job_id)
             job.release_mode = "shared_repeat"
             # Repeat submissions must not create duplicate review records.
             ingest_sample(db, job, tmp_path)
