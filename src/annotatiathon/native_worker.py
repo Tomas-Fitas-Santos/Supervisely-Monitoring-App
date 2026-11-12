@@ -580,21 +580,28 @@ def sync_one(db: Session, api, job: LabelingJob) -> str:
         ))
         for info in statuses
     ):
-        if job.release_mode in {"shared_primary", "shared_repeat"}:
-            from .models import WorkPacket
-
-            packet = db.get(WorkPacket, job.id)
-            if packet is None or packet.person_id != job.assignee_person_id:
-                raise NativeWorkerError("shared_packet_missing")
+        shared = job.release_mode in {"shared_primary", "shared_repeat"}
+        official_manual = (
+            job.release_mode in {"manual_released", "manual_hold"}
+            and job.assignee_person_id is not None
+            and job.frame_count == 30
+        )
+        if shared or official_manual:
+            # A 30-frame native job is not reviewable until all thirty images
+            # are finished. This applies to automatic and manual distribution.
             native = statuses[0]
-            # The native count is a completion gate, not a list of which frames
-            # can safely be restarted. Preserve ownership on any ambiguity.
             if (native.images_count != job.frame_count
                     or native.finished_images_count != job.frame_count):
                 return queue_automatic_incomplete_return(
                     db, job, native.finished_images_count, job.frame_count,
                 )
-            packet.submitted_at = packet.submitted_at or epoch()
+            if shared:
+                from .models import WorkPacket
+
+                packet = db.get(WorkPacket, job.id)
+                if packet is None or packet.person_id != job.assignee_person_id:
+                    raise NativeWorkerError("shared_packet_missing")
+                packet.submitted_at = packet.submitted_at or epoch()
             if job.review_status == "incomplete_submission":
                 job.review_status = "unreviewed"
         job.status = "on_review"
