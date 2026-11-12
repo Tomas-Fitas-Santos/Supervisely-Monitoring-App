@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import re
 import statistics
+from math import ceil
 
 
 def mib(value):
@@ -100,14 +101,78 @@ def summarize(directory):
                               if row.get("kind") == "stage"
                               and row.get("stage") == "publish_confirmed"
                               and isinstance(row.get("unix_ms"), int))
-            result["publication_cohort"] = {
-                "initial_submit_burst_ms": started,
-                "first_confirmed_ms": received[0] - started if received else None,
-                "two_hundred_ninetieth_confirmed_ms": received[289] - started
-                    if len(received) >= 290 else None,
-                "last_confirmed_ms": received[-1] - started if received else None,
-                "total_published": len(received),
+            workload = result.get("workload", {})
+            phase = workload.get("phase", "legacy")
+            records = [row for row in worker_rows if row.get("kind") == "stage"]
+            original_pattern = re.compile(r"job-(?:[0-9]|[1-9][0-9]|[12][0-9]{2})$")
+            starts = [
+                row["unix_ms"] for row in records
+                if row.get("stage") == "publish_queued"
+                and original_pattern.fullmatch(str(row.get("job_id", "")))
+            ]
+            original_confirms = sorted(
+                row["unix_ms"] for row in records
+                if row.get("stage") == "publish_confirmed"
+                and original_pattern.fullmatch(str(row.get("job_id", "")))
+            )
+            origin = min(starts) if starts else started
+            cohort = {
+                "phase": phase,
+                "cohort_target": 300,
+                "cohort_origin_ms": origin,
+                "confirmed_count": len(original_confirms) if phase == "initial" else len(received),
+                "first_confirmed_ms": original_confirms[0] - origin
+                    if phase == "initial" and original_confirms else (
+                        received[0] - started if received else None),
+                "one_hundred_fiftieth_confirmed_ms": (
+                    original_confirms[149] - origin if len(original_confirms) >= 150 else None
+                ) if phase == "initial" else None,
+                "two_hundred_ninetieth_confirmed_ms": (
+                    original_confirms[289] - origin if len(original_confirms) >= 290 else None
+                ) if phase == "initial" else (
+                    received[289] - started if len(received) >= 290 else None),
+                "three_hundredth_confirmed_ms": (
+                    original_confirms[299] - origin if len(original_confirms) >= 300 else None
+                ) if phase == "initial" else None,
+                "last_observed_confirmed_ms": (
+                    original_confirms[-1] - origin if original_confirms else None
+                ) if phase == "initial" else (received[-1] - started if received else None),
             }
+            if phase == "initial":
+                cohort["remaining_unpublished"] = max(0, 300 - len(original_confirms))
+                cohort["confirmed_per_minute_observed"] = round(
+                    60000 * len(original_confirms) /
+                    max(1, cohort["last_observed_confirmed_ms"] or 1), 2
+                )
+            result["publication_cohort"] = cohort
+            if phase == "turnaround":
+                # Compare actual worker detection milestones against the
+                # simulator's burst/stagger submission clock.
+                detection = []
+                for row in records:
+                    if row.get("stage") != "submission_detected":
+                        continue
+                    match = original_pattern.fullmatch(str(row.get("job_id", "")))
+                    if not match:
+                        continue
+                    person = int(match.group().split("-")[-1])
+                    extra_ms = 0
+                    if not workload.get("simulator", {}).get("burst", False):
+                        extra_ms = person * workload.get("frames_per_job", 30) * workload.get(
+                            "seconds_per_frame", 90) * 1000 / max(
+                                1, workload.get("annotators", 300))
+                    delay = row["unix_ms"] - started - extra_ms
+                    if delay >= 0:
+                        detection.append(delay)
+                if detection:
+                    observed = sorted(detection)
+                    result["submission_detection"] = {
+                        "count": len(observed),
+                        "p50_ms": observed[ceil(len(observed) * .50) - 1],
+                        "p95_ms": observed[ceil(len(observed) * .95) - 1],
+                        "p99_ms": observed[ceil(len(observed) * .99) - 1],
+                        "max_ms": observed[-1],
+                    }
     (directory / "summary.json").write_text(json.dumps(result, indent=2))
     return result
 
