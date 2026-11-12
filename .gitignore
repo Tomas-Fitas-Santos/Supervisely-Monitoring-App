@@ -44,6 +44,9 @@ backups/
 *.jpeg
 *.png
 *.webp
+# Aggregate measured timing profile stays local to the test machine
+scripts/benchmark_profiles/measured.json
+worker-timing-report.json
 # Runtime
 logs/
 *.log
