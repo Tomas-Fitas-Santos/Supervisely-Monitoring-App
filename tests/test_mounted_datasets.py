@@ -210,3 +210,26 @@ def test_standard_live_api_deployment_starts_local_indexer():
     assert "--force-recreate indexer" in picker
     assert "Waiting for local dataset indexer" in ui
     assert "Supervisely upload is queued" in ui
+
+
+def test_in_app_dataset_picker_and_isolated_upload_paths():
+    """The original browser picker stays default, even without Docker mounts."""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    workspace = (root / "web/src/dataset_workspace.tsx").read_text(encoding="utf-8")
+    browser = (root / "web/src/datasets.tsx").read_text(encoding="utf-8")
+    compose = (root / "compose.live.yaml").read_text(encoding="utf-8")
+    worker = (root / "src/annotatiathon/native_worker.py").read_text(encoding="utf-8")
+    assert 'useState<"upload"|"mount"|"coverage">("upload")' in workspace
+    assert "Choose dataset folder on this computer" in browser
+    assert 'useState<"zip"|"folder">("folder")' in browser
+    assert 'useState<"all_frames"|"sample_1fps">("all_frames")' in browser
+    assert 'webkitdirectory:""' in browser
+    assert "files[0].webkitRelativePath.split" in browser
+    assert "  mirror-worker:" in compose
+    assert 'NIGHTJAR_DEDICATED_MIRROR: "1"' in compose
+    assert 'NIGHTJAR_DEDICATED_INDEXER: "1"' in compose
+    assert 'role", "mirror"' in compose
+    assert "if not separate_mirror:" in worker
+    assert "and os.environ.get(\"NIGHTJAR_DEDICATED_INDEXER\") != \"1\"" in worker
