@@ -87,7 +87,7 @@ def test_equal_current_round_frame_reviews_gate_final_closeout(dataset_ctx):
     assert "same positive number" in denied.json()["detail"]
     with maker.begin() as db:
         item = db.scalar(select(ReviewSample).where(
-            ReviewSample.decision.is_(None),
+            ReviewSample.completed_at.is_(None),
         ))
         item.completed_at = 500
         item.decision = {"correct_boxes": 1, "correct_keypoints": 0,
