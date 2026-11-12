@@ -72,13 +72,18 @@ state, not an automatic destructive repair.
 - A confirmed organiser launches one first job per team.
 - A pending task is claimed and committed before remote writes. Its state
   becomes `running`, then `done`; uncertain failures become `attention`.
-- Each job has two native IDs. The worker polls each with
-  `api.labeling_job.get_info_by_id`, recording status and sync timestamp.
-- Both native statuses must reach `on_review` or `completed`, **and**
-  `finished_images_count >= images_count`, before the local job is
-  considered submitted. Incomplete or stopped jobs are returned for correction.
-- On successful submission, the worker queues the next job for that team,
-  even while sampled local review continues, unless releases are paused.
+- Official 30-frame and manual single-annotator jobs have one active native
+  Supervisely job binding. Legacy two-person jobs retain two bindings.
+  The worker polls native status and captures **job-scoped annotation JSON**
+  once the native submission is on review.
+- Every submitted frame is validated independently: exactly one bird
+  rectangle and one visible-or-occluded point for each of left eye, right eye,
+  beak and crown. A complete image enters shared review immediately; incomplete
+  images are gathered into a smaller replacement native job for the same user.
+  Native finished-image counters alone are **not** the structural validator.
+- The same Nightjar job and WorkPacket remain in place through repeated
+  incomplete native submissions. New work is released only after **all**
+  originally assigned images have passed structural validation.
 - Nightjar per-frame quality decisions do not forge native annotation
   completion or change remote reviewer decisions.
 - Pause affects only future publishes. Already-created native jobs remain
