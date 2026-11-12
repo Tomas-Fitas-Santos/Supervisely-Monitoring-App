@@ -104,7 +104,7 @@ def create_delete_once(api, config, *, dataset_id: int,
             else:
                 # No matching object was created or left behind.
                 verified = True
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             raise RuntimeError(
                 "Benchmark cleanup could not be confirmed. STOP TESTING and "
                 "inspect only the dedicated 'Nightjar Benchmark' project."
@@ -204,7 +204,7 @@ def main() -> None:
     read_profile = Path("/data/metrics/read-only-profile.json")
     merged = json.loads(read_profile.read_text(encoding="utf-8")) if read_profile.exists() else {}
     if not isinstance(merged, dict):
-        raise ValueError("Invalid existing read-only timing profile.")
+        raise TypeError("Invalid existing read-only timing profile.")
     merged.update(profile)
     args.output.write_text(json.dumps(merged, indent=2), encoding="utf-8")
     os.chmod(args.output, 0o600)
