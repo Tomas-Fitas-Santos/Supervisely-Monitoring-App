@@ -21,6 +21,7 @@ from .models import (
     NativeOperation,
     epoch,
 )
+from .worker_timing import milestone
 
 logger = logging.getLogger(__name__)
 LEASE_SECONDS = 120
@@ -206,6 +207,7 @@ def process_validation_once(db: Session, api, config) -> dict | None:
     if task is None:
         return None
     task_id, job_id, token = task
+    milestone("validation_started", job_id=job_id, operation_id=task_id)
     stop = threading.Event()
     lease_lost = threading.Event()
     thread = threading.Thread(
@@ -246,11 +248,15 @@ def process_validation_once(db: Session, api, config) -> dict | None:
 
     if lease_lost.is_set():
         db.rollback()
+        milestone("validation_lease_lost", job_id=job_id, operation_id=task_id)
         return {"operation_id": task_id, "status": "lease_lost"}
     if not finish_validation(db, task_id, token, failure=problem):
+        milestone("validation_lease_lost", job_id=job_id, operation_id=task_id)
         return {"operation_id": task_id, "status": "lease_lost"}
     if not completed:
+        milestone("validation_failed", job_id=job_id, operation_id=task_id)
         return {"operation_id": task_id, "status": "retry_or_attention"}
+    milestone("validation_completed", job_id=job_id, operation_id=task_id)
     # Validate + queue follow-up in the same worker invocation. This avoids
     # waiting for a complete status scan before assigning the next block.
     job = db.get(LabelingJob, job_id)
@@ -267,6 +273,7 @@ def process_validation_once(db: Session, api, config) -> dict | None:
                 )
                 db.commit()
                 if claimed is not None:
+                    milestone("publish_queued", job_id=claimed.id)
                     return {"operation_id": task_id, "status": "done",
                             "next_assignment_queued": True}
             except Exception:  # scheduler will retry
