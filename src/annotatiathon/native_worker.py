@@ -938,8 +938,11 @@ def sync_all(db: Session, api, config: SuperviselyConfig) -> dict:
 
 def process_once(db: Session, api, config: SuperviselyConfig) -> dict | None:
     """Claim one queued operation; a crash leaves it for explicit review, not reexecution."""
-    operations = list(db.scalars(
-        select(NativeOperation)
+    # First fetch a bounded list of candidate IDs WITHOUT locking joined
+    # jobs/plans/events. Previously the query locked up to 200 rows across
+    # several tables; competing publishers could serialize each other.
+    candidate_ids = list(db.scalars(
+        select(NativeOperation.id)
         .join(LabelingJob, LabelingJob.id == NativeOperation.target_id)
         .join(LabelingPlan, LabelingPlan.id == LabelingJob.plan_id)
         .join(Event, Event.id == NativeOperation.event_id)
@@ -951,12 +954,25 @@ def process_once(db: Session, api, config: SuperviselyConfig) -> dict | None:
         ).order_by(
             NativeOperation.priority.desc(),
             NativeOperation.created_at, NativeOperation.id,
-        ).with_for_update(skip_locked=True).limit(200)
+        ).limit(200)
     ))
-    op = next((
-        row for row in operations
-        if can_queue_next(db, db.get(LabelingJob, row.target_id))
-    ), None)
+    op = None
+    for operation_id in candidate_ids:
+        # Lock EXACTLY one NativeOperation, skip claims held by another
+        # publisher, and release the claim when the job is not yet eligible.
+        candidate = db.scalar(select(NativeOperation).where(
+            NativeOperation.id == operation_id,
+            NativeOperation.status == "pending",
+        ).with_for_update(skip_locked=True, of=NativeOperation)
+          .execution_options(populate_existing=True))
+        if candidate is None:
+            db.rollback()
+            continue
+        candidate_job = db.get(LabelingJob, candidate.target_id)
+        if candidate_job is not None and can_queue_next(db, candidate_job):
+            op = candidate
+            break
+        db.rollback()
     if op is None:
         db.rollback()
         return None
