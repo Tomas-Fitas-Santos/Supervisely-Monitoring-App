@@ -845,7 +845,8 @@ def next_annotation_snapshot_candidates(
     return list(db.scalars(base.order_by(LabelingJob.id).limit(limit)))
 
 
-def sync_all(db: Session, api, config: SuperviselyConfig) -> dict:
+def sync_all(db: Session, api, config: SuperviselyConfig, *,
+             capture_snapshots: bool = True) -> dict:
     event_plans = list(db.scalars(select(LabelingPlan).where(
         LabelingPlan.status.in_(["running", "paused"]),
     )))
@@ -855,9 +856,12 @@ def sync_all(db: Session, api, config: SuperviselyConfig) -> dict:
         event = db.get(Event, plan.event_id)
         if event is None or event.status != "active":
             continue
+        # Do not load historical completed jobs just to poll live status.
+        # Completed jobs with missing snapshots are checked separately below.
         jobs = list(db.scalars(select(LabelingJob).where(
             LabelingJob.plan_id == plan.id,
             LabelingJob.event_id == plan.event_id,
+            LabelingJob.status.in_(["in_progress", "on_review", "needs_correction"]),
         )))
         ready_for_next = []
         for job in jobs:
@@ -922,8 +926,16 @@ def sync_all(db: Session, api, config: SuperviselyConfig) -> dict:
                 break
             _annotation_snapshot_cursor[plan.id] = candidate.id
             try:
-                if capture_job_annotations(db, api, candidate):
-                    snapshots += 1
+                if capture_snapshots:
+                    # Backward-compatible single-worker execution mode.
+                    if capture_job_annotations(db, api, candidate):
+                        snapshots += 1
+                else:
+                    # Dedicated status role only queues tasks; validation
+                    # workers fetch annotations in their own sessions.
+                    from .validation_tasks import enqueue_validation
+                    if enqueue_validation(db, candidate):
+                        snapshots += 1
                 db.commit()
             except Exception as exc:  # noqa: BLE001 - retried next worker poll
                 db.rollback()
@@ -1629,9 +1641,22 @@ def worker_cycle(lane: str) -> bool:
             elif lane == "publish":
                 result = process_once(db, api, config)
             elif lane == "mirror":
-                # Dedicated lane prevents an expensive job status/snapshot sync
-                # from delaying a newly finalized pre-event media library.
                 result = process_mirror_once(db, api, config)
+            elif lane == "bulk":
+                result = process_mirror_once(db, api, config)
+                if not reset_pending(db):
+                    process_export_once(db, api)
+            elif lane == "status":
+                result = sync_all(db, api, config, capture_snapshots=False)
+            elif lane == "validation":
+                from .validation_tasks import process_validation_once
+                result = process_validation_once(db, api, config)
+            elif lane == "correction":
+                first = process_reassignment_once(db, api, config)
+                result = process_correction_once(db, api, config) or first
+            elif lane == "recovery":
+                from .validation_tasks import recover_expired_validations
+                result = {"reclaimed_validation_tasks": recover_expired_validations(db)}
             else:
                 process_reassignment_once(db, api, config)
                 process_correction_once(db, api, config)
@@ -1648,9 +1673,36 @@ def worker_cycle(lane: str) -> bool:
             return False
 
 
-def run_worker(*, once: bool, poll_seconds: int) -> None:
+def run_worker(*, once: bool, poll_seconds: int, role: str = "all") -> None:
     if not once and not 3 <= poll_seconds <= 300:
         raise ValueError("Polling interval must be 3-300 seconds.")
+    if role != "all":
+        if role not in {"status", "validation", "publish", "correction",
+                        "recovery", "mirror", "bulk"}:
+            raise ValueError("Unknown worker role.")
+        while True:
+            with session_factory()() as db:
+                resetting = reset_pending(db)
+            if resetting:
+                if role == "recovery":
+                    worker_cycle("reset")
+                if once:
+                    return
+                time.sleep(poll_seconds)
+                continue
+            result = worker_cycle(role)
+            if once:
+                return
+            # Dedicated status and recovery schedulers run at most once per
+            # interval; other roles drain queued work without extra 12s gaps.
+            if role in {"status", "recovery", "bulk", "mirror"} or not result:
+                time.sleep(poll_seconds if role in {"status", "recovery", "bulk", "mirror"}
+                           else 0.5)
+            else:
+                time.sleep(0.1)
+        return
+    # Legacy single-container mode remains the safe live default until
+    # role-based deployment has passed the 300-annotator acceptance tests.
     # Mirroring and native status reconciliation are independent lanes.
     # The mirror has its own DB session and SDK client, ensuring bulk
     # status/snapshot polling cannot keep pre-event media at "pending".
@@ -1699,13 +1751,18 @@ def main() -> None:
     group.add_argument("--loop", action="store_true",
                        help="Process continuously while this terminal remains open")
     parser.add_argument("--poll-seconds", type=int, default=12)
+    parser.add_argument("--role", default="all",
+                        choices=("all", "status", "validation", "publish",
+                                 "correction", "recovery", "bulk", "mirror"),
+                        help="Independent role for controlled multi-worker deployment")
     parser.add_argument("--timing-file", default=os.environ.get("NIGHTJAR_WORKER_TIMING_FILE"),
                         help="Opt-in local JSONL timings; no credentials, URLs or payloads")
     arguments = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
     if arguments.timing_file:
         enable_worker_timing(arguments.timing_file)
-    run_worker(once=arguments.once, poll_seconds=arguments.poll_seconds)
+    run_worker(once=arguments.once, poll_seconds=arguments.poll_seconds,
+               role=arguments.role)
 
 
 if __name__ == "__main__":
