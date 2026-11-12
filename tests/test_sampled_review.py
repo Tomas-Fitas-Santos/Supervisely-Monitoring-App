@@ -218,7 +218,13 @@ def test_partial_submission_does_not_release_frames_for_monitor_review(dataset_c
             event_id=job.event_id, job_id=job.id, team_id=job.team_id,
             media_id=job.media_ids[0], correction_round=0,
             validated_complete=True,
-            snapshot={"source_media_id": job.media_ids[0], "annotation": {"objects": []}},
+            snapshot={
+                "source_media_id": job.media_ids[0],
+                "source_relative_path": "synthetic_video/frame_000001.jpg",
+                "sha256": "a" * 64,
+                "selection_reason": "structurally_complete_submitted_frame",
+                "annotation": {"objects": []},
+            },
         ))
 
     api = FastAPI()
