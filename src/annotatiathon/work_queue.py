@@ -122,7 +122,7 @@ def claim_primary_block(
         .with_for_update(of=WorkBlock))
     if block is not None and len(block.media_ids) != 30:
         raise ValueError("Official shared queue requires 30 consecutive frames per job")
-    repeats, repeat_count = (
+    repeats, _repeat_count = (
         repeat_batch(db, plan.id, team.id)
         if block is None and include_repeats else ([], 0)
     )
