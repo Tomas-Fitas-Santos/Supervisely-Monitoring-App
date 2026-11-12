@@ -201,6 +201,12 @@ def simulate():
     created_jobs = {}
     next_native_job_id = 1_000_000
     metadata, _ = merge_annotation_meta({"projectType": "images", "classes": [], "tags": []})
+    # Supervisely's labeling-job annotation reader resolves returned figure IDs
+    # through project metadata; class identities must be present in the simulator.
+    for ordinal, cls in enumerate(metadata["classes"], 1):
+        cls["id"] = 40000 + ordinal
+    class_ids = {cls["title"]: cls["id"] for cls in metadata["classes"]}
+    classes_to_label = list(class_ids)
 
     def info(api_class, **values):
         result = {}
@@ -246,7 +252,7 @@ def simulate():
                     status=status, disabled=False, imagesCount=FRAMES,
                     finishedImagesCount=FRAMES if status == "on_review" else 0,
                     rejectedImagesCount=0, acceptedImagesCount=0, progressImagesCount=0,
-                    classes_to_label=[], tags_to_label=[], images_range={"start": 1, "end": FRAMES},
+                    classes_to_label=classes_to_label, tags_to_label=[], images_range={"start": 1, "end": FRAMES},
                     filter_images_by_tags=[], entities=[])
 
     def created_job(data):
@@ -262,7 +268,7 @@ def simulate():
                     status=status, disabled=False, imagesCount=count,
                     finishedImagesCount=count if status == "on_review" else 0,
                     rejectedImagesCount=0, acceptedImagesCount=0, progressImagesCount=0,
-                    classes_to_label=[], tags_to_label=[],
+                    classes_to_label=classes_to_label, tags_to_label=[],
                     images_range={"start": 1, "end": count},
                     filter_images_by_tags=[], entities=[])
 
@@ -382,6 +388,30 @@ def simulate():
             return dataset(index)
         if method == "images.list":
             return page(images(body["datasetId"] - 2000), body)
+        if method == "figures.list":
+            # The current Supervisely SDK fetches labeling-job annotations via
+            # FigureApi.download -> figures.list, not annotations.info. Returning
+            # this exact paging envelope makes validation exercise real JSONs.
+            selected = next((
+                rule.get("value", []) for rule in body.get("filter", [])
+                if rule.get("field") in {"entityId", "imageId"}
+            ), [])
+            entities = []
+            for image_id in selected:
+                for position, obj in enumerate(annotation(image_id)["objects"]):
+                    figure_id = image_id * 10 + position
+                    entities.append({
+                        "id": figure_id, "imageId": image_id, "entityId": image_id,
+                        "objectId": figure_id,
+                        "classId": class_ids[obj["classTitle"]],
+                        "projectId": 41, "datasetId": body["datasetId"],
+                        "geometryType": obj["geometryType"],
+                        "geometry": {"points": obj["points"]},
+                        "geometryMeta": {}, "tags": [], "meta": {},
+                        "area": "0", "priority": position, "customData": {},
+                        "createdAt": None, "updatedAt": None,
+                    })
+            return page(entities, body)
         if method == "jobs.list":
             index = next((item["value"] - 2000 for item in body.get("filter", [])
                           if item["field"] == "datasetId"), None)

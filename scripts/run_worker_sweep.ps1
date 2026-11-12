@@ -74,6 +74,11 @@ try {
       & docker @compose run -d --name $loadName load python /bench/benchmark_full.py load --seconds $Seconds --latency $latencyArg --fail-rate $failureArg --profile-scale $scaleArg --timeout-rate $timeoutArg --assumed-publish-ms $AssumedPublishMs
       if ($LASTEXITCODE -ne 0) { throw "Benchmark load process failed to start." }
 
+      Write-Host "Detached load started: $loadName"
+      Write-Host "The script samples Docker resources silently during the workload."
+      Write-Host "Progress will print every 30 seconds; 480-second tests also run export checks."
+      $runStart = Get-Date
+      $lastProgress = -30
       $resourceFile = Join-Path $out "resources.jsonl"
       $utf8 = [System.Text.UTF8Encoding]::new($false)
       while ($true) {
@@ -89,6 +94,11 @@ try {
             $data | Add-Member -NotePropertyName sample_ms -NotePropertyValue $sample
             [System.IO.File]::AppendAllText($resourceFile, (($data | ConvertTo-Json -Compress) + "`n"), $utf8)
           }
+        }
+        $elapsed = [int]((Get-Date) - $runStart).TotalSeconds
+        if ($elapsed - $lastProgress -ge 30) {
+          Write-Host "Benchmark $count publisher(s), $Validators validator(s): load running, elapsed $elapsed seconds (workload target $Seconds seconds plus setup/export)."
+          $lastProgress = $elapsed
         }
         Start-Sleep -Seconds 4
       }
@@ -111,6 +121,13 @@ try {
       $report = Get-Content (Join-Path $out "summary.json") -Raw | ConvertFrom-Json
       $errors = if ($null -eq $report.http_errors) { 0 } else { @($report.http_errors).Count }
       $published = [int]$report.workload.simulator.published
+      $validated = [int]$report.workload.database.review_completed_frames +
+                   [int]$report.workload.database.review_ready_frames
+      if ($published -eq 0 -or $validated -eq 0) {
+        Write-Warning "Invalid throughput measurement: $published published, $validated validated frames."
+        Write-Warning "Inspect $out\\services.log and summary.json; validation or publishing is not functioning."
+        throw "Benchmark produced no successful publishing/review throughput. Fix the worker/simulator before comparing concurrency."
+      }
       $results += [PSCustomObject]@{
         Publishers = $count
         Validators = $Validators
