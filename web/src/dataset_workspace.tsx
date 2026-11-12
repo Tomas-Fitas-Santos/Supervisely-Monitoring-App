@@ -14,11 +14,11 @@ export function DatasetWorkspace({auth}:{auth:Auth}){
     <div className="page-body dataset-workspace-top">
       <div className="page-heading"><div>
         <span className="eyebrow">DATA OPERATIONS</span><h2>Dataset</h2>
-        <p className="muted">Upload a folder or ZIP, or link a host directory, then inspect dataset coverage.</p>
+        <p className="muted">Choose a folder on your computer, or select an already-linked host folder for fast no-copy indexing. Remote organisers use the same web application.</p>
       </div><Database size={22}/></div>
       <nav className="workspace-subtabs" aria-label="Dataset sections">
         <button className={subtab==="upload"?"active":""} onClick={()=>setSubtab("upload")}>
-          <CloudUpload size={16}/> Upload folder or ZIP</button>
+          <CloudUpload size={16}/> Upload folder or ZIP · choose on this computer</button>
         <button className={subtab==="mount"?"active":""} onClick={()=>setSubtab("mount")}>
           <FolderOpen size={16}/> Link host folder (optional)</button>
         {canInspectCoverage&&<button className={subtab==="coverage"?"active":""}
