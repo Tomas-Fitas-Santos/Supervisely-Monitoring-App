@@ -297,13 +297,16 @@ export function SharedReviewScreen({auth}:{auth:Auth}){
             </div>
           </section>
           <section className="panel shared-review-canvas-panel">
-            <div className="shared-review-zoom-viewport" role="region" aria-label="Zoomable annotated bird image" tabIndex={0}>
-              <div className="shared-review-scalable" style={{width:(zoom*100)+"%"}}>
-                <AnnotationFrame key={claim.review_id} src={claim.image_url}
-                  alt={"Frame "+claim.source_filename} annotation={claim.annotation}
-                  selectedIndex={selectedObject} onSelectObject={setSelectedObject}/>
-              </div>
+            <div className="shared-review-zoom-viewport" role="region"
+              aria-label="Annotated bird image. Zoom in and drag to inspect details.">
+              <AnnotationFrame key={claim.review_id} src={claim.image_url}
+                alt={"Frame "+claim.source_filename} annotation={claim.annotation}
+                zoom={zoom} selectedIndex={selectedObject}
+                onSelectObject={setSelectedObject}/>
             </div>
+            {zoom>1&&<p className="muted small shared-review-zoom-hint">
+              Drag the enlarged image to inspect details. Zoom and panning stay inside the viewer.
+            </p>}
           </section>
 
           <section className="panel shared-review-grade-panel">
