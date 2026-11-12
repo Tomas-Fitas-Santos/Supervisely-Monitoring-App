@@ -171,8 +171,23 @@ try {
       $failureArg = $FailureRate.ToString($invariant)
       $scaleArg = $ProfileScale.ToString($invariant)
       $timeoutArg = $TimeoutRate.ToString($invariant)
-      & docker @compose run -d --name $loadName load python /bench/benchmark_full.py load --seconds $Seconds --latency $latencyArg --fail-rate $failureArg --profile-scale $scaleArg --timeout-rate $timeoutArg --assumed-publish-ms $AssumedPublishMs
+      & docker @compose run -d --no-deps --name $loadName load python /bench/benchmark_full.py load --seconds $Seconds --latency $latencyArg --fail-rate $failureArg --profile-scale $scaleArg --timeout-rate $timeoutArg --assumed-publish-ms $AssumedPublishMs
       if ($LASTEXITCODE -ne 0) { throw "Benchmark load process failed to start." }
+      # 'docker compose run' must NOT re-evaluate load's depends_on graph:
+      # otherwise Compose silently scales publisher/validator replicas back to 1.
+      # Recheck after the one-off load is started; the pre-launch check alone
+      # did not detect this regression in the 2026-11-12 benchmark.
+      foreach ($role in @(
+        @{ Name = "worker"; Expected = $count },
+        @{ Name = "validation-worker"; Expected = $Validators },
+        @{ Name = "correction-worker"; Expected = $Correctors },
+        @{ Name = "status-worker"; Expected = $StatusWorkers }
+      )) {
+        $actual = @(& docker ps --filter "label=com.docker.compose.project=$project" --filter "label=com.docker.compose.service=$($role.Name)" --format '{{.ID}}') | Where-Object { $_ }
+        if ($actual.Count -ne $role.Expected) {
+          throw "Benchmark load altered worker scaling: expected $($role.Expected) running $($role.Name), found $($actual.Count). No valid capacity measurement."
+        }
+      }
 
       Write-Host "Detached load started: $loadName"
       Write-Host "The script samples Docker resources silently during the workload."
