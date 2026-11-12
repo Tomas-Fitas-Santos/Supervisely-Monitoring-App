@@ -84,7 +84,7 @@ export function CloseoutScreen({auth}:{auth:Auth}) {
     finally{setBusy(false);}
   }
   const phrase=report?"CLOSE "+report.event_name:"";
-  return <div className="page-body">
+  return <div className="page-body closeout-workspace">
     <div className="page-heading"><div><span className="eyebrow">EVENT OPERATIONS · TEAM RESULTS</span>
       <h2>Results & Rankings</h2>
       <p className="muted">Teams rank by estimated annotation points from the proportional review queue. Organisers can export records and close the event.</p>
@@ -111,12 +111,9 @@ export function CloseoutScreen({auth}:{auth:Auth}) {
           <thead><tr>
             {rankingSort.header("rank","Rank")}
             {rankingSort.header("team_name","Team")}
-            {rankingSort.header("correct_visible_keypoints","Visible points")}
-            {rankingSort.header("correct_occluded_keypoints","Occluded points")}
-            {rankingSort.header("correct_boxes","Correct boxes")}
-            {rankingSort.header("correct_objects","Total correct annotations")}
-            {rankingSort.header("reviewed_frames","Reviewed / available frames")}
-            {rankingSort.header("errors","Class / placement / sabotage errors")}
+            {rankingSort.header("correct_objects","Correct Annotations")}
+            {rankingSort.header("reviewed_frames","Reviewed / total")}
+            {rankingSort.header("errors","Errors (class / placement / sabotage)")}
             {rankingSort.header("estimated_points","Estimated points")}
           </tr></thead>
           <tbody>{rankingSort.rows(rankings,(team,key)=>key==="errors"
@@ -124,12 +121,9 @@ export function CloseoutScreen({auth}:{auth:Auth}) {
             : team[key as keyof Omit<typeof team,"errors">]).map(team=><tr key={team.team_id}>
             <td><strong>{team.rank===null?"—":"#"+team.rank}</strong></td>
             <td><strong>{team.team_name}</strong></td>
-            <td>{team.correct_visible_keypoints.toLocaleString()}</td>
-            <td>{team.correct_occluded_keypoints.toLocaleString()}</td>
-            <td>{team.correct_boxes.toLocaleString()}</td>
             <td><strong>{team.correct_objects.toLocaleString()}</strong></td>
             <td>{team.reviewed_frames} / {team.available_frames}</td>
-            <td>{team.errors?.wrong_class||0} / {team.errors?.wrong_placement||0} / {team.errors?.sabotage||0}</td>
+            <td title="Class / placement / sabotage">{team.errors?.wrong_class||0} / {team.errors?.wrong_placement||0} / {team.errors?.sabotage||0}</td>
             <td><strong>{team.estimated_points?.toLocaleString(undefined,{maximumFractionDigits:2})??"Awaiting review"}</strong></td>
           </tr>)}</tbody>
         </table>{!rankings.length&&<div className="empty-table">Rankings will appear after reviewed frames are available.</div>}</div>

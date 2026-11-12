@@ -368,11 +368,8 @@ export function SharedReviewScreen({auth}:{auth:Auth}){
         <thead><tr>
             {rankingSort.header("rank","Rank")}
             {rankingSort.header("team_name","Team")}
-            {rankingSort.header("correct_visible_keypoints","Correct visible keypoints")}
-            {rankingSort.header("correct_occluded_keypoints","Correct occluded keypoints")}
-            {rankingSort.header("correct_boxes","Correct boxes")}
-            {rankingSort.header("correct_objects","Raw correct annotations")}
-            {rankingSort.header("reviewed_frames","Reviewed / Submitted")}
+            {rankingSort.header("correct_objects","Correct Annotations")}
+            {rankingSort.header("reviewed_frames","Reviewed / total")}
             {rankingSort.header("coverage_pct","Coverage")}
             {rankingSort.header("submission_share_pct","Submission share")}
             {rankingSort.header("review_share_pct","Review share")}
@@ -384,15 +381,12 @@ export function SharedReviewScreen({auth}:{auth:Auth}){
             ? (team.errors?.wrong_class??0)+(team.errors?.wrong_placement??0)+(team.errors?.sabotage??0)
             : team[key as keyof Omit<typeof team,"errors">]).map(team=><tr key={team.team_id}>
           <td><strong>{team.rank===null?"—":"#"+team.rank}</strong></td><td><strong>{team.team_name}</strong></td>
-          <td>{fmt(team.correct_visible_keypoints)}</td>
-          <td>{fmt(team.correct_occluded_keypoints)}</td>
-          <td>{fmt(team.correct_boxes)}</td>
           <td>{fmt(team.correct_objects)}</td>
           <td>{fmt(team.reviewed_frames)} / {fmt(team.available_frames)}</td>
           <td>{fmt(team.coverage_pct)}%</td><td>{fmt(team.submission_share_pct)}%</td>
           <td>{fmt(team.review_share_pct)}%</td>
           <td>{team.average_frame_points===null?"—":fmt(team.average_frame_points)}</td>
-          <td>{fmt(team.errors?.wrong_class||0)} / {fmt(team.errors?.wrong_placement||0)} / {fmt(team.errors?.sabotage||0)}</td>
+          <td title="Class / placement / sabotage">{fmt(team.errors?.wrong_class||0)} / {fmt(team.errors?.wrong_placement||0)} / {fmt(team.errors?.sabotage||0)}</td>
           <td><strong>{team.estimated_points===null?"Awaiting review":fmt(team.estimated_points)}</strong></td>
         </tr>)}</tbody>
       </table>{!rankings.length&&<div className="empty-table">

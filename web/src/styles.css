@@ -427,7 +427,10 @@ input,select{border:1px solid #dfe5ed;border-radius:9px;background:white;padding
 .shared-review-missing-list label{display:flex;align-items:center;gap:7px;font-size:12px}
 .shared-review-completion{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:15px;border-top:1px solid #e5ede7;margin-top:20px;padding-top:18px}
 .shared-review-completion-actions{display:flex;flex-wrap:wrap;gap:10px}
-.shared-review-rankings .data-table{min-width:1050px}
+.shared-review-rankings .data-table,.event-ranking-panel .data-table{min-width:640px}
+.shared-review-rankings .data-table :is(th,td),.event-ranking-panel .data-table :is(th,td){
+  padding:10px 8px;white-space:normal
+}
 .shared-review-weights{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px}
 .shared-review-weights label{display:flex;flex-direction:column;gap:8px;font-size:12px}
 .shared-review-scoring{max-width:1180px}
@@ -493,6 +496,26 @@ input,select{border:1px solid #dfe5ed;border-radius:9px;background:white;padding
 .roster-viewport .table-scroll{overflow-x:auto}
 .roster-team-member-table .table-scroll{border:1px solid #e3ebe6;border-radius:10px}
 .roster-viewport .roster-team-member-table .data-table{min-width:720px}
+.roster-viewport .table-scroll .compact-roster-table{min-width:690px}
+.roster-viewport .compact-roster-table :is(th,td){
+  padding:10px 8px;white-space:normal;overflow-wrap:anywhere
+}
+.compact-roster-table .mini-avatar{flex-shrink:0}
+@media (min-width:981px){
+  .page-body.roster-viewport,.page-body.closeout-workspace,
+  .page-body.shared-review-workspace:has(.shared-review-rankings){
+    max-width:none;
+    padding-inline:24px;
+  }
+  .roster-viewport .compact-roster-table :is(th,td),
+  .shared-review-rankings .data-table :is(th,td),
+  .event-ranking-panel .data-table :is(th,td){
+    padding-inline:12px;
+  }
+  .shared-review-rankings .review-analytics-header p,
+  .event-ranking-panel .review-analytics-header p{max-width:none}
+}
+.column-sort svg{flex-shrink:0}
 .roster-viewport .roster-team-member-table th{position:sticky;top:0;z-index:2}
 .roster-viewport .roster-team-grid-empty{grid-column:1/-1}
 @media(max-width:760px){

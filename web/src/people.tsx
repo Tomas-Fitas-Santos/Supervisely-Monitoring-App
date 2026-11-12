@@ -3,7 +3,7 @@ import { formatLisbonTime } from "./event_time";
 import { useCallback, useEffect, useState } from "react";
 import type React from "react";
 import {
-  Check, ChevronLeft, ChevronRight, ClipboardCopy, FileSpreadsheet, Filter,
+  Check, ChevronLeft, ChevronRight, FileSpreadsheet, Filter,
   Plus, RefreshCw, Search, ShieldCheck, Trash2, Upload, UserRound, UsersRound, X
 } from "lucide-react";
 import { api, refreshSuperviselyRoster, type Auth, type PeopleResponse, type Person, type Team, type TeamResponse } from "./api";
@@ -117,7 +117,6 @@ export function PeopleScreen({auth}:{auth:Auth}) {
   const memberSort=useTableSort();
   const sortQuery=rosterSort.query;
   const [selectedTeam,setSelectedTeam]=useState<string|null>(null);
-  const [selected,setSelected]=useState<string[]>([]);
   const [showImporter,setShowImporter]=useState(false);
   const [editing,setEditing]=useState<Person|null|undefined>(undefined);
   const [personForm,setPersonForm]=useState<PersonForm>(emptyForm);
@@ -190,7 +189,6 @@ export function PeopleScreen({auth}:{auth:Auth}) {
     t.members.some(p=>p.name.toLocaleLowerCase().includes(search.toLocaleLowerCase())||
       p.email.toLocaleLowerCase().includes(search.toLocaleLowerCase())));
   const competitionCount=teams.filter(t=>t.type==="competition").length;
-  const selectedPeople=people.items.filter(p=>selected.includes(p.id));
   function openEdit(person?:Person) {
     setEditing(person||null);
     setPersonForm(person?{name:person.name,email:person.email,kind:person.kind,
@@ -276,60 +274,35 @@ export function PeopleScreen({auth}:{auth:Auth}) {
     }catch(exc){setModalError((exc as Error).message);}
     finally{setModalStatus("");setBusy(false);}
   }
-  async function copyEmails() {
-    if(selectedPeople.length===0)return;
-    try {
-      await navigator.clipboard.writeText(selectedPeople.map(p=>p.email).join(","));
-      setMessage("Copied "+selectedPeople.length+" email addresses. Paste into Supervisely to send invitations.");
-    }catch{setError("Could not access the clipboard; allow clipboard access and retry.");}
-  }
-  async function markSent() {
-    if(!await confirmAction("Confirm you actually sent these invitations through the Supervisely website. Copying email addresses is not enough."))return;
-    setBusy(true);setError("");
-    try {
-      await api("/people/invitations-reported","POST",{person_ids:selectedPeople.map(p=>p.id)},auth.csrf_token);
-      setSelected([]);setInviteVersion(v=>v+1);
-      setMessage("Invitation attempts recorded; native acceptance is not yet verified.");
-      await refresh();
-    }catch(exc){setError((exc as Error).message);}
-    finally{setBusy(false);}
-  }
   const showSensitive=auth.staff.roles.some(r=>r==="organiser"||r==="reception");
   const showAllergies=showSensitive||auth.staff.roles.includes("distribution");
   function personal(value:string|undefined){
     return showSensitive?(value?.trim()||"—"):"Restricted";
   }
-  function peopleTable(items:Person[],selectable=true,full=true) {
+  function peopleTable(items:Person[],full=true) {
     const columnSort=full?rosterSort:memberSort;
     const rows=full?items:memberSort.rows(items,(person,key)=>person[key as keyof Person] as SortValue);
     const header=columnSort.header;
-    return <div className="table-scroll"><table className="data-table">
-      <thead><tr>{selectable&&admin&&<th className="check-cell">Select</th>}
+    return <div className="table-scroll"><table className="data-table compact-roster-table">
+      <thead><tr>
         {header("name","Name")}{full&&<>
-          {showSensitive?header("date_of_birth","Date of birth"):<th>Date of birth</th>}
           {header("email","Email")}{showSensitive?header("phone","Phone"):<th>Phone</th>}
           {showSensitive?header("under_18","Under 18"):<th>Under 18</th>}
           {showSensitive?header("image_consent","Image consent"):<th>Image consent</th>}
-          {showSensitive?header("data_consent","Data processing consent"):<th>Data processing consent</th>}
-          {showAllergies?header("food_allergies","Food allergies / intolerances"):<th>Food allergies / intolerances</th>}
+          {showAllergies?header("food_allergies","Allergies"):<th>Allergies</th>}
         </>}
-        {header("kind","Role")}{header("team_name","Team")}{header("supervisely_user_id","Supervisely User ID")}
+        {header("team_name","Team")}{header("supervisely_user_id","Supervisely ID")}
         {header("membership_status","Supervisely")}{header("check_in_at","Check-in")}
         {admin&&<th>Manage</th>}</tr></thead>
       <tbody>{rows.map(p=><tr key={p.id}>
-        {selectable&&admin&&<td><input aria-label={"Select "+p.name} type="checkbox"
-          checked={selected.includes(p.id)} onChange={e=>setSelected(prev=>
-            e.target.checked?prev.length<50?[...prev,p.id]:prev:prev.filter(id=>id!==p.id))}/></td>}
         <td><div className="person-name"><div className="mini-avatar">{p.name.slice(0,1).toUpperCase()}</div>
           <div><strong>{p.name}</strong>{!full&&<span>{p.email}</span>}</div></div></td>
         {full&&<>
-          <td>{personal(p.date_of_birth)}</td><td>{p.email}</td><td>{personal(p.phone)}</td>
+          <td>{p.email}</td><td>{personal(p.phone)}</td>
           <td>{personal(showSensitive?consentLabel(p.under_18):"")}</td>
           <td>{personal(showSensitive?consentLabel(p.image_consent):"")}</td>
-          <td>{personal(showSensitive?consentLabel(p.data_consent):"")}</td>
           <td>{showAllergies?(p.food_allergies?.trim()||"—"):"Restricted"}</td>
         </>}
-        <td><span className="soft-pill">{p.kind==="monitor"?"Monitor":"Participant"}</span></td>
         <td>{p.team_name||"Unassigned"}</td>
         <td>{p.supervisely_user_id!=null?
           <strong title={p.supervisely_login||"Verified Supervisely member"}>
@@ -414,7 +387,7 @@ export function PeopleScreen({auth}:{auth:Auth}) {
               </>}
             </div>
           </div>
-          <div className="roster-team-member-table">{peopleTable(activeTeam.members,false,false)}</div>
+          <div className="roster-team-member-table">{peopleTable(activeTeam.members,false)}</div>
         </div>:
         <div className="team-list roster-team-grid">
           <div className="roster-team-grid-heading">
@@ -445,11 +418,7 @@ export function PeopleScreen({auth}:{auth:Auth}) {
           {!shownTeams.length&&<div className="empty-table roster-team-grid-empty">No teams match this search.</div>}
         </div>)
         :<><div className="table-summary"><span>{people.total} matching people · Page {page}</span>
-          {admin&&selectedPeople.length>0&&<div className="batch-actions">
-            <span>{selectedPeople.length}/50 selected</span>
-            <button className="btn secondary" onClick={()=>void copyEmails()}><ClipboardCopy size={15}/> Copy comma-separated emails</button>
-            <button className="btn secondary" disabled={busy} onClick={()=>void markSent()}>Mark sent in Supervisely</button>
-          </div>}</div>
+          </div>
           {peopleTable(people.items)}
           <div className="table-pagination"><button className="btn secondary" disabled={page<=1}
             onClick={()=>setPage(v=>v-1)}><ChevronLeft size={16}/> Previous</button>
