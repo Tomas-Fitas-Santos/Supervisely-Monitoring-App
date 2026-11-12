@@ -292,7 +292,7 @@ def simulate():
         state["calls"][method] += 1
         category = endpoint_group(method)
         observed = profile.get(category, {})
-        if isinstance(observed, dict) and observed.get("count", 0) >= 2:
+        if isinstance(observed, dict) and observed.get("count", 0) >= 1:
             p50 = max(0, float(observed.get("p50_ms", 0)))
             p95 = max(p50, float(observed.get("p95_ms", p50)))
             p99 = max(p95, float(observed.get("p99_ms", p95)))
