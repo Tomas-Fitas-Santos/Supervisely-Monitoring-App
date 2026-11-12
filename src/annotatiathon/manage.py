@@ -36,6 +36,12 @@ def main() -> None:
     )
     rename.add_argument("--from-email", required=True)
     rename.add_argument("--to-email", required=True)
+    resolve = cmd.add_parser(
+        "keep-existing-staff-account",
+        help="Retire an obsolete approved email when the corrected staff account already exists",
+    )
+    resolve.add_argument("--obsolete-email", required=True)
+    resolve.add_argument("--keep-email", required=True)
     reset = cmd.add_parser(
         "reset-password",
         help="Securely reset an existing staff password and revoke sessions",
@@ -58,6 +64,82 @@ def main() -> None:
         from .review_backfill import backfill_frame_reviews
 
         print(backfill_frame_reviews(session_factory(), event_id=args.event_id))
+        return
+    if args.action == "keep-existing-staff-account":
+        try:
+            obsolete_email = normalized_email(args.obsolete_email)
+            keep_email = normalized_email(args.keep_email)
+        except ValueError as exc:
+            parser.error(str(exc))
+        if obsolete_email == keep_email:
+            parser.error("Obsolete and kept email must be different.")
+        with session_factory().begin() as db:
+            approvals = list(db.scalars(select(ApprovedStaffEmail).where(
+                ApprovedStaffEmail.email.in_([obsolete_email, keep_email]),
+            ).with_for_update()))
+            approval_by_email = {entry.email: entry for entry in approvals}
+            old_approval = approval_by_email.get(obsolete_email)
+            keep_approval = approval_by_email.get(keep_email)
+            if old_approval is None or not old_approval.enabled:
+                parser.error("Obsolete email does not have an enabled staff approval; no changes made.")
+            if old_approval.role not in {"organiser", "admin"}:
+                parser.error("Unexpected source approval role; no changes made.")
+            if keep_approval is not None and (
+                not keep_approval.enabled or keep_approval.role != old_approval.role
+            ):
+                parser.error("Corrected email approval conflicts with existing role/status; no changes made.")
+            matches = list(db.scalars(select(StaffAccount).where(
+                func.lower(StaffAccount.email).in_([obsolete_email, keep_email]),
+            ).with_for_update()))
+            previous = [
+                staff for staff in matches if staff.email.strip().lower() == obsolete_email
+            ]
+            kept = [
+                staff for staff in matches if staff.email.strip().lower() == keep_email
+            ]
+            if len(kept) != 1 or len(previous) > 1:
+                parser.error("Cannot identify exactly one corrected account safely; no changes made.")
+            target = kept[0]
+            expected_roles = (
+                ["admin", "organiser"] if old_approval.role == "admin" else ["organiser"]
+            )
+            if target.roles != expected_roles or not target.active:
+                parser.error(
+                    "Corrected account roles or active status do not match the approved role; "
+                    "review accounts before making changes."
+                )
+            if previous and previous[0].roles != expected_roles:
+                parser.error(
+                    "Obsolete account has unexpected roles; review before retiring its access."
+                )
+            if keep_approval is None:
+                db.add(ApprovedStaffEmail(
+                    email=keep_email, role=old_approval.role,
+                    enabled=True, created_at=epoch(),
+                ))
+            old_approval.enabled = False
+            if previous:
+                previous[0].active = False
+                db.execute(delete(StaffSession).where(
+                    StaffSession.staff_id == previous[0].id,
+                ))
+            db.add(AuditEvent(
+                staff_id=target.id, action="staff.email.conflict.resolved_cli",
+                target_type="staff", target_id=target.id,
+                details={
+                    "obsolete_email": obsolete_email,
+                    "kept_email": keep_email,
+                    "roles_preserved": True,
+                    "password_preserved": True,
+                    "obsolete_account_disabled": bool(previous),
+                    "obsolete_sessions_revoked": bool(previous),
+                    "accounts_merged": False,
+                },
+            ))
+        print("Corrected staff account kept:", keep_email)
+        print("Obsolete email access disabled:", obsolete_email)
+        print("Kept account ID, password and role unchanged; accounts were not merged.")
+        print("Use the corrected email and its existing Nightjar password to sign in.")
         return
     if args.action == "change-staff-email":
         try:
