@@ -83,6 +83,8 @@ from .supervisely_client import NativeAPIError, require_connection
 
 logger = logging.getLogger(__name__)
 _checked_visual_projects: set[int] = set()
+_annotation_snapshot_cursor: dict[str, str] = {}
+
 
 
 class NativeWorkerError(Exception):
@@ -710,6 +712,39 @@ def capture_job_annotations(db: Session, api, job: LabelingJob) -> bool:
     return True
 
 
+def next_annotation_snapshot_candidates(
+    db: Session, plan: LabelingPlan, *, limit: int = 10,
+) -> list[LabelingJob]:
+    """Advance the retry scan so permanently failing jobs cannot starve later teams.
+
+    This is a bounded round-robin *scan*, not an assignment queue. It changes
+    neither the job release order nor the fair inbound review claim policy.
+    """
+    frame_reviews = select(func.count(ReviewSample.id)).where(
+        ReviewSample.job_id == LabelingJob.id,
+        ReviewSample.correction_round == LabelingJob.correction_round,
+    ).correlate(LabelingJob).scalar_subquery()
+    base = select(LabelingJob).where(
+        LabelingJob.plan_id == plan.id,
+        LabelingJob.event_id == plan.event_id,
+        LabelingJob.status.in_(["on_review", "completed"]),
+        or_(
+            LabelingJob.annotation_snapshot_round.is_distinct_from(
+                LabelingJob.correction_round,
+            ),
+            (LabelingJob.assignee_person_id.is_not(None)) &
+            (frame_reviews < LabelingJob.frame_count),
+        ),
+    )
+    cursor = _annotation_snapshot_cursor.get(plan.id)
+    if cursor:
+        rows = list(db.scalars(base.where(LabelingJob.id > cursor)
+                               .order_by(LabelingJob.id).limit(limit)))
+        if rows:
+            return rows
+    return list(db.scalars(base.order_by(LabelingJob.id).limit(limit)))
+
+
 def sync_all(db: Session, api, config: SuperviselyConfig) -> dict:
     event_plans = list(db.scalars(select(LabelingPlan).where(
         LabelingPlan.status.in_(["running", "paused"]),
@@ -781,25 +816,11 @@ def sync_all(db: Session, api, config: SuperviselyConfig) -> dict:
     for plan in event_plans:
         if snapshots >= 5:
             break
-        frame_reviews = select(func.count(ReviewSample.id)).where(
-            ReviewSample.job_id == LabelingJob.id,
-            ReviewSample.correction_round == LabelingJob.correction_round,
-        ).correlate(LabelingJob).scalar_subquery()
-        candidates = list(db.scalars(select(LabelingJob).where(
-            LabelingJob.plan_id == plan.id,
-            LabelingJob.event_id == plan.event_id,
-            LabelingJob.status.in_(["on_review", "completed"]),
-            or_(
-                LabelingJob.annotation_snapshot_round.is_distinct_from(
-                    LabelingJob.correction_round,
-                ),
-                (LabelingJob.assignee_person_id.is_not(None)) &
-                (frame_reviews < LabelingJob.frame_count),
-            ),
-        ).order_by(LabelingJob.id).limit(10)))
+        candidates = next_annotation_snapshot_candidates(db, plan)
         for candidate in candidates:
             if snapshots >= 5:
                 break
+            _annotation_snapshot_cursor[plan.id] = candidate.id
             try:
                 if capture_job_annotations(db, api, candidate):
                     snapshots += 1
