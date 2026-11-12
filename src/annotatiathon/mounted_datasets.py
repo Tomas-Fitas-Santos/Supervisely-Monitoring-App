@@ -171,7 +171,11 @@ def mounted_index_status(
     ))
     return {"state": op.status if op else "not_applicable",
             "error_code": op.error_code if op else None,
-            "attempts": op.attempts if op else 0}
+            "attempts": op.attempts if op else 0,
+            "pending_seconds": max(0, epoch() - op.created_at)
+                if op and op.status == "pending" else None,
+            "started_seconds_ago": max(0, epoch() - op.claimed_at)
+                if op and op.status == "running" and op.claimed_at else None}
 
 
 def index_mounted_dataset(db: Session, ds: MediaDataset):
