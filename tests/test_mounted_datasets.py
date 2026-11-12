@@ -233,3 +233,17 @@ def test_in_app_dataset_picker_and_isolated_upload_paths():
     assert 'role", "mirror"' in compose
     assert "if not separate_mirror:" in worker
     assert "and os.environ.get(\"NIGHTJAR_DEDICATED_INDEXER\") != \"1\"" in worker
+
+
+def test_live_dataset_audit_inherits_database_url_without_redeploying_services():
+    """The standalone exec process must run the same entrypoint as the API PID 1."""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    script = (root / "scripts/verify-live.ps1").read_text(encoding="utf-8")
+    entrypoint = (root / "deploy/docker-entrypoint.sh").read_text(encoding="utf-8")
+    assert "export DATABASE_URL=" in entrypoint
+    assert "exec -T api /usr/local/bin/nightjar-entrypoint python -" in script
+    assert "SET TRANSACTION READ ONLY" in script
+    assert "Read-only Nightjar source audit failed" in script
+    assert "docker compose @compose down" not in script
