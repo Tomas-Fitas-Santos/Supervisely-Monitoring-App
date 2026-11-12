@@ -41,3 +41,18 @@ def test_worker_resource_analyzer_distinguishes_status_validation_and_publishers
     }
     for container, expected in names.items():
         assert analyzer.service_name(container) == expected
+
+
+def test_worker_sweep_caches_builds_without_reusing_test_databases():
+    """One build per source change; each 300-person run uses isolated volumes."""
+    script = (Path(__file__).resolve().parents[1] / "scripts" /
+              "run_worker_sweep.ps1").read_text(encoding="utf-8")
+    assert '[switch]$Rebuild' in script
+    assert "Get-BenchmarkBuildSignature" in script
+    assert "worker-sweep-build.sha256" in script
+    assert "docker image inspect" in script
+    assert "build api worker web" in script
+    assert "up -d --no-build --scale" in script
+    assert "up -d --build" not in script
+    assert '"nightjar-bench-300-$stamp-p$count-v$Validators"' in script
+    assert "down --volumes --remove-orphans" in script
