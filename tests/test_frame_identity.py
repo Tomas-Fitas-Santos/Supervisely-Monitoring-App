@@ -52,7 +52,7 @@ def test_event_import_decodes_all_thirty_frames_with_timestamps(dataset_ctx, tmp
     })
     assert plan.status_code == 201, plan.text
     assert plan.json()["primary_blocks"] == 1
-    assert plan.json()["repeat_frames"] == 2
+    assert plan.json()["repeat_frames"] == 30
     with maker() as db:
         block = db.scalar(select(WorkBlock).where(WorkBlock.plan_id == plan.json()["plan_id"]))
         assert block.media_ids == [frame.id for frame in frames]
