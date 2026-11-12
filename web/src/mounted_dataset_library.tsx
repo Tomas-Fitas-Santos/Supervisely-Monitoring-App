@@ -139,11 +139,11 @@ export function MountedDatasetLibrary({auth}:{auth:Auth}){
           The separate Supervisely worker performs the remote SDK upload after indexing.</p>
         {sources.folders.length===0&&<div className="alert warning" role="status">
           <strong>No dataset folders visible to Nightjar.</strong>
-          <p>To link a local Windows folder without uploading the files through your browser,
-            run <code>.&#92;scripts&#92;link-local-dataset.ps1 -StartWorker</code> in PowerShell
-            from the Nightjar repository on the PC running Docker Desktop.
-            Choose the <strong>dataset root</strong> containing your species folders.
-            The helper mounts its parent read-only and keeps your database and credentials.</p>
+          <p>If no host folders are linked, use the <strong>Upload folder or ZIP ·
+            choose on this computer</strong> tab to open your computer's folder
+            picker directly in Nightjar, without commands. Zero-copy import is
+            available only for folders already exposed by the Docker host's
+            read-only source mount.</p>
           <p>{sources.mounted
             ?"The mounted source directory currently contains no selectable dataset folders."
             :"The dataset source volume is not accessible in the running Nightjar container."}
@@ -174,7 +174,7 @@ export function MountedDatasetLibrary({auth}:{auth:Auth}){
         </form>
         <div className="settings-note" style={{marginTop:16}}>
           <p>Leave the source folder unchanged and mounted during upload and event reviews.
-            The Supervisely worker must be running and its Team/Workspace connection verified.
+            The separate Supervisely upload worker must be running with its Team/Workspace connection verified.
             No labeling jobs are created by linking the dataset.</p>
         </div>
       </section>
@@ -220,7 +220,7 @@ export function MountedDatasetLibrary({auth}:{auth:Auth}){
             </div>}
           {dataset.status==="ready"&&<div className="dataset-mirror-status">
             <strong>{mirror?.ready_for_automatic_jobs?
-              <><CheckCircle2 size={15}/> Ready for automatic labeling jobs</>:
+              <><CheckCircle2 size={15}/> All frames mirrored to Supervisely; check source identity before planning jobs</>:
               "Supervisely upload in progress / not ready"}</strong>
             <p className="muted small">State: {mirror?.state||"checking"} ·
               {mirror?.uploaded_frames||0} / {mirror?.total_frames||dataset.frame_count} frames uploaded
@@ -229,9 +229,9 @@ export function MountedDatasetLibrary({auth}:{auth:Auth}){
             {mirror?.error_code&&<div className="alert danger">{mirror.error_code}</div>}
             {mirror?.state==="pending"&&mirror.pending_seconds!=null&&mirror.pending_seconds>90&&
               <p className="muted small">Local indexing is complete, but Supervisely upload is queued.
-                Verify the Team/Workspace connection in Settings, then start the native worker:
-                <code> docker compose --env-file .env.live -f compose.live.yaml --profile native up -d --build worker</code>.
-                Inspect <code>docker compose --env-file .env.live -f compose.live.yaml --profile native logs --tail=80 worker</code>.</p>}
+                Verify the Team/Workspace connection in Settings, then start the separate upload worker:
+                <code> docker compose --env-file .env.live -f compose.live.yaml --profile native up -d mirror-worker</code>.
+                Inspect <code>docker compose --env-file .env.live -f compose.live.yaml --profile native logs --tail=80 mirror-worker</code>.</p>}
             {mirror?.state==="attention"&&<button className="btn secondary" disabled={busy}
               onClick={()=>void retryMirror()}><RotateCcw size={15}/> Retry upload</button>}
           </div>}
