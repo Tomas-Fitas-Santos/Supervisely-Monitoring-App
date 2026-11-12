@@ -79,11 +79,10 @@ even if they have not joined yet. A fresh batch is then available.
 
 See **[Role and invitation contract](docs/ROLES_AND_INVITATIONS.md)**.
 
-**First-claim security caution:** SQL roster matching alone does **not** prove
-email ownership. A person knowing another approved monitor's unclaimed email
-could register first. Use this simplified flow only for trusted live tests,
-and require an organiser-issued one-time invite code or identity proof before
-the public event.
+**Monitor registration:** A monitor must be on the active approved SQL roster
+and enter a private organiser-issued, single-use registration code. SQL roster
+matching alone does not prove email ownership; distribute codes privately.
+No email service or Supervisely token is required for app signup.
 
 ## Free, real-user live testing (Cloudflare Tunnel)
 
@@ -95,10 +94,11 @@ Nginx password prompt or Cloudflare email challenge.
 **[Complete Windows live-testing guide](docs/LIVE_TESTING.md)**
 
 ```powershell
+git switch main
 git pull --ff-only origin main
-.\scripts\init-live-test.ps1
-docker compose --env-file .env.live -f compose.live.yaml up -d --build web
-curl.exe -f http://127.0.0.1:8080/health/ready
+.\scripts\deploy-live.ps1
+# After verifying the shared Supervisely integration in Settings:
+.\scripts\deploy-live.ps1 -StartWorker
 ```
 
 Open a second PowerShell terminal:
@@ -108,8 +108,8 @@ cloudflared tunnel --url http://127.0.0.1:8080
 ```
 
 **Existing staff** sign in with their Nightjar accounts. **Approved monitors**
-can create their own accounts using the **Create monitor account** button,
-the current active SQL event's monitor roster (without email verification). No
+can create their own accounts using **Create monitor account**, their approved
+active SQL roster email, and an organiser-issued one-time code. No
 participant gets a monitor account. The app enforces roles and session
 authentication on the API.
 
