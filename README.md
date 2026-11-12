@@ -39,9 +39,13 @@ outer `BirdGaze/` wrapper is automatically detected. A single species folder
 is not mistaken for the wrapper.
 
 For raw video files, choose **All source frames** to extract every decoded frame
-into JPEGs or **1 frame per second** to sample. Video frame folders retain the
-supplied images; add a [frame manifest](docs/FRAME_IMPORT.md) to declare source
-ordinals and sampling density. The original compressed videos are retained privately in the dataset
+into JPEGs or **1 frame per second** to sample. Existing frame-image folders
+are also supported for both ZIP and folder upload, with **no frames.json or
+other metadata file required**. Source ordinals are read from filenames such
+as `ColumbaPalumbus_f000013.jpg` where possible, or deterministic natural
+filename order is used. If supplied numeric frame indices have gaps, the upload
+succeeds but those groups are not eligible for full-density automatic planning.
+The original compressed videos are retained privately in the dataset
 directory. All new imports are video-specific frame groups internally
 (`videos/<species>/<video-title>/<frame>`) because the Supervisely labeling
 workflow operates on image frames. An official automatic labeling job contains 30 consecutive stream frames assigned
@@ -57,8 +61,8 @@ workbook. The workbook's 72 known scientific-name source folders are recognized;
 unknown folders remain Unclassified until curated. Organisers can correct
 classifications with an audit trail. Movement tags record observed primary
 movement over disjoint frame ranges; they do not infer movements from species.
-Frame ordering uses source ordinals when available and falls back to filename
-order for legacy frames. The existing planner targets 120,000 frames, or
+Frame ordering uses available numeric suffixes, otherwise natural filename
+order. The original frame identities are preserved in each asset record. The existing planner targets 120,000 frames, or
 7,500 per group.
 
 ## Real Supervisely roles and invite batches
