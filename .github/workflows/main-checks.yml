@@ -25,6 +25,7 @@ jobs:
     env:
       APP_ENV: local
       DATABASE_URL: postgresql+psycopg://annotatiathon_test:ci_test_password_not_for_production@127.0.0.1:5432/annotatiathon_test
+      NIGHTJAR_QUEUE_TEST_URL: postgresql+psycopg://annotatiathon_test:ci_test_password_not_for_production@127.0.0.1:5432/annotatiathon_test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
