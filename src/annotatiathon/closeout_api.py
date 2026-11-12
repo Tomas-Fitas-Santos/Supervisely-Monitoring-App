@@ -1,6 +1,7 @@
 """Read-only event report/export and controlled final closeout with preserved records."""
 import csv
 import io
+import json
 from collections import Counter
 from typing import Literal
 
@@ -295,6 +296,40 @@ def export_rows(db: Session, event_id: str, section: str) -> tuple[list[str], li
              r.temporal_consistency, r.notes, r.reviewer_id, r.reviewed_at]
             for r in db.scalars(select(JobReview).where(JobReview.event_id == event_id))
         ]
+    elif section == "frame_reviews":
+        headers = [
+            "job_id", "team_id", "media_id", "correction_round",
+            "latest_round", "reviewer_id", "reviewed_at",
+            "correct_keypoints", "correct_boxes", "weighted_score_at_review",
+            "incorrect_reasons_json", "missing_classes_json",
+            "verdicts_json", "source_snapshot_sha256",
+        ]
+        samples = db.scalars(
+            select(ReviewSample).where(ReviewSample.event_id == event_id)
+            .order_by(ReviewSample.job_id, ReviewSample.correction_round,
+                      ReviewSample.media_id)
+        ).all()
+        rounds = dict(db.execute(
+            select(LabelingJob.id, LabelingJob.correction_round)
+            .where(LabelingJob.event_id == event_id)
+        ).all())
+        rows = []
+        for sample in samples:
+            decision = sample.decision if sample.completed_at is not None else None
+            decision = decision if isinstance(decision, dict) else {}
+            rows.append([
+                sample.job_id, sample.team_id, sample.media_id,
+                sample.correction_round,
+                sample.correction_round == rounds.get(sample.job_id),
+                sample.reviewer_id if sample.completed_at else None,
+                sample.completed_at,
+                decision.get("correct_keypoints"), decision.get("correct_boxes"),
+                decision.get("weighted_score"),
+                json.dumps(decision.get("errors", {}), ensure_ascii=False),
+                json.dumps(decision.get("missing_classes", []), ensure_ascii=False),
+                json.dumps(decision.get("verdicts", []), ensure_ascii=False),
+                sample.snapshot.get("sha256"),
+            ])
     elif section == "media":
         headers = ["id", "dataset_id", "relative_path", "morphology",
                    "kind", "video_group", "sha256", "native_image_id"]
@@ -310,7 +345,7 @@ def export_rows(db: Session, event_id: str, section: str) -> tuple[list[str], li
 
 @router.get("/exports/{section}")
 def export_csv(
-    section: Literal["people", "jobs", "reviews", "media"],
+    section: Literal["people", "jobs", "reviews", "frame_reviews", "media"],
     ctx: AuthContext = Depends(requires("organiser", "monitor")),
     db: Session = Depends(get_db),
 ):

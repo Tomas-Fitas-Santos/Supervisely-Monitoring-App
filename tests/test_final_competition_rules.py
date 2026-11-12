@@ -96,6 +96,11 @@ def test_equal_current_round_frame_reviews_gate_final_closeout(dataset_ctx):
         "confirmation": "CLOSE Initial Event",
     })
     assert successful.status_code == 200, successful.text
+    export = client.get("/api/v1/closeout/exports/frame_reviews")
+    assert export.status_code == 200
+    assert "correct_boxes" in export.text
+    assert "verdicts_json" in export.text
+    assert export.text.count("\\r\\n") >= 4 or export.text.count("\\n") >= 4
     coverage = successful.json()["report"]["review_fairness"]
     assert coverage["ready_for_winner"]
     assert coverage["reviewed_frames_per_team"] == 1

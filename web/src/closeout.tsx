@@ -179,7 +179,9 @@ export function CloseoutScreen({auth}:{auth:Auth}) {
           <p className="muted small">Exports contain participant identities and annotation review history; store them securely.</p>
           <div className="export-links">{([
             ["people","People, teams and admission"],["jobs","All pair job progress"],
-            ["reviews","Individual frame quality"],["media","Media inventory and hashes"],
+            ["frame_reviews","Official frame reviews and object verdicts"],
+            ["reviews","Historical whole-job reviews"],
+            ["media","Media inventory and hashes"],
           ] as const).map(([key,label])=><a key={key} className="btn secondary"
             href={"/api/v1/closeout/exports/"+key} download>
             <Download size={15}/>{label}</a>)}</div>
