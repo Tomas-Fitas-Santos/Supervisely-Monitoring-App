@@ -18,7 +18,7 @@
 
 - Import the official CSV with monitors marked as `monitor` before inviting monitors to create Nightjar accounts.
 - Keep a stable `NIGHTJAR_ENCRYPTION_KEY` for encrypted shared Supervisely settings. No SMTP or personal Supervisely token is required for Nightjar signup.
-- Monitor: choose **Create monitor account**, enter an active approved roster email, set an app-only password and log in; link Supervisely later in Settings.
+- Monitor: choose **Create monitor account**, enter an active approved roster email, the private organiser-issued registration code, and an app-only password; link Supervisely later in Settings.
 - Monitor: under **Settings**, optionally verify their personal Supervisely account by pasting a token. That token is discarded after verification.
 - Organiser: save the shared Supervisely Team ID, Workspace ID, and encrypted admin/manager integration token in Settings.
 - Distinguish a verified native team member appearing in the roster from an authorised Nightjar monitor login. Only an approved organiser/CSV roster monitor can register.
@@ -141,7 +141,7 @@ Create the first organiser (no account/password is baked into the code or reposi
 python -m annotatiathon.manage create-staff --email "organiser@your-domain.pt" --name "Event Organiser" --roles organiser
 ```
 
-A password is prompted securely; it is not passed on the command line. Organisers are provisioned by this command. **Monitors can instead self-register** from the login page if their email appears as an active `monitor` in the official event roster. They choose their own 12+-character app password immediately, without an email code. An email imported automatically from Supervisely does not qualify for self-registration until explicitly approved in the roster. For other staff roles, use the same command with roles such as `reception` or `activity,distribution`.
+A password is prompted securely; it is not passed on the command line. Organisers are provisioned by this command. **Monitors can instead self-register** from the login page with an active approved roster email and the organiser-issued one-time code. They choose their own 12+-character app password; no email-service integration is required. An email imported automatically from Supervisely does not qualify for self-registration until explicitly approved in the roster. For other staff roles, use the same command with roles such as `reception` or `activity,distribution`.
 
 Start the backend in **Terminal 1**:
 
