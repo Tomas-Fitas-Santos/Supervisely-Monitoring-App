@@ -10,6 +10,7 @@ from .models import (
     Event,
     LabelingJob,
     LabelingPlan,
+    MediaAsset,
     MediaVideo,
     Person,
     WorkBlock,
@@ -61,8 +62,8 @@ def reserve_repeats(db: Session, plan: LabelingPlan, eligible_team_ids: list[str
 
 
 def repeat_batch(db: Session, plan_id: str, team_id: str) -> tuple[list[WorkBlock], int]:
-    # One native labeling job must contain one contiguous block of a single
-    # video. Never combine two short samples from different video sources.
+    # Repeat an entire completed source block, including a block that crosses
+    # a video boundary. The final short source block is never repeated.
     blocks = db.scalars(select(WorkBlock).join(
         MediaVideo, MediaVideo.id == WorkBlock.video_id,
     ).where(
@@ -105,23 +106,24 @@ def claim_primary_block(
         WorkPacket.submitted_at.is_(None),
     )) is not None:
         return None
-    # The exclusive plan lock above serializes concurrent claims, preventing
-    # the last block of one video being skipped in favor of another video.
-    assigned = func.count(WorkBlock.job_id)
-    progress = select(
-        WorkBlock.video_id,
-        (assigned > 0).label("started"),
-    ).where(WorkBlock.plan_id == plan.id).group_by(WorkBlock.video_id).subquery()
+    # The exclusive plan lock serializes all annotator claims. New plans store
+    # dataset-wide ordinals; sorting by anchor-video name also preserves the
+    # order of pre-upgrade plans whose ordinals restarted for each video.
     block = db.scalar(select(WorkBlock).join(
-        progress, progress.c.video_id == WorkBlock.video_id,
-    ).join(MediaVideo, MediaVideo.id == WorkBlock.video_id).where(
+        MediaVideo, MediaVideo.id == WorkBlock.video_id,
+    ).where(
         WorkBlock.plan_id == plan.id, WorkBlock.event_id == plan.event_id,
         WorkBlock.job_id.is_(None),
-    ).order_by(progress.c.started.desc(), MediaVideo.video_group,
-               WorkBlock.ordinal, WorkBlock.id).limit(1)
+    ).order_by(MediaVideo.video_group, WorkBlock.ordinal, WorkBlock.id).limit(1)
         .with_for_update(of=WorkBlock))
-    if block is not None and len(block.media_ids) != 30:
-        raise ValueError("Official shared queue requires 30 consecutive frames per job")
+    if block is not None:
+        if not 1 <= len(block.media_ids) <= 30 or len(block.media_ids) != block.frame_count:
+            raise ValueError("Shared queue block has invalid frame count")
+        if len(block.media_ids) < 30 and db.scalar(select(WorkBlock.id).where(
+            WorkBlock.plan_id == plan.id, WorkBlock.job_id.is_(None),
+            WorkBlock.id != block.id,
+        ).limit(1)):
+            raise ValueError("Only the final dataset block may contain fewer than 30 frames")
     repeats, _repeat_count = (
         repeat_batch(db, plan.id, team.id)
         if block is None and include_repeats else ([], 0)
@@ -131,12 +133,21 @@ def claim_primary_block(
     selected = [block] if block is not None else repeats
     is_repeat = block is None
     frame_ids = []
-    morphologies = Counter()
     for source in selected:
-        ids = source.repeat_media_ids if is_repeat else source.media_ids
-        frame_ids.extend(ids)
-        video = db.get(MediaVideo, source.video_id)
-        morphologies[video.video_group.split("/", 1)[0]] += len(ids)
+        frame_ids.extend(source.repeat_media_ids if is_repeat else source.media_ids)
+    # WorkBlock.video_id identifies its first frame only. All source videos
+    # and morphologies must be resolved from the immutable per-frame records.
+    source_frames = list(db.scalars(select(MediaAsset).where(
+        MediaAsset.event_id == plan.event_id,
+        MediaAsset.dataset_id == plan.dataset_id,
+        MediaAsset.id.in_(frame_ids),
+    )))
+    if (len(source_frames) != len(frame_ids)
+            or len(set(frame_ids)) != len(frame_ids)
+            or any(asset.video_id is None for asset in source_frames)):
+        raise ValueError("Shared job source-frame identities are incomplete")
+    morphologies = Counter(asset.morphology for asset in source_frames)
+    video_ids = {asset.video_id for asset in source_frames}
     sequence = db.scalar(select(func.max(LabelingJob.sequence)).where(
         LabelingJob.plan_id == plan.id, LabelingJob.team_id == team.id,
     )) or 0
@@ -144,7 +155,7 @@ def claim_primary_block(
         event_id=plan.event_id, plan_id=plan.id, dataset_id=plan.dataset_id, team_id=team.id,
         assignee_person_id=person.id, release_mode="shared_repeat" if is_repeat else "shared_primary",
         sequence=sequence + 1, media_ids=frame_ids, frame_count=len(frame_ids),
-        video_count=len({source.video_id for source in selected}), morphology_counts=dict(morphologies),
+        video_count=len(video_ids), morphology_counts=dict(morphologies),
     )
     db.add(job)
     db.flush()
