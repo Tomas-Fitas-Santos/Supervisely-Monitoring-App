@@ -217,3 +217,74 @@ def test_postgres_multiple_validators_claim_only_one_round():
         assert operation.status == "done"
         assert operation.attempts == 1
     engine.dispose()
+
+
+def test_validated_shared_submission_enqueues_next_block_in_same_commit(monkeypatch):
+    """A finished packet releases exactly one next job without a second status pass."""
+    from annotatiathon import native_worker
+
+    engine = setup_queue()
+    try:
+        with Session(engine) as db:
+            plan = db.get(m.LabelingPlan, "plan")
+            plan.queue_seed = "benchmark-queue"
+            person = db.get(m.Person, "person")
+            person.check_in_at = 1
+            person.membership_status = "joined"
+            person.supervisely_user_id = 100
+            person.supervisely_role = "annotator"
+            person.native_verified_at = 1
+            video = m.MediaVideo(
+                event_id="event", dataset_id="dataset", video_group="bird/clip",
+                extraction_policy="all_frames",
+            )
+            db.add(video)
+            db.flush()
+            media_ids = [f"following-{i}" for i in range(30)]
+            for index, media_id in enumerate(media_ids):
+                db.add(m.MediaAsset(
+                    id=media_id, event_id="event", dataset_id="dataset",
+                    video_id=video.id, video_group="bird/clip",
+                    frame_index=index + 1, relative_path=f"bird/clip/{media_id}.jpg",
+                    kind="video_frame", morphology="bird",
+                    size_bytes=1, sha256="a" * 64,
+                ))
+            db.add(m.WorkBlock(
+                event_id="event", plan_id="plan", video_id=video.id, ordinal=1,
+                frame_count=30, media_ids=media_ids, repeat_media_ids=[],
+            ))
+            db.add(m.WorkPacket(
+                job_id="job", event_id="event", person_id="person",
+            ))
+            assert enqueue_validation(db, db.get(m.LabelingJob, "job"))
+            db.commit()
+
+        def fake_capture(db, _api, job):
+            packet = db.get(m.WorkPacket, job.id)
+            packet.submitted_at = m.epoch()
+            job.annotation_snapshot_round = job.correction_round
+            job.annotation_snapshot_frames = job.frame_count
+            return True
+
+        monkeypatch.setattr(native_worker, "capture_job_annotations", fake_capture)
+        with Session(engine) as db:
+            result = process_validation_once(db, SimpleNamespace(), None)
+            assert result["next_assignment_queued"] is True
+            assert result["status"] == "done"
+            jobs = list(db.scalars(select(m.LabelingJob).where(
+                m.LabelingJob.plan_id == "plan",
+            )))
+            assert len(jobs) == 2
+            followup = next(job for job in jobs if job.id != "job")
+            assert followup.media_ids == media_ids
+            assert followup.assignee_person_id == "person"
+            assert db.get(m.WorkPacket, "job").submitted_at is not None
+            tasks = list(db.scalars(select(m.NativeOperation)))
+            assert {(x.kind, x.status) for x in tasks} == {
+                ("validate_submission", "done"), ("publish_job", "pending"),
+            }
+            # No duplicate successor can be queued by repeated validation.
+            assert process_validation_once(db, SimpleNamespace(), None) is None
+            assert len(list(db.scalars(select(m.LabelingJob)))) == 2
+    finally:
+        engine.dispose()
