@@ -300,7 +300,13 @@ input,select{border:1px solid #dfe5ed;border-radius:9px;background:white;padding
 .annotation-image-stage.is-magnified{cursor:grab;touch-action:none}
 .annotation-image-stage.is-panning{cursor:grabbing}
 .annotation-legend{display:flex;flex-wrap:wrap;gap:7px;padding:9px;border-radius:9px;background:#f7f9fa;border:1px solid #e5ebec}
-.annotation-legend span{display:flex;align-items:center;gap:5px;white-space:nowrap;font-size:10px;color:#586a77}
+.annotation-legend-toggle{display:inline-flex;align-items:center;gap:5px;white-space:nowrap;
+  padding:5px 7px;border:1px solid transparent;border-radius:7px;background:#edf5f0;
+  color:#344d48;font-size:11px;font-weight:650;cursor:pointer}
+.annotation-legend-toggle:hover{border-color:#b6cfc6;background:#e1f1e8}
+.annotation-legend-toggle:focus-visible{outline:2px solid #2b7660;outline-offset:2px}
+.annotation-legend-toggle.is-hidden{opacity:.5;text-decoration:line-through;background:transparent}
+.annotation-legend-toggle svg{margin-left:2px}
 .annotation-legend i{width:11px;height:11px;display:inline-block;border:1px solid #273746;border-radius:50%;flex-shrink:0}
 
 
@@ -448,9 +454,7 @@ input,select{border:1px solid #dfe5ed;border-radius:9px;background:white;padding
 .shared-review-object-select strong{font-size:13px}
 .shared-review-object-select small{font-size:10px;color:#587f6b}
 .shared-review-canvas-panel .annotation-image-overlay{pointer-events:none}
-.shared-review-canvas-panel .annotation-image-overlay .annotation-shape{pointer-events:stroke;cursor:pointer}
-.shared-review-canvas-panel .annotation-image-overlay .annotation-shape:focus-visible{outline:none;filter:drop-shadow(0 0 3px #fff)}
-.shared-review-canvas-panel .annotation-image-overlay .annotation-shape.selected{filter:drop-shadow(0 0 4px #fef08a)}
+.shared-review-canvas-panel .annotation-image-overlay .annotation-shape{pointer-events:none}
 
 
 /* People/Teams: one scrolling roster surface, responsive team cards, compact member details. */
