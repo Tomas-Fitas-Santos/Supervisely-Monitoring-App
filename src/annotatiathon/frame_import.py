@@ -1,4 +1,4 @@
-"""Numeric folder identity and explicit supplied-frame manifests."""
+"""Infer supplied frame order from filenames; legacy manifests remain optional."""
 import re
 from fractions import Fraction
 from pathlib import Path
@@ -49,6 +49,30 @@ class FrameManifest(BaseModel):
         return value
 
 
+def supplied_frame_number(stem: str) -> int | None:
+    """Accept source frame labels such as ColumbaPalumbus_f000013.jpg.
+
+    Prefer explicitly marked frame suffixes over generic trailing numbers.
+    Other filenames are handled by deterministic natural ordering below.
+    """
+    labeled = re.fullmatch(
+        r"(?:.+?[_-])?(?:frame|image|img|f)[_-]?(\\d+)",
+        stem, re.IGNORECASE,
+    )
+    if labeled:
+        return int(labeled.group(1))
+    if stem.isdecimal():
+        return int(stem)
+    generic = re.fullmatch(r".+?[_-](\\d+)", stem)
+    return int(generic.group(1)) if generic else None
+
+
+def natural_frame_key(frame: MediaAsset) -> tuple:
+    filename = Path(frame.relative_path).name
+    return (tuple((0, int(piece)) if piece.isdecimal() else (1, piece.casefold())
+                  for piece in re.split(r"(\\d+)", filename)), filename.casefold(), filename)
+
+
 def index_supplied_frames(db: Session, video: MediaVideo, media_root: Path,
                           manifest_path: Path | None, *, strict: bool) -> None:
     frames = list(db.scalars(select(MediaAsset).where(MediaAsset.video_id == video.id)))
@@ -80,19 +104,42 @@ def index_supplied_frames(db: Session, video: MediaVideo, media_root: Path,
         notes.append("Frame density is declared by the supplied manifest.")
         if manifest.source_sha256 is None:
             notes.append("Original video checksum was not supplied.")
-    seen = set()
-    ambiguous = False
-    for frame in frames:
+    # A folder/ZIP always has a deterministic local order even if it does
+    # not contain frames.json. Use source suffixes when unambiguous; otherwise
+    # assign 1-based ordinals from natural filename order. No JSON is needed.
+    frames.sort(key=natural_frame_key)
+    parsed = [supplied_frame_number(Path(frame.relative_path).stem) for frame in frames]
+    reliable_numbers = (
+        bool(frames)
+        and all(number is not None and 1 <= number <= 2**31 - 1 for number in parsed)
+        and len(set(parsed)) == len(parsed)
+    )
+    if manifest_path is not None:
+        # Legacy manifests explicitly override inferred ordinals.
+        reliable_numbers = True
+    if not reliable_numbers:
+        notes.append(
+            "Frame filenames do not contain unique source ordinals; "
+            "source order inferred by natural filename sort."
+        )
+    else:
+        frames.sort(key=lambda frame: (
+            descriptions[Path(frame.relative_path).name].ordinal
+            if descriptions else supplied_frame_number(Path(frame.relative_path).stem)
+        ))
+    ordinals = [
+        (descriptions[Path(frame.relative_path).name].ordinal
+         if descriptions else supplied_frame_number(Path(frame.relative_path).stem))
+        if reliable_numbers else index
+        for index, frame in enumerate(frames, start=1)
+    ]
+    if len(set(ordinals)) != len(ordinals):
+        raise HTTPException(
+            status_code=422,
+            detail=f"Duplicate source frame ordinals in {video.video_group}.",
+        )
+    for frame, ordinal in zip(frames, ordinals):
         description = descriptions.get(Path(frame.relative_path).name)
-        match = re.fullmatch(r"(?:frame[_-]?)?(\d+)", Path(frame.relative_path).stem, re.IGNORECASE)
-        ordinal = description.ordinal if description else (int(match[1]) if match else None)
-        if ordinal is None or not 1 <= ordinal <= 2**31 - 1 or ordinal in seen or (declared_total and ordinal > declared_total):
-            if strict:
-                raise HTTPException(status_code=422, detail=f"Ambiguous frame order in {video.video_group}; supply a valid frames.json.")
-            ambiguous = True
-            frame.frame_index = None
-            continue
-        seen.add(ordinal)
         frame.frame_index = ordinal
         if strict:
             try:
@@ -108,16 +155,39 @@ def index_supplied_frames(db: Session, video: MediaVideo, media_root: Path,
             frame.frame_width, frame.frame_height = width, height
         if description:
             frame.presentation_timestamp = description.pts
-    if ambiguous:
-        for frame in frames:
-            frame.frame_index = None
-        video.identity_status = "unknown"
-        video.missing_frame_count = None
-        notes.append("Unknown or colliding ordinals require a manifest before block planning.")
-    else:
-        upper = declared_total or max(seen, default=0)
-        video.missing_frame_count = upper - len(seen)
+
+    if not ordinals:
+        raise HTTPException(status_code=422, detail="Frame folder is empty.")
+    lower, upper = min(ordinals), max(ordinals)
+    internal_gaps = upper - lower + 1 - len(ordinals)
+    if declared_total is not None:
+        video.missing_frame_count = declared_total - len(ordinals)
         video.identity_status = "gaps" if video.missing_frame_count else "complete"
-    if video.density == "unknown":
-        notes.append("Sampling density is unknown; numeric filenames do not prove full-density extraction.")
+    else:
+        # Do not misclassify a clipped source that starts at frame 13 as
+        # missing 12 images. Missing *internal* frames do matter.
+        video.missing_frame_count = internal_gaps if strict else upper - len(ordinals)
+        video.identity_status = "gaps" if internal_gaps else "complete"
+        if strict and internal_gaps == 0:
+            video.density = "declared_full"
+            video.source_frame_count = len(frames)
+            notes.append(
+                "Uploader selected Every source frame. Consecutive provided "
+                "frames are treated as a full-density segment; source completeness "
+                "cannot be independently verified without the original video."
+            )
+        elif strict and internal_gaps:
+            video.density = "unknown"
+            notes.append(
+                f"{internal_gaps} missing source ordinals within the supplied "
+                "sequence. Import succeeded, but full-density automatic jobs "
+                "are disabled for this video; supply consecutive frames or "
+                "import the original video."
+            )
+        else:
+            video.density = "sampled"
+            notes.append(
+                "Supplied frames were imported as sampled imagery. Their "
+                "underlying video frame density cannot be independently verified."
+            )
     video.identity_notes = notes
