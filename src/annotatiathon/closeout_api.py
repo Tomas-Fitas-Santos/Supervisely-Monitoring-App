@@ -115,24 +115,24 @@ def closeout_readiness(db: Session, event_id: str, fairness: dict) -> dict:
         ).group_by(ReviewSample.job_id)
     ).all())
     blocking = []
+    unfinished = 0
+    official_modes = {"shared_primary", "shared_repeat", "manual_released", "manual_hold"}
     official_frame_jobs = any(
-        job.assignee_person_id is not None
-        and job.release_mode in {
-            "shared_primary", "shared_repeat", "manual_released", "manual_hold",
-        }
+        job.assignee_person_id is not None and job.release_mode in official_modes
         for job in jobs
     )
     for job in jobs:
-        if job.assignee_person_id is not None and job.release_mode in {
-            "shared_primary", "shared_repeat", "manual_released", "manual_hold",
-        }:
-            complete_submission = (
-                job.status in {"on_review", "completed"}
-                and job.annotation_snapshot_round == job.correction_round
-                and frame_counts.get(job.id, 0) == job.frame_count
-            )
-            if not complete_submission:
-                blocking.append(job.id)
+        if job.assignee_person_id is not None and job.release_mode in official_modes:
+            if job.status in {"on_review", "completed"}:
+                # A native submission already marked complete must be copied
+                # back as annotation JSON before the official result is frozen.
+                if (job.annotation_snapshot_round != job.correction_round
+                        or frame_counts.get(job.id, 0) != job.frame_count):
+                    blocking.append(job.id)
+            else:
+                # Queued, in-progress, held and automatically returned
+                # incomplete jobs are not scored. They cannot block event end.
+                unfinished += 1
         elif job.status != "completed" or job.review_status != "accepted":
             blocking.append(job.id)
     return {
@@ -140,15 +140,16 @@ def closeout_readiness(db: Session, event_id: str, fairness: dict) -> dict:
             not official_frame_jobs or fairness["ready_for_winner"]
         ),
         "blocking_jobs": len(blocking),
+        "unfinished_unscored_jobs": unfinished,
         "verified_reviews_available": fairness["ready_for_winner"],
         "official_frame_review_required": official_frame_jobs,
         "message": (
-            f"{len(blocking)} jobs have incomplete submissions or unsynced frames."
+            f"{len(blocking)} submitted/legacy jobs still require synced annotation JSON or acceptance."
             if blocking else
             "Cannot finalize: no completed annotation reviews exist yet."
             if official_frame_jobs and not fairness["ready_for_winner"] else
-            "Required submissions captured; winner uses total verified correct annotations, "
-            "without equal reviewed-frame quotas."
+            f"Finalization available. {unfinished} unfinished jobs will remain unscored; "
+            "the winner uses total verified weighted annotation points."
         ),
     }
 
