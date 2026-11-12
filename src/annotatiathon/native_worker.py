@@ -26,7 +26,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path, PurePosixPath
 from threading import local
 
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from .annotation_schema import (
@@ -766,15 +766,21 @@ def sync_all(db: Session, api, config: SuperviselyConfig) -> dict:
     for plan in event_plans:
         if snapshots >= 5:
             break
+        frame_reviews = select(func.count(ReviewSample.id)).where(
+            ReviewSample.job_id == LabelingJob.id,
+            ReviewSample.correction_round == LabelingJob.correction_round,
+        ).correlate(LabelingJob).scalar_subquery()
         candidates = list(db.scalars(select(LabelingJob).where(
             LabelingJob.plan_id == plan.id,
             LabelingJob.event_id == plan.event_id,
             LabelingJob.status.in_(["on_review", "completed"]),
-            (LabelingJob.annotation_snapshot_round.is_distinct_from(LabelingJob.correction_round))
-            | ((LabelingJob.release_mode == "shared_primary") & ~select(ReviewSample.id).where(
-                ReviewSample.job_id == LabelingJob.id,
-                ReviewSample.correction_round == LabelingJob.correction_round,
-            ).exists()),
+            or_(
+                LabelingJob.annotation_snapshot_round.is_distinct_from(
+                    LabelingJob.correction_round,
+                ),
+                (LabelingJob.assignee_person_id.is_not(None)) &
+                (frame_reviews < LabelingJob.frame_count),
+            ),
         ).order_by(LabelingJob.id).limit(10)))
         for candidate in candidates:
             if snapshots >= 5:

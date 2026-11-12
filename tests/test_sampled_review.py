@@ -25,15 +25,21 @@ def test_sample_claim_scoring_and_retry(dataset_ctx, tmp_path):
     with maker.begin() as db:
         job = db.scalar(select(LabelingJob).where(LabelingJob.plan_id == planned.json()["plan_id"]))
         job.release_mode = "shared_primary"
-        asset = db.get(MediaAsset, job.media_ids[0])
-        snapshot = {
-            "source_media_id": asset.id, "source_relative_path": asset.relative_path,
-            "annotation": {"objects": [
-                {"classTitle": "bird", "geometryType": "rectangle"},
-                {"classTitle": "beak", "geometryType": "point"},
-            ]},
-        }
-        (tmp_path / f"{asset.id}.json").write_text(json.dumps(snapshot), encoding="utf-8")
+        assert len(job.media_ids) >= 2
+        for asset_id in job.media_ids:
+            asset = db.get(MediaAsset, asset_id)
+            snapshot = {
+                "source_media_id": asset.id,
+                "source_relative_path": asset.relative_path,
+                "annotation": {"objects": [
+                    {"classTitle": "bird", "geometryType": "rectangle"},
+                    {"classTitle": "beak", "geometryType": "point"},
+                ]},
+            }
+            (tmp_path / f"{asset.id}.json").write_text(
+                json.dumps(snapshot), encoding="utf-8",
+            )
+        frames = len(job.media_ids)
         ingest_sample(db, job, tmp_path)
         db.flush()
         ingest_sample(db, job, tmp_path)
@@ -43,7 +49,7 @@ def test_sample_claim_scoring_and_retry(dataset_ctx, tmp_path):
     api.include_router(scoring_router)
     api.dependency_overrides.update(app.dependency_overrides)
     with TestClient(api, cookies=client.cookies) as http:
-        assert http.get("/api/v1/review-queue/status").json()["pending"] == 1
+        assert http.get("/api/v1/review-queue/status").json()["pending"] == frames
         claimed = act(http, csrf, "/review-queue/claim-next")
         assert claimed.status_code == 200, claimed.text
         sample = claimed.json()["review"]
@@ -63,7 +69,17 @@ def test_sample_claim_scoring_and_retry(dataset_ctx, tmp_path):
         assert top["correct_objects"] == top["correct_boxes"] == top["weighted_score"] == 1
         assert top["reviewed_frames"] == 1
         assert top["errors"] == {"wrong_class": 1}
-        assert act(http, csrf, "/review-queue/claim-next").json() == {"review": None}
+        state = http.get("/api/v1/review-queue/status").json()
+        assert state["pending"] == frames - 1
+        assert state["completed"] == 1
+        with maker.begin() as db:
+            job = db.scalar(select(LabelingJob).where(
+                LabelingJob.plan_id == planned.json()["plan_id"],
+            ))
+            job.release_mode = "shared_repeat"
+            # Repeat submissions must not create duplicate review records.
+            ingest_sample(db, job, tmp_path)
+        assert http.get("/api/v1/review-queue/status").json()["pending"] == frames - 1
 
 
 def test_publishing_runs_while_background_is_busy(monkeypatch):

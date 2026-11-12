@@ -1,4 +1,4 @@
-"""Submission based sampling and event-wide monitor leases."""
+"""One immutable review candidate per submitted frame, with shared monitor leases."""
 import hashlib
 import json
 from collections import Counter
@@ -30,39 +30,47 @@ from .models import (
 )
 from .scoring_api import Weights, latest_rubric
 
-router = APIRouter(prefix="/api/v1/review-queue", tags=["sampled review"])
+router = APIRouter(prefix="/api/v1/review-queue", tags=["frame review"])
 LEASE_SECONDS = 180
 read_access = requires("organiser", "monitor")
 write_access = requires("organiser", "monitor", mutation=True)
 
 
 def ingest_sample(db: Session, job: LabelingJob, root: Path) -> None:
-    if job.release_mode != "shared_primary" or not job.media_ids:
+    """Make all completed per-frame snapshots available to event monitors.
+
+    Existing completed decisions and claims are never mutated.  A job's
+    source-media identity and correction round make retries idempotent, even
+    when the worker re-processes an already published snapshot manifest.
+    Historical two-person native jobs are handled by their legacy review API.
+    """
+    if job.assignee_person_id is None or not job.media_ids:
         return
-    exists = db.scalar(select(ReviewSample.id).where(
-        ReviewSample.job_id == job.id, ReviewSample.correction_round == job.correction_round,
-    ))
-    if exists:
-        return
-    previous_job = db.scalar(select(LabelingJob.id).where(
-        LabelingJob.event_id == job.event_id,
-        LabelingJob.assignee_person_id == job.assignee_person_id,
-        LabelingJob.release_mode == "shared_primary",
-        LabelingJob.created_at <= job.created_at, LabelingJob.id != job.id,
-        LabelingJob.submitted_at.is_not(None),
-        LabelingJob.sequence < job.sequence,
-    ).limit(1))
-    media_id = job.media_ids[0] if previous_job is None else min(
-        job.media_ids, key=lambda value: hashlib.sha256(f"{job.id}:{value}".encode()).digest(),
-    )
-    raw = (root / f"{media_id}.json").read_bytes()
-    snapshot = json.loads(raw)
-    if snapshot["source_media_id"] != media_id:
-        raise ValueError("Sample source does not match its snapshot")
-    snapshot["sha256"] = hashlib.sha256(raw).hexdigest()
-    snapshot["selection_reason"] = "onboarding" if previous_job is None else "routine"
-    db.add(ReviewSample(event_id=job.event_id, job_id=job.id, team_id=job.team_id,
-                        media_id=media_id, correction_round=job.correction_round, snapshot=snapshot))
+    if len(set(job.media_ids)) != len(job.media_ids):
+        raise ValueError("Duplicate source frames in submitted job")
+    existing = set(db.scalars(select(ReviewSample.media_id).where(
+        ReviewSample.job_id == job.id,
+        ReviewSample.correction_round == job.correction_round,
+    )))
+    # Do not use a job arrival timestamp or the original in-job frame
+    # sequence to decide what the next reviewer receives. claim() handles
+    # team-first balancing and independent randomized frame selection.
+    for media_id in job.media_ids:
+        if media_id in existing:
+            continue
+        raw = (root / f"{media_id}.json").read_bytes()
+        snapshot = json.loads(raw)
+        if snapshot["source_media_id"] != media_id:
+            raise ValueError("Submitted frame source does not match its snapshot")
+        if not isinstance(snapshot.get("annotation"), dict):
+            raise ValueError("Submitted frame does not contain annotation JSON")
+        snapshot["sha256"] = hashlib.sha256(raw).hexdigest()
+        snapshot["selection_reason"] = "submitted_frame"
+        db.add(ReviewSample(
+            event_id=job.event_id, job_id=job.id, team_id=job.team_id,
+            media_id=media_id, correction_round=job.correction_round,
+            snapshot=snapshot,
+        ))
 
 
 class Lease(BaseModel):

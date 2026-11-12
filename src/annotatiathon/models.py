@@ -731,7 +731,8 @@ class ReviewRubric(Base):
 class ReviewSample(Base):
     __tablename__ = "review_samples"
     __table_args__ = (
-        UniqueConstraint("job_id", "correction_round"),
+        UniqueConstraint("job_id", "correction_round", "media_id",
+                         name="uq_review_sample_job_round_media"),
         Index("ix_review_sample_claim", "event_id", "team_id", "random_key"),
     )
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=identifier)
