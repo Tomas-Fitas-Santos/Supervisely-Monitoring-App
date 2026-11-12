@@ -20,7 +20,7 @@ from .events_api import current_event
 from .models import AuditEvent, MediaAsset, MediaDataset, MediaVideo, NativeOperation, epoch
 from .native_media_pool import enqueue_mirror
 from .datasets_api import (
-    IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, canonical_name, dataset_view, extract_video_frames,
+    IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, dataset_view, extract_video_frames,
     get_dataset, safe_relative, sha256_file,
 )
 
@@ -62,7 +62,7 @@ def media_file(ds: MediaDataset, relative: str) -> Path:
             raise FileNotFoundError("invalid_mounted_media_path")
         source = mounted_source(ds.source_folder).resolve()
         # The species-first source layout omits the internal 'videos' prefix.
-        actual = source.joinpath(*parts[1:]) if parts[0] == "videos" else source.joinpath(*parts)
+        actual = source.joinpath(*parts[1:])
         if (actual.is_symlink() or not actual.resolve().is_relative_to(source)
                 or not actual.is_file()):
             raise FileNotFoundError("mounted_media_unavailable")
@@ -267,6 +267,10 @@ def index_mounted_dataset(db: Session, ds: MediaDataset):
                         add_asset(frame, frame.relative_to(media_root).as_posix(),
                                   species, video)
                 video_count += 1
+            elif entry.is_file() and entry.suffix.lower() in IMAGE_EXTENSIONS:
+                name = str(safe_relative(entry.name))
+                add_asset(entry, str(PurePosixPath("images", species, name)),
+                          species, None)
             elif entry.is_dir():
                 title = str(safe_relative(entry.name))
                 video = MediaVideo(
