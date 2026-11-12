@@ -54,7 +54,7 @@ def test_worker_sweep_caches_builds_without_reusing_test_databases():
     assert "build api worker web" in script
     assert "up -d --no-build --scale" in script
     assert "up -d --build" not in script
-    assert '"nightjar-bench-300-$stamp-p$count-v$Validators"' in script
+    assert '"nightjar-bench-300-$stamp-$Phase-p$count-v$Validators-c$Correctors-s$StatusWorkers"' in script
     assert "down --volumes --remove-orphans" in script
 
 
