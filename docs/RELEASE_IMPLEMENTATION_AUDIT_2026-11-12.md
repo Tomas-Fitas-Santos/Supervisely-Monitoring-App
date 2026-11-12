@@ -30,7 +30,7 @@
 | Identity | Native member email unavailable or joined account not mapped to numeric Supervisely user ID | Refresh membership; review unmatched members; create jobs only for verified, eligible IDs |
 | Signup | Approved roster email claimed by the wrong person | Deliver the single-use organiser code over a trusted private channel; confirm an invited monitor can register and an uninvited person cannot |
 | Authentication | Expired/locked Nightjar password or wrong event selected | Sign in all staff and verify event-specific permissions and lockout recovery |
-| Dataset | Imported video has gaps/unknown frame density; huge full-density dataset exhausts media storage | Check provenance, exact frame count, source IDs, manifest, free disk and backups |
+| Dataset | Imported video has gaps/unknown frame density; huge full-density dataset exhausts media storage | No JSON required: inspect inferred numeric suffixes or natural frame order, source identity and gaps, free disk and backups; sparse frame folders remain ineligible for full-density automatic queues |
 | Queue | Manual priority starves automatic work; worker restart duplicates remote operations | Trial high/normal/held jobs, restart worker mid-operation, verify idempotent remote ID reconciliation |
 | Publication | Job issued to wrong native user or mixed-video sequence misattributed | Verify native job owner IDs, original per-frame video identity, frame order, and that repeat blocks are not auto-issued |
 | Submission | Supervisely job status transitions to review but frame JSON unavailable or out of order | Check all source-media IDs have matching job-scoped annotation JSON; retry without duplicate snapshots |
