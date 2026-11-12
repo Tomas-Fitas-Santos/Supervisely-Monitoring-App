@@ -2,7 +2,7 @@
 import argparse
 import getpass
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 
 from .auth import ROLES, normalized_email
 from .db import session_factory
@@ -30,6 +30,12 @@ def main() -> None:
     approval = cmd.add_parser("approve-email", help="Approve a staff email in PostgreSQL")
     approval.add_argument("--email", required=True)
     approval.add_argument("--role", choices=("admin", "organiser"), required=True)
+    rename = cmd.add_parser(
+        "change-staff-email",
+        help="Correct an existing staff email and matching approval without changing the password",
+    )
+    rename.add_argument("--from-email", required=True)
+    rename.add_argument("--to-email", required=True)
     reset = cmd.add_parser(
         "reset-password",
         help="Securely reset an existing staff password and revoke sessions",
@@ -52,6 +58,62 @@ def main() -> None:
         from .review_backfill import backfill_frame_reviews
 
         print(backfill_frame_reviews(session_factory(), event_id=args.event_id))
+        return
+    if args.action == "change-staff-email":
+        try:
+            old_email = normalized_email(args.from_email)
+            new_email = normalized_email(args.to_email)
+        except ValueError as exc:
+            parser.error(str(exc))
+        if old_email == new_email:
+            parser.error("The old and corrected email must be different.")
+        with session_factory().begin() as db:
+            # Lock the persistent approval rows and account candidates.
+            # Never infer ownership or silently merge two real staff accounts.
+            approvals = list(db.scalars(select(ApprovedStaffEmail).where(
+                ApprovedStaffEmail.email.in_([old_email, new_email]),
+            ).with_for_update()))
+            by_approval = {a.email: a for a in approvals}
+            old_approval = by_approval.get(old_email)
+            new_approval = by_approval.get(new_email)
+            if old_approval is None or not old_approval.enabled:
+                parser.error("Source email is not an enabled database-approved staff email.")
+            matches = list(db.scalars(select(StaffAccount).where(
+                func.lower(StaffAccount.email).in_([old_email, new_email]),
+            ).with_for_update()))
+            source = [staff for staff in matches
+                      if staff.email.strip().lower() == old_email]
+            destination = [staff for staff in matches
+                           if staff.email.strip().lower() == new_email]
+            if len(source) != 1:
+                parser.error("Expected exactly one existing source account; no changes made.")
+            if destination:
+                parser.error("A staff account already exists under the corrected email; no accounts were merged.")
+            if new_approval is not None:
+                if not new_approval.enabled or new_approval.role != old_approval.role:
+                    parser.error("The target has a conflicting approval; resolve it before changing the account.")
+                # The correct address was already approved: retain its record
+                # and remove only the incorrect allowlist entry.
+                db.delete(old_approval)
+            else:
+                # Move the existing approval, preserving its role and creation date.
+                old_approval.email = new_email
+            staff = source[0]
+            staff.email = new_email
+            db.execute(delete(StaffSession).where(StaffSession.staff_id == staff.id))
+            db.add(AuditEvent(
+                staff_id=staff.id,
+                action="staff.email.corrected_cli",
+                target_type="staff", target_id=staff.id,
+                details={
+                    "old_email": old_email, "new_email": new_email,
+                    "role": old_approval.role,
+                    "password_preserved": True, "sessions_revoked": True,
+                },
+            ))
+        print("Corrected Nightjar staff email:", old_email, "->", new_email)
+        print("Existing account ID, password and role preserved; sessions revoked.")
+        print("The organiser must now sign in using the corrected email.")
         return
     if args.action == "approve-email":
         try:
