@@ -1,5 +1,4 @@
 """Host-mounted source resolution must not copy files or escape the approved mount."""
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
