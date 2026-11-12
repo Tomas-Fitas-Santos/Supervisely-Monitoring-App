@@ -809,7 +809,10 @@ def next_annotation_snapshot_candidates(
     """
     frame_reviews = select(func.count(ReviewSample.id)).where(
         ReviewSample.job_id == LabelingJob.id,
-        ReviewSample.correction_round == LabelingJob.correction_round,
+        or_(
+            ReviewSample.validated_complete.is_(True),
+            ReviewSample.correction_round == LabelingJob.correction_round,
+        ),
     ).correlate(LabelingJob).scalar_subquery()
     base = select(LabelingJob).where(
         LabelingJob.plan_id == plan.id,
