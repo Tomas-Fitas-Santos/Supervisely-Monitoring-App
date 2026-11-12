@@ -146,8 +146,10 @@ def closeout_readiness(db: Session, event_id: str, fairness: dict) -> dict:
             if blocking else
             "Cannot finalize: no completed annotation reviews exist yet."
             if official_frame_jobs and not fairness["ready_for_winner"] else
-            f"Finalization available. {unfinished} unfinished jobs will remain unscored; "
-            "the winner uses total verified weighted annotation points."
+            f"Finalization available. {unfinished} jobs still have unsubmitted or "
+            "incomplete frames. Those frames earn no points; any structurally "
+            "complete frames already accepted from these jobs retain their "
+            "review results. The competition uses the verified prize score."
         ),
     }
 
