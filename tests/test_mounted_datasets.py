@@ -73,3 +73,69 @@ def test_mounted_path_does_not_escape_source_folder(monkeypatch, tmp_path):
         mounted_datasets.media_file(ds, "videos/../../outside.jpg")
     with pytest.raises(FileNotFoundError):
         mounted_datasets.media_file(ds, "videos/Sparrow/Clip/missing.jpg")
+
+
+def test_register_index_review_mounted_frames_without_copying(monkeypatch, tmp_path):
+    """End-to-end API registration -> durable indexing -> local review via source mount."""
+    import io
+
+    import test_dataset_workflows
+    from PIL import Image
+    from sqlalchemy import select
+
+    from annotatiathon.models import MediaAsset, NativeOperation
+
+    fixture = test_dataset_workflows.ctx.__wrapped__
+    # The shared fixture is a generator; manually run it under pytest's
+    # monkeypatch/temp-path fixtures to preserve the existing API setup.
+    context = fixture(monkeypatch, tmp_path)
+    client, maker, csrf = next(context)
+    try:
+        source_root = _configure(monkeypatch, tmp_path)
+        dataset_folder = source_root / "BirdGaze2026" / "bird" / "clip_01"
+        dataset_folder.mkdir(parents=True)
+        frame = io.BytesIO()
+        Image.new("RGB", (32, 24)).save(frame, format="JPEG")
+        for number in (1, 2):
+            (dataset_folder / f"frame_{number:06d}.jpg").write_bytes(frame.getvalue())
+        monkeypatch.setattr(
+            mounted_datasets, "get_settings",
+            lambda: SimpleNamespace(
+                nightjar_dataset_source_dir=str(source_root),
+                local_data_dir=str(tmp_path),
+                max_dataset_assets=250000,
+                max_dataset_bytes=140_000_000_000,
+            ),
+        )
+        response = client.post("/api/v1/datasets/mounted",
+            json={"folder":"BirdGaze2026","name":"BirdGaze mounted","extraction_policy":"all_frames"},
+            headers={"X-CSRF-Token":csrf})
+        assert response.status_code == 202, response.text
+        dataset_id = response.json()["id"]
+        assert response.json()["status"] == "indexing"
+        with maker() as db:
+            done = mounted_datasets.process_mounted_index_once(db)
+        assert done["status"] == "done", done
+        response = client.get("/api/v1/datasets/"+dataset_id+"/summary")
+        assert response.status_code == 200
+        assert response.json()["total_assets"] == 2
+        with maker() as db:
+            assets = list(db.scalars(select(MediaAsset).where(
+                MediaAsset.dataset_id == dataset_id)))
+            assert len(assets) == 2
+            mirror = db.scalar(select(NativeOperation).where(
+                NativeOperation.kind == "mirror_dataset",
+                NativeOperation.target_id == dataset_id,
+            ))
+            assert mirror is not None and mirror.status == "pending"
+        assert sorted(asset.frame_index for asset in assets) == [1, 2]
+        assert not list((tmp_path / "event" / dataset_id / "media").rglob("*.jpg"))
+        preview = client.get(
+            "/api/v1/review/datasets/"+dataset_id+"/assets/"+assets[0].id+"/image")
+        assert preview.status_code == 200
+        assert preview.content == frame.getvalue()
+    finally:
+        try:
+            next(context)
+        except StopIteration:
+            pass
