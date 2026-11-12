@@ -28,6 +28,7 @@ from .models import (
     TicketLedgerEntry,
     epoch,
 )
+from .review_eligibility import eligible_frame_review
 from .scoring_api import correct_point_types
 
 router = APIRouter(prefix="/api/v1/closeout", tags=["event reports"])
@@ -67,8 +68,7 @@ def frame_review_fairness(db: Session, event_id: str) -> dict:
         .join(LabelingJob, LabelingJob.id == ReviewSample.job_id)
         .where(
             ReviewSample.event_id == event_id,
-            ReviewSample.correction_round == LabelingJob.correction_round,
-            LabelingJob.status.in_(("on_review", "completed")),
+            eligible_frame_review(),
         ).group_by(ReviewSample.team_id)
     ).all())
     reviewed = dict(db.execute(
@@ -76,8 +76,7 @@ def frame_review_fairness(db: Session, event_id: str) -> dict:
         .join(LabelingJob, LabelingJob.id == ReviewSample.job_id)
         .where(
             ReviewSample.event_id == event_id,
-            ReviewSample.correction_round == LabelingJob.correction_round,
-            LabelingJob.status.in_(("on_review", "completed")),
+            eligible_frame_review(),
             ReviewSample.completed_at.is_not(None),
             ReviewSample.decision.is_not(None),
         ).group_by(ReviewSample.team_id)
@@ -111,7 +110,7 @@ def closeout_readiness(db: Session, event_id: str, fairness: dict) -> dict:
         .join(LabelingJob, LabelingJob.id == ReviewSample.job_id)
         .where(
             ReviewSample.event_id == event_id,
-            ReviewSample.correction_round == LabelingJob.correction_round,
+            eligible_frame_review(),
         ).group_by(ReviewSample.job_id)
     ).all())
     blocking = []
@@ -126,8 +125,7 @@ def closeout_readiness(db: Session, event_id: str, fairness: dict) -> dict:
             if job.status in {"on_review", "completed"}:
                 # A native submission already marked complete must be copied
                 # back as annotation JSON before the official result is frozen.
-                if (job.annotation_snapshot_round != job.correction_round
-                        or frame_counts.get(job.id, 0) != job.frame_count):
+                if frame_counts.get(job.id, 0) != job.frame_count:
                     blocking.append(job.id)
             else:
                 # Queued, in-progress, held and automatically returned
