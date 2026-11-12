@@ -3,7 +3,6 @@ import hashlib
 import json
 from collections import Counter
 from pathlib import Path
-from secrets import choice
 from typing import Literal
 from uuid import UUID
 
@@ -52,9 +51,8 @@ def ingest_sample(db: Session, job: LabelingJob, root: Path) -> None:
         ReviewSample.job_id == job.id,
         ReviewSample.correction_round == job.correction_round,
     )))
-    # Do not use a job arrival timestamp or the original in-job frame
-    # sequence to decide what the next reviewer receives. claim() handles
-    # team-first balancing and independent randomized frame selection.
+    # Do not use job arrival time or the frame's video position to choose
+    # reviews. Every eligible submitted frame joins one event-wide random pool.
     for media_id in job.media_ids:
         if media_id in existing:
             continue
@@ -129,23 +127,27 @@ def claim(db, event_id, reviewer_id):
     if existing:
         return claim_view(db, existing)
     available = rows.completed_at.is_(None) & or_(rows.expires_at.is_(None), rows.expires_at <= now)
-    load = func.sum(case((or_(rows.completed_at.is_not(None), rows.expires_at > now), 1), else_=0))
-    teams = db.execute(select(rows.team_id, load.label("load")).join(
-        LabelingJob, LabelingJob.id == rows.job_id,
-    ).where(scope, *current_submission)
-        .group_by(rows.team_id)
-        .having(func.sum(case((available, 1), else_=0)) > 0)
-        .order_by(load)).all()
-    if not teams:
-        return None
-    team_id = choice([row.team_id for row in teams if row.load == teams[0].load])
+    # No per-team equalization or quota. A team contributing more complete
+    # submitted frames has more entries in this pool and consequently more
+    # opportunities to earn correctly reviewed keypoint/box points.
+    # Random-key pivot avoids sorting the entire large backlog by RANDOM().
+    # PostgreSQL SKIP LOCKED ensures simultaneous monitors never claim the
+    # same frame; the event lock also serializes completion/claim transactions.
     pivot = identifier()
     query = select(rows).join(
         LabelingJob, LabelingJob.id == rows.job_id,
-    ).where(scope, *current_submission, rows.team_id == team_id, available)
-    sample = db.scalar(query.where(rows.random_key >= pivot).order_by(rows.random_key).limit(1))
+    ).where(scope, *current_submission, available)
+    sample = db.scalar(
+        query.where(rows.random_key >= pivot).order_by(rows.random_key).limit(1)
+        .with_for_update(skip_locked=True, of=rows)
+    )
     if sample is None:
-        sample = db.scalar(query.order_by(rows.random_key).limit(1))
+        sample = db.scalar(
+            query.order_by(rows.random_key).limit(1)
+            .with_for_update(skip_locked=True, of=rows)
+        )
+    if sample is None:
+        return None
     rubric = latest_rubric(db, event_id)
     sample.rubric_id = rubric.id if rubric else None
     sample.reviewer_id = reviewer_id
