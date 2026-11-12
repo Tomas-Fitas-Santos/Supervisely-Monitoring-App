@@ -73,7 +73,7 @@ def test_manual_jobs_select_distinct_contiguous_video_parts(dataset_ctx):
     assert duplicate.status_code == 409
 
 
-def test_incomplete_manual_30_job_returns_without_review(dataset_ctx):
+def test_manual_30_job_waits_for_per_frame_validation_after_native_submission(dataset_ctx):
     http, maker, csrf = dataset_ctx
     dataset_id, options = setup_blocks(http, csrf)
     block = options["blocks"][0]
@@ -105,14 +105,16 @@ def test_incomplete_manual_30_job_returns_without_review(dataset_ctx):
         get_info_by_id=lambda _native_id: native,
     ))
     with maker() as db:
-        assert sync_one(db, api, db.get(LabelingJob, job_id)) == "needs_correction"
+        assert sync_one(db, api, db.get(LabelingJob, job_id)) == "on_review"
         job = db.get(LabelingJob, job_id)
-        assert job.review_status == "returned_incomplete"
-        assert job.correction_round == 1
+        assert job.review_status == "unreviewed"
+        assert job.correction_round == 0
+        # Status alone does not distinguish the 29 complete images:
+        # structural validation runs after job-scoped JSON capture.
         assert db.scalar(select(NativeOperation).where(
             NativeOperation.kind == "restart_job",
             NativeOperation.target_id == job_id,
-        )).status == "pending"
+        )) is None
         assert db.scalar(select(ReviewSample.id).where(
             ReviewSample.job_id == job_id,
         )) is None
