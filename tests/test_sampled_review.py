@@ -8,7 +8,7 @@ from sqlalchemy import select
 from test_dataset_workflows import act, ingest, teams
 
 from annotatiathon.app import app
-from annotatiathon.models import LabelingJob, MediaAsset, Person
+from annotatiathon.models import LabelingJob, MediaAsset, Person, ReviewSample
 from annotatiathon.review_queue_api import ingest_sample
 from annotatiathon.review_queue_api import router as review_router
 from annotatiathon.scoring_api import router as scoring_router
@@ -193,3 +193,50 @@ def test_current_round_supersedes_old_review_only_after_new_review(dataset_ctx, 
     with maker() as db:
         current = rankings(ctx, db)["items"]
         assert sum(row["correct_objects"] for row in current) == 2
+
+
+def test_partial_submission_does_not_release_frames_for_monitor_review(dataset_ctx):
+    """Accept staged frame JSON but hide all reviews until the job is complete."""
+    client, maker, csrf = dataset_ctx
+    dataset_id = ingest(client, csrf)
+    teams(client, csrf)
+    plan = act(client, csrf, "/labeling/plans", {"dataset_id": dataset_id})
+    assert plan.status_code == 201
+    with maker.begin() as db:
+        job = next(j for j in db.scalars(select(LabelingJob).where(
+            LabelingJob.plan_id == plan.json()["plan_id"],
+        )) if len(j.media_ids) > 1)
+        job.release_mode = "shared_primary"
+        job.status = "on_review"
+        job.assignee_person_id = db.scalar(select(Person.id).where(
+            Person.team_id == job.team_id,
+        ).limit(1))
+        assert job.assignee_person_id is not None
+        job.annotation_snapshot_frames = job.frame_count - 1
+        job_id = job.id
+        db.add(ReviewSample(
+            event_id=job.event_id, job_id=job.id, team_id=job.team_id,
+            media_id=job.media_ids[0], correction_round=0,
+            validated_complete=True,
+            snapshot={"source_media_id": job.media_ids[0], "annotation": {"objects": []}},
+        ))
+
+    api = FastAPI()
+    api.include_router(review_router)
+    api.dependency_overrides.update(app.dependency_overrides)
+    with TestClient(api, cookies=client.cookies) as http:
+        assert http.get("/api/v1/review-queue/status").json()["pending"] == 0
+        assert act(http, csrf, "/review-queue/claim-next").json()["review"] is None
+        # Even an in-progress correction remains unreviewable.
+        with maker.begin() as db:
+            job = db.get(LabelingJob, job_id)
+            job.status = "needs_correction"
+        assert http.get("/api/v1/review-queue/status").json()["pending"] == 0
+        with maker.begin() as db:
+            job = db.get(LabelingJob, job_id)
+            job.annotation_snapshot_frames = job.frame_count
+            job.status = "on_review"
+        assert http.get("/api/v1/review-queue/status").json()["pending"] == 1
+        claimed = act(http, csrf, "/review-queue/claim-next")
+        assert claimed.status_code == 200
+        assert claimed.json()["review"] is not None
