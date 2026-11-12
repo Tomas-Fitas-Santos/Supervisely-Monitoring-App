@@ -23,6 +23,44 @@
 - Organiser: save the shared Supervisely Team ID, Workspace ID, and encrypted admin/manager integration token in Settings.
 - Distinguish a verified native team member appearing in the roster from an authorised Nightjar monitor login. Only an approved organiser/CSV roster monitor can register.
 
+## Link a Windows dataset folder without a browser upload
+
+When **Data → Source folders & upload** displays **No folders available**,
+Nightjar is not seeing any dataset subfolders under its Docker source mount.
+A browser cannot grant a remote API or Docker container read-only access to
+an arbitrary local Windows directory just by selecting it.
+
+On the **Windows PC running Docker Desktop**, from the repository root:
+
+```powershell
+git pull --ff-only origin main
+.\scripts\link-local-dataset.ps1 -StartWorker
+```
+
+Select the **dataset root** in the Windows folder chooser, e.g.
+`D:\BirdDatasets\BirdGaze2026`, containing species subfolders such as
+`CorvusCorone\flight_01.mp4` or `CorvusCorone\flight_01\frame_000001.jpg`.
+For a noninteractive terminal:
+
+```powershell
+.\scripts\link-local-dataset.ps1 -DatasetFolder "D:\BirdDatasets\BirdGaze2026" -StartWorker
+```
+
+The helper mounts the dataset's **parent directory**, so `BirdGaze2026`
+appears in the app's existing folder selector. It updates only
+`NIGHTJAR_DATASET_HOST_DIR` in the existing private `.env.live` file,
+preserves database credentials and encryption keys, and restarts only the
+API/web and running or explicitly requested native worker containers.
+It never copies dataset files, deletes volumes, or recreates the database.
+All source files stay on disk and are mounted read-only. The app's **Refresh**
+button picks up the newly visible folder; then select and link it.
+
+If another non-default folder root is already configured, the helper refuses
+to replace it automatically because older mounted datasets could become
+unavailable. Inspect your existing registrations before using `-ReplaceMount`.
+On a separate cloud server, the local Windows folder cannot be mounted with
+this helper: the files must be accessible from the actual Docker host first.
+
 ## Video-only dataset import and coverage
 
 The **Dataset** main tab has two subtabs: **Upload & Manage** and **Coverage &
