@@ -28,6 +28,7 @@ from .models import (
     MediaAsset,
     MediaDataset,
     MediaVideo,
+    NativeOperation,
     epoch,
 )
 from .native_media_pool import enqueue_mirror, mirror_status
@@ -56,7 +57,8 @@ def dataset_view(ds: MediaDataset) -> dict:
         status = "interrupted"
     return {
         "id": ds.id, "name": ds.name, "event_id": ds.event_id,
-        "upload_kind": ds.upload_kind, "status": status,
+        "upload_kind": ds.upload_kind, "source_folder": ds.source_folder,
+        "status": status,
         "extraction_policy": ds.extraction_policy,
         "source_bytes": ds.source_bytes, "image_count": ds.image_count,
         "frame_count": ds.frame_count, "video_count": ds.video_count,
@@ -245,6 +247,12 @@ def delete_incomplete_dataset(
     if expected.exists():
         shutil.rmtree(expected)
     db.execute(delete(DatasetStagedFile).where(DatasetStagedFile.dataset_id == ds.id))
+    if ds.upload_kind == "mounted":
+        db.execute(delete(NativeOperation).where(
+            NativeOperation.kind == "index_mounted_dataset",
+            NativeOperation.target_id == ds.id,
+            NativeOperation.status == "attention",
+        ))
     db.delete(ds)
     db.add(AuditEvent(
         staff_id=ctx.staff.id, event_id=event.id, action="dataset.delete_incomplete",
