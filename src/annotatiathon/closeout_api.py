@@ -52,38 +52,51 @@ def complete_submission(job: LabelingJob) -> bool:
 
 
 def frame_review_fairness(db: Session, event_id: str) -> dict:
-    """Current-round completed-frame counts across all active competition teams."""
+    """Report random-pool review coverage, not an equal-team scoring quota.
+
+    Keep this historical function and report key for older API consumers.
+    Only current, complete, eligible native submission rounds are counted.
+    """
     teams = list(db.execute(select(CompetitionTeam.id, CompetitionTeam.name).where(
         CompetitionTeam.event_id == event_id,
         CompetitionTeam.active.is_(True),
     ).order_by(CompetitionTeam.name)))
-    counts = dict(db.execute(
+    available = dict(db.execute(
         select(ReviewSample.team_id, func.count(ReviewSample.id))
         .join(LabelingJob, LabelingJob.id == ReviewSample.job_id)
         .where(
             ReviewSample.event_id == event_id,
             ReviewSample.correction_round == LabelingJob.correction_round,
+            LabelingJob.status.in_(("on_review", "completed")),
+        ).group_by(ReviewSample.team_id)
+    ).all())
+    reviewed = dict(db.execute(
+        select(ReviewSample.team_id, func.count(ReviewSample.id))
+        .join(LabelingJob, LabelingJob.id == ReviewSample.job_id)
+        .where(
+            ReviewSample.event_id == event_id,
+            ReviewSample.correction_round == LabelingJob.correction_round,
+            LabelingJob.status.in_(("on_review", "completed")),
             ReviewSample.completed_at.is_not(None),
             ReviewSample.decision.is_not(None),
         ).group_by(ReviewSample.team_id)
     ).all())
     per_team = [
         {"team_id": team_id, "team_name": name,
-         "reviewed_frames": int(counts.get(team_id, 0))}
+         "available_frames": int(available.get(team_id, 0)),
+         "reviewed_frames": int(reviewed.get(team_id, 0))}
         for team_id, name in teams
     ]
-    totals = [item["reviewed_frames"] for item in per_team]
-    equal = bool(totals) and len(set(totals)) == 1
-    target = max(totals, default=0)
+    total_reviewed = sum(row["reviewed_frames"] for row in per_team)
     return {
-        "teams": per_team, "equal": equal,
-        "reviewed_frames_per_team": target if equal else None,
-        "frames_to_equalize": [
-            {**item, "additional_reviews_needed": target - item["reviewed_frames"]}
-            for item in per_team
-        ],
-        "ready_for_winner": equal and target > 0,
-        "policy": "Only latest-round completed frame reviews; equal team counts required",
+        "teams": per_team,
+        "total_available_frames": sum(row["available_frames"] for row in per_team),
+        "total_reviewed_frames": total_reviewed,
+        "ready_for_winner": total_reviewed > 0,
+        "policy": (
+            "Random review from all available submitted frames; no equal-team quota. "
+            "Only verified correct keypoints and bounding boxes count toward ranking."
+        ),
     }
 
 
@@ -126,14 +139,15 @@ def closeout_readiness(db: Session, event_id: str, fairness: dict) -> dict:
             not official_frame_jobs or fairness["ready_for_winner"]
         ),
         "blocking_jobs": len(blocking),
-        "equal_review_coverage": fairness["ready_for_winner"],
+        "verified_reviews_available": fairness["ready_for_winner"],
         "official_frame_review_required": official_frame_jobs,
         "message": (
             f"{len(blocking)} jobs have incomplete submissions or unsynced frames."
             if blocking else
-            "Cannot finalize: teams do not have the same positive number of reviewed frames."
+            "Cannot finalize: no completed annotation reviews exist yet."
             if official_frame_jobs and not fairness["ready_for_winner"] else
-            "All required submissions are captured; the applicable review policy is satisfied."
+            "Required submissions captured; winner uses total verified correct annotations, "
+            "without equal reviewed-frame quotas."
         ),
     }
 
