@@ -47,7 +47,7 @@ def frame_review_fairness(db: Session, event_id: str) -> dict:
             ReviewSample.completed_at.is_not(None),
             ReviewSample.decision.is_not(None),
         ).group_by(ReviewSample.team_id)
-    ))
+    ).all())
     per_team = [
         {"team_id": team_id, "team_name": name,
          "reviewed_frames": int(counts.get(team_id, 0))}
@@ -80,7 +80,7 @@ def closeout_readiness(db: Session, event_id: str, fairness: dict) -> dict:
             ReviewSample.event_id == event_id,
             ReviewSample.correction_round == LabelingJob.correction_round,
         ).group_by(ReviewSample.job_id)
-    ))
+    ).all())
     blocking = []
     for job in jobs:
         if job.assignee_person_id is not None and job.release_mode in {
