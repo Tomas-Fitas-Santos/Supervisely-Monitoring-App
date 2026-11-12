@@ -4,7 +4,7 @@ import secrets
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .auth import ROLES, AuthContext, normalized_email, requires, staff_view
@@ -34,12 +34,46 @@ def list_approved_app_emails(
         account.email: account
         for account in db.scalars(select(StaffAccount)).all()
     }
-    return {"items": [
-        {"email": approval.email, "role": approval.role, "enabled": approval.enabled,
-         "registered": approval.email in accounts,
-         "active": bool(accounts.get(approval.email) and accounts[approval.email].active)}
-        for approval in approvals
-    ]}
+    last_successful_login = dict(db.execute(
+        select(AuditEvent.staff_id, func.max(AuditEvent.created_at))
+        .where(AuditEvent.action == "staff.login", AuditEvent.staff_id.is_not(None))
+        .group_by(AuditEvent.staff_id)
+    ).all())
+    now = epoch()
+    items = []
+    for approval in approvals:
+        account = accounts.get(approval.email)
+        expected_roles = (
+            ["admin", "organiser"] if approval.role == "admin" else ["organiser"]
+        )
+        locked = bool(account and account.locked_until and account.locked_until > now)
+        role_matches = bool(account and account.roles == expected_roles)
+        can_sign_in = bool(
+            approval.enabled and account and account.active and role_matches and not locked
+        )
+        if not approval.enabled:
+            issue = "access_disabled"
+        elif account is None:
+            issue = "not_registered"
+        elif not account.active:
+            issue = "account_disabled"
+        elif not role_matches:
+            issue = "role_mismatch"
+        elif locked:
+            issue = "temporarily_locked"
+        else:
+            issue = None
+        items.append({
+            "email": approval.email,
+            "role": approval.role,
+            "enabled": approval.enabled,
+            "registered": account is not None,
+            "active": bool(account and account.active),
+            "login_ready": can_sign_in,
+            "login_issue": issue,
+            "last_login_at": last_successful_login.get(account.id) if account else None,
+        })
+    return {"items": items}
 
 
 class RolesChange(BaseModel):
