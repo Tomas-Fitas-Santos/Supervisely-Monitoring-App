@@ -149,7 +149,7 @@ def job_video_group(db: Session, job: LabelingJob) -> str | None:
         MediaAsset.event_id == job.event_id,
         MediaAsset.dataset_id == job.dataset_id,
         MediaAsset.id.in_(job.media_ids),
-    )))
+    )).all())
     groups = list(dict.fromkeys(
         source_groups[media_id] for media_id in job.media_ids
         if source_groups.get(media_id)
