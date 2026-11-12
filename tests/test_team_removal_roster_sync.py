@@ -200,6 +200,14 @@ def test_team_remove_requires_organiser_and_active_event(ctx):
     assert login.status_code == 200
     monitor_token = login.json()["csrf_token"]
     assert mutate(http, monitor_token, f"/teams/{team_id}/remove").status_code == 403
+    # TestClient is one browser: monitor login replaced the organiser's cookie.
+    # Log the organiser back in before testing archived-event write protection.
+    organiser = http.post("/api/v1/auth/login", json={
+        "email": "owner@example.org",
+        "password": "StrongOrganiserPassword!",
+    })
+    assert organiser.status_code == 200
+    csrf = organiser.json()["csrf_token"]
     assert mutate(http, csrf, "/events/"+DEFAULT_EVENT_ID+"/archive", {
         "confirmation": "Initial Event",
     }).status_code == 200
