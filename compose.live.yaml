@@ -61,11 +61,20 @@ services:
         condition: service_completed_successfully
     command: ["sh", "-c", "alembic upgrade head && python -m annotatiathon.manage sync-organiser-access && python -m annotatiathon.manage backfill-snapshots"]
 
+  indexer:
+    <<: *backend
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    command: ["python", "-m", "annotatiathon.mounted_datasets", "--loop", "--poll-seconds", "8"]
+
   api:
     <<: *backend
     depends_on:
       migrate:
         condition: service_completed_successfully
+      indexer:
+        condition: service_started
     command: ["uvicorn", "annotatiathon.app:app", "--host", "0.0.0.0",
               "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]
     healthcheck:
