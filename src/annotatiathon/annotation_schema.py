@@ -107,3 +107,48 @@ def ensure_project_annotation_classes(api, project_id: int) -> bool:
                 or str(cls.get("color", "")).upper() != color):
             raise AnnotationSchemaError("project_annotation_schema_not_confirmed")
     return changed
+
+
+def ensure_project_rectangle_transparency(api, project_id: int) -> bool:
+    """Set verified rectangle fill opacity to zero without guessing SDK fields.
+
+    Supervisely versions may expose differing Visuals keys. Discover the
+    rectangle-opacity key from this project's existing settings, preserve all
+    unrelated properties, update it and confirm the read-back. Return False
+    if the setting is not exposed; do not submit speculative unknown keys.
+    """
+    current = api.project.get_settings(project_id)
+    if not isinstance(current, dict):
+        return False
+
+    def locate(mapping):
+        for key, value in mapping.items():
+            normalized = "".join(c for c in key.casefold() if c.isalnum())
+            if normalized in {"rectangleopacity", "rectanglefillopacity",
+                              "rectopacity"} and isinstance(value, (int, float)):
+                return (key,)
+            if isinstance(value, dict):
+                inside = locate(value)
+                if inside:
+                    return (key, *inside)
+        return None
+
+    keypath = locate(current)
+    if keypath is None:
+        return False
+
+    desired = deepcopy(current)
+    destination = desired
+    for key in keypath[:-1]:
+        destination = destination[key]
+    if destination[keypath[-1]] != 0:
+        destination[keypath[-1]] = 0
+        api.project.update_settings(project_id, desired)
+    after = api.project.get_settings(project_id)
+    for key in keypath:
+        if not isinstance(after, dict) or key not in after:
+            raise AnnotationSchemaError("rectangle_opacity_not_confirmed")
+        after = after[key]
+    if after != 0:
+        raise AnnotationSchemaError("rectangle_opacity_not_confirmed")
+    return True

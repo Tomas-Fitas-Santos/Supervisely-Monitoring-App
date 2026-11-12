@@ -33,6 +33,7 @@ from .annotation_schema import (
     ANNOTATION_CLASSES,
     AnnotationSchemaError,
     ensure_project_annotation_classes,
+    ensure_project_rectangle_transparency,
 )
 from .db import session_factory
 from .events_api import seed_categories
@@ -81,6 +82,7 @@ from .pair_members import pair_members
 from .supervisely_client import NativeAPIError, require_connection
 
 logger = logging.getLogger(__name__)
+_checked_visual_projects: set[int] = set()
 
 
 class NativeWorkerError(Exception):
@@ -376,6 +378,19 @@ def publish_job(db: Session, job: LabelingJob, api, config: SuperviselyConfig) -
         ensure_project_annotation_classes(api, project_id)
     except AnnotationSchemaError as exc:
         raise NativeWorkerError(exc.code) from exc
+    # Visuals settings are a project-level default, not an enforced personal
+    # preference. Never block annotation jobs because of an unknown UI key.
+    if project_id not in _checked_visual_projects:
+        try:
+            if not ensure_project_rectangle_transparency(api, project_id):
+                logger.warning(
+                    "Supervisely project %s does not expose rectangle opacity; "
+                    "set the zero-fill default in project Visuals manually",
+                    project_id,
+                )
+        except Exception:  # noqa: BLE001 - visual preference must not block publishing
+            logger.warning("Could not verify rectangle opacity for project %s", project_id)
+        _checked_visual_projects.add(project_id)
     if dataset.native_project_id is None:
         dataset.native_project_id = project_id
         db.commit()

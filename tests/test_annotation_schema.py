@@ -94,3 +94,40 @@ def test_project_api_get_and_update_are_idempotent():
     assert api.project.calls == 1
     assert not ensure_project_annotation_classes(api, 42)
     assert api.project.calls == 1
+
+
+def test_rectangle_opacity_updates_existing_settings_without_clobbering():
+    from copy import deepcopy
+    from types import SimpleNamespace
+
+    from annotatiathon.annotation_schema import ensure_project_rectangle_transparency
+
+    class FakeProject:
+        def __init__(self, settings):
+            self.settings = deepcopy(settings)
+            self.updates = 0
+
+        def get_settings(self, _project_id):
+            return deepcopy(self.settings)
+
+        def update_settings(self, _project_id, values):
+            self.updates += 1
+            self.settings = deepcopy(values)
+
+    remote = FakeProject({
+        "labeling": {"rectangleOpacity": 0.6, "rectangleBorderSize": 3},
+        "showGrid": True,
+    })
+    api = SimpleNamespace(project=remote)
+    assert ensure_project_rectangle_transparency(api, 101)
+    assert remote.settings == {
+        "labeling": {"rectangleOpacity": 0, "rectangleBorderSize": 3},
+        "showGrid": True,
+    }
+    assert remote.updates == 1
+    assert ensure_project_rectangle_transparency(api, 101)
+    assert remote.updates == 1
+
+    unknown = FakeProject({"showGrid": True})
+    assert not ensure_project_rectangle_transparency(SimpleNamespace(project=unknown), 101)
+    assert unknown.updates == 0
