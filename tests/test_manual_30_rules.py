@@ -116,3 +116,41 @@ def test_incomplete_manual_30_job_returns_without_review(dataset_ctx):
         assert db.scalar(select(ReviewSample.id).where(
             ReviewSample.job_id == job_id,
         )) is None
+
+
+def test_legacy_review_cannot_approve_or_return_official_30_frame_job(dataset_ctx):
+    http, maker, csrf = dataset_ctx
+    dataset_id, options = setup_blocks(http, csrf)
+    block = options["blocks"][0]
+    member = options["teams"][0]["members"][0]
+    created = act(http, csrf, "/labeling/manual/jobs", {
+        "dataset_id": dataset_id, "dispatch": "hold",
+        "assignments": [{
+            "team_id": options["teams"][0]["id"],
+            "assignee_person_id": member["id"],
+            "video_group": block["video_group"],
+            "block_ordinal": 1,
+        }],
+    })
+    assert created.status_code == 201, created.text
+    job_id = created.json()["job_ids"][0]
+    with maker.begin() as db:
+        job = db.get(LabelingJob, job_id)
+        job.status = "on_review"
+        media_id = job.media_ids[0]
+    legacy_frame = act(http, csrf, f"/review/jobs/{job_id}/frames", {
+        "media_id": media_id, "verdict": "good",
+        "correct_keypoints": 1,
+    }, method="PUT")
+    assert legacy_frame.status_code == 409
+    assert "shared frame review queue" in legacy_frame.json()["detail"]
+    legacy_return = act(http, csrf, f"/review/jobs/{job_id}/decision", {
+        "decision": "return_for_correction",
+    })
+    assert legacy_return.status_code == 409
+    assert "returned automatically" in legacy_return.json()["detail"]
+    # Even an on_review native job is not reviewable until the worker has
+    # ingested its completed per-image annotation JSON.
+    claim = act(http, csrf, "/review-queue/claim-next")
+    assert claim.status_code == 200, claim.text
+    assert claim.json()["review"] is None
