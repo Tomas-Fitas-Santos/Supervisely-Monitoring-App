@@ -26,6 +26,8 @@ x-runtime: &runtime
     BENCHMARK_PROFILE_PATH: ${BENCHMARK_PROFILE_PATH:-}
     BENCHMARK_BURST: ${BENCHMARK_BURST:-0}
     BENCHMARK_UPLOAD: ${BENCHMARK_UPLOAD:-0}
+    BENCHMARK_PHASE: ${BENCHMARK_PHASE:-turnaround}
+    BENCHMARK_INCOMPLETE_RATE: ${BENCHMARK_INCOMPLETE_RATE:-0.20}
   volumes:
     - benchmark_media:/data
     - ./scripts:/bench:ro
