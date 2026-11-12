@@ -139,3 +139,24 @@ def test_register_index_review_mounted_frames_without_copying(monkeypatch, tmp_p
             next(context)
         except StopIteration:
             pass
+
+
+def test_windows_source_picker_reuses_existing_live_stack_safely():
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    helper = (root / "scripts" / "link-local-dataset.ps1").read_text(encoding="utf-8")
+    compose = (root / "compose.live.yaml").read_text(encoding="utf-8")
+    ui = (root / "web" / "src" / "mounted_dataset_library.tsx").read_text(encoding="utf-8")
+
+    assert "FolderBrowserDialog" in helper
+    assert "DatasetFolder" in helper
+    assert "NIGHTJAR_DATASET_HOST_DIR" in helper
+    assert "source-datasets" in helper
+    assert "up -d --no-deps --force-recreate api" in helper
+    assert "up -d --no-deps --force-recreate web" in helper
+    assert "up -d --no-deps --force-recreate worker" in helper
+    assert "docker compose @compose down" not in helper
+    assert "--volumes" not in helper
+    assert "read_only: true" in compose
+    assert "No dataset folders visible to Nightjar." in ui
+    assert "link-local-dataset.ps1" in ui
