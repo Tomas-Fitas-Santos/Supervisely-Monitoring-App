@@ -674,6 +674,11 @@ def load(seconds, latency, fail_rate, profile_scale=1.0, timeout_rate=0.0,
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=MONITORS) as pool:
         monitors = list(pool.map(monitor, range(MONITORS)))
+    rejected_logins = [entry["monitor"] for entry in monitors if entry.get("login_failed")]
+    if rejected_logins:
+        raise RuntimeError(
+            f"Benchmark synthetic monitor logins failed: {rejected_logins}. "
+            "Check approved_staff_emails in the isolated benchmark seed.")
     with httpx.Client(verify=context, trust_env=False, timeout=120) as control:
         simulator = control.get("https://supervisely-sim/control/stats").json()
     event_summary = database_summary()
