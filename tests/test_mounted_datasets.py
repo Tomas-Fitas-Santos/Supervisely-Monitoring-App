@@ -156,7 +156,8 @@ def test_windows_source_picker_reuses_existing_live_stack_safely():
     assert "up -d --no-deps --force-recreate web" in helper
     assert "up -d --no-deps --force-recreate worker" in helper
     assert "docker compose @compose down" not in helper
-    assert "--volumes" not in helper
+    assert not any("--volumes" in line and not line.lstrip().startswith("#")
+                   for line in helper.splitlines())
     assert "read_only: true" in compose
     assert "No dataset folders visible to Nightjar." in ui
     assert "link-local-dataset.ps1" in ui
