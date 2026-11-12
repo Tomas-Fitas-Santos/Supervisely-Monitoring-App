@@ -68,15 +68,29 @@ without losing either record, run:
 docker compose --env-file .env.live -f compose.live.yaml run --rm --no-deps api python -m annotatiathon.manage keep-existing-staff-account --obsolete-email "old@example.org" --keep-email "corrected@example.org"
 ```
 
-This command requires the obsolete email to be enabled in the approval
-database and requires the corrected account to be active with the same
-Admin or Organiser role. It preserves the corrected account's password
-and user ID, creates its approved-email entry if missing, deactivates
-the obsolete account, disables its approval and revokes obsolete sessions.
-It never merges or deletes the accounts. A conflicting or disabled
-destination causes an error without changing anything. The organiser
-then uses the corrected email and **the password already associated
-with that corrected account**, not the old account's password.
+By default, this command requires the obsolete email to be enabled in the
+approval database and the corrected account to already be active with the
+approved staff role. It preserves the corrected account's password and ID,
+deactivates the obsolete account, disables its approval and revokes obsolete
+sessions. It never merges or deletes staff accounts.
+
+**Existing corrected account is Monitor-only or inactive:** The first command
+intentionally refuses to change permissions automatically. When the operator
+has verified that the corrected address belongs to the same authorised
+Organiser, use the explicit reconciliation flag:
+
+```powershell
+docker compose --env-file .env.live -f compose.live.yaml run --rm --no-deps api python -m annotatiathon.manage keep-existing-staff-account --obsolete-email "old@example.org" --keep-email "corrected@example.org" --reconcile-kept-access
+```
+
+This activates the corrected account, applies the already-approved
+**Organiser** role, clears its temporary lock and revokes sessions on both
+accounts. **The password and account ID of the corrected account are not
+changed.** It refuses unexpected Admin-role changes or a conflicting
+approval and preserves both database accounts without merging them.
+
+The organiser signs in using the corrected email and **the password already
+associated with that corrected account**, not the old account's password.
 
 Because `docker compose exec api` skips the API container's startup
 entrypoint, use `docker compose run --rm --no-deps api` for the CLI.
