@@ -1612,12 +1612,15 @@ def worker_cycle(lane: str) -> bool:
                 result = process_event_reset(db, api, config)
             elif lane == "publish":
                 result = process_once(db, api, config)
+            elif lane == "mirror":
+                # Dedicated lane prevents an expensive job status/snapshot sync
+                # from delaying a newly finalized pre-event media library.
+                result = process_mirror_once(db, api, config)
             else:
                 process_reassignment_once(db, api, config)
                 process_correction_once(db, api, config)
                 result = sync_all(db, api, config)
                 if not reset_pending(db):
-                    process_mirror_once(db, api, config)
                     process_export_once(db, api)
             if result:
                 logger.info("Nightjar %s worker: %s", lane, result)
@@ -1632,29 +1635,42 @@ def worker_cycle(lane: str) -> bool:
 def run_worker(*, once: bool, poll_seconds: int) -> None:
     if not once and not 3 <= poll_seconds <= 300:
         raise ValueError("Polling interval must be 3-300 seconds.")
-    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="nightjar-background") as pool:
+    # Mirroring and native status reconciliation are independent lanes.
+    # The mirror has its own DB session and SDK client, ensuring bulk
+    # status/snapshot polling cannot keep pre-event media at "pending".
+    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="nightjar-background") as pool:
         background = None
+        mirror = None
         next_background = 0.0
+        next_mirror = 0.0
         while True:
             if background is not None and background.done():
                 background.result()
                 background = None
+            if mirror is not None and mirror.done():
+                mirror.result()
+                mirror = None
             with session_factory()() as db:
                 resetting = reset_pending(db)
             if resetting:
-                if background is None:
+                if background is None and mirror is None:
                     worker_cycle("reset")
                 if once:
                     return
                 time.sleep(poll_seconds)
                 continue
             if once:
+                worker_cycle("mirror")
                 worker_cycle("publish")
                 worker_cycle("background")
                 return
-            if background is None and time.monotonic() >= next_background:
+            now = time.monotonic()
+            if mirror is None and now >= next_mirror:
+                mirror = pool.submit(worker_cycle, "mirror")
+                next_mirror = now + poll_seconds
+            if background is None and now >= next_background:
                 background = pool.submit(worker_cycle, "background")
-                next_background = time.monotonic() + poll_seconds
+                next_background = now + poll_seconds
             if not worker_cycle("publish"):
                 time.sleep(min(1, poll_seconds))
 
