@@ -1420,3 +1420,60 @@ def test_retry_old_users_info_404_correction_recovers_original_complete_frames(c
         assert len(list(db.scalars(select(LabelingJob).where(
             LabelingJob.id == jid,
         )))) == 1
+
+
+def test_mirror_status_reports_waiting_and_running_age(configured):
+    """The organiser can distinguish a stopped worker from an active mirror."""
+    from annotatiathon.native_media_pool import mirror_status
+
+    _http, maker, _csrf, _plan_id, _sdk = configured
+    with maker.begin() as db:
+        op = db.scalar(select(NativeOperation).where(
+            NativeOperation.kind == "mirror_dataset",
+            NativeOperation.target_id == "dataset01",
+        ))
+        assert op is not None
+        op.status = "pending"
+        op.created_at = epoch() - 180
+        op.attempts = 0
+    with maker() as db:
+        state = mirror_status(db, db.get(MediaDataset, "dataset01"))
+        assert state["state"] == "pending"
+        assert state["pending_seconds"] >= 180
+        assert state["started_seconds_ago"] is None
+        assert state["attempts"] == 0
+    with maker.begin() as db:
+        op = db.scalar(select(NativeOperation).where(
+            NativeOperation.kind == "mirror_dataset",
+            NativeOperation.target_id == "dataset01",
+        ))
+        op.status = "running"
+        op.attempts = 1
+        op.claimed_at = epoch() - 25
+    with maker() as db:
+        state = mirror_status(db, db.get(MediaDataset, "dataset01"))
+        assert state["state"] == "running"
+        assert state["pending_seconds"] is None
+        assert state["started_seconds_ago"] >= 25
+        assert state["attempts"] == 1
+
+
+def test_once_worker_prioritises_mirror_before_status_sync(monkeypatch):
+    """Mirror must not wait for a potentially slow annotation-sync operation."""
+    import annotatiathon.native_worker as worker
+
+    class SessionStub:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, _type, _value, _traceback):
+            pass
+
+    monkeypatch.setattr(worker, "session_factory",
+                        lambda: lambda: SessionStub())
+    monkeypatch.setattr(worker, "reset_pending", lambda _db: False)
+    lanes = []
+    monkeypatch.setattr(worker, "worker_cycle",
+                        lambda lane: lanes.append(lane))
+    worker.run_worker(once=True, poll_seconds=12)
+    assert lanes == ["mirror", "publish", "background"]
