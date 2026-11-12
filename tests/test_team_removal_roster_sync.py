@@ -1,10 +1,12 @@
 """Teams and people must show the same membership and verified Supervisely IDs."""
+import pytest
 from sqlalchemy import select
+from test_monitor_assignments import ctx as base_ctx, mutate
 
 from annotatiathon.models import (
+    DEFAULT_EVENT_ID,
     AuditEvent,
     CompetitionTeam,
-    DEFAULT_EVENT_ID,
     LabelingJob,
     LabelingPlan,
     MediaDataset,
@@ -13,7 +15,9 @@ from annotatiathon.models import (
     StaffAccount,
     epoch,
 )
-from test_monitor_assignments import ctx, mutate
+@pytest.fixture(name="ctx")
+def team_context(base_ctx):
+    return base_ctx
 
 
 def test_participant_team_removal_keeps_people_and_records(ctx):
