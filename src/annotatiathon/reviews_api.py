@@ -351,10 +351,17 @@ def view_media(
         from .job_reads import can_view_asset
         if not can_view_asset(db, ctx, event.id, dataset.id, asset.id):
             raise HTTPException(status_code=403, detail="Frame is not assigned to one of your teams.")
-    media_base = (Path(dataset.root_path) / "media").resolve()
-    target = (media_base / asset.relative_path).resolve()
-    if not target.is_relative_to(media_base) or not target.is_file():
-        raise HTTPException(status_code=404, detail="Local image missing.")
+    if dataset.upload_kind == "mounted":
+        from .mounted_datasets import media_file
+        try:
+            target = media_file(dataset, asset.relative_path)
+        except (HTTPException, OSError):
+            raise HTTPException(status_code=404, detail="Mounted image missing.")
+    else:
+        media_base = (Path(dataset.root_path) / "media").resolve()
+        target = (media_base / asset.relative_path).resolve()
+        if not target.is_relative_to(media_base) or not target.is_file():
+            raise HTTPException(status_code=404, detail="Local image missing.")
     mime = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
     return FileResponse(target, media_type=mime,
                         headers={"Cache-Control": "private, no-store"})
