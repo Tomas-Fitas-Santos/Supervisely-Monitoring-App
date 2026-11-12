@@ -33,6 +33,10 @@ ANNOTATORS = int(os.environ.get("BENCHMARK_ANNOTATORS", "300"))
 MONITORS = int(os.environ.get("BENCHMARK_MONITORS", "12"))
 SECONDS_PER_FRAME = int(os.environ.get("BENCHMARK_SECONDS_PER_FRAME", "90"))
 UPLOAD = os.environ.get("BENCHMARK_UPLOAD") == "1"
+PHASE = os.environ.get("BENCHMARK_PHASE", "turnaround")
+INCOMPLETE_RATE = float(os.environ.get("BENCHMARK_INCOMPLETE_RATE", "0.20"))
+if PHASE not in {"initial", "turnaround"} or not 0 <= INCOMPLETE_RATE <= 1:
+    raise ValueError("Invalid benchmark phase or incomplete rate")
 PROFILE_PATH = os.environ.get("BENCHMARK_PROFILE_PATH", "").strip()
 
 
@@ -100,6 +104,10 @@ def seed(frames):
             email="organiser@example.test", role="organiser", enabled=True))
         dataset = db.get(m.MediaDataset, "dataset")
         dataset.native_project_id = 41
+        if PHASE == "initial":
+            # No queue is released before the timed burst. The load process
+            # atomically activates the plan and enqueues exactly 300 jobs.
+            db.get(m.LabelingPlan, "plan").status = "approved"
         for frame in range(10, frames):
             target = root / "media" / f"frame-{frame}.jpg"
             shutil.copyfile(root / "media" / f"frame-{frame % 10}.jpg", target)
@@ -126,6 +134,59 @@ def seed(frames):
                                              native_image_id=100000 + index * frames + frame)
                         for frame in range(frames)])
         db.get(m.LabelingPlan, "plan").jobs_per_team = 4
+        if PHASE == "initial":
+            for index in range(ANNOTATORS):
+                job = db.get(m.LabelingJob, f"job-{index}")
+                job.status = "queued"
+                job.review_status = "unreviewed"
+                db.execute(delete(m.NativeJobBinding).where(
+                    m.NativeJobBinding.job_id == job.id))
+        else:
+            # Exercise the official frame-completeness/auto-replacement path
+            # rather than the legacy monitor accept-whole-job endpoints.
+            plan = db.get(m.LabelingPlan, "plan")
+            plan.queue_seed = "synthetic-throughput-burst"
+            dataset.native_dataset_id = 2000
+            dataset.frame_count = FRAMES
+            dataset.image_count = 0
+            db.add(m.NativeOperation(
+                event_id="event", kind="mirror_dataset", target_id="dataset",
+                status="done",
+            ))
+            video = m.MediaVideo(
+                id="synthetic-video", event_id="event", dataset_id="dataset",
+                video_group="synthetic-video", extraction_policy="all_frames",
+                frame_count=FRAMES,
+            )
+            db.add(video)
+            db.flush()
+            for frame in range(FRAMES):
+                asset = db.get(m.MediaAsset, f"asset-{frame}")
+                asset.video_id = video.id
+                asset.video_group = video.video_group
+                asset.frame_index = frame
+                db.add(m.NativeSourceMedia(
+                    event_id="event", dataset_id="dataset",
+                    media_id=asset.id, native_dataset_id=2000,
+                    native_image_id=100000 + frame,
+                ))
+            for index in range(ANNOTATORS):
+                person = db.get(m.Person, f"person-{index}")
+                person.check_in_at = m.epoch()
+                original = db.get(m.LabelingJob, f"job-{index}")
+                original.release_mode = "shared_primary"
+                db.add(m.WorkPacket(
+                    job_id=original.id, event_id="event", person_id=person.id,
+                ))
+                # Synthetic source frames are reused solely to measure the
+                # orchestration capacity of 300 distinct worker assignments.
+                # The production queue uses unique real video-frame blocks.
+                db.add(m.WorkBlock(
+                    event_id="event", plan_id="plan", video_id=video.id,
+                    ordinal=index, frame_count=FRAMES,
+                    media_ids=[f"asset-{j}" for j in range(FRAMES)],
+                    repeat_media_ids=[],
+                ))
         for index in range(ANNOTATORS, ANNOTATORS * 2):
             person_index = index - ANNOTATORS
             db.add(m.LabelingJob(
@@ -142,8 +203,9 @@ def seed(frames):
         os.chown(directory, 10001, 10001)
         for name in files:
             os.chown(Path(directory) / name, 10001, 10001)
-    print(json.dumps({"seeded": True, "annotators": ANNOTATORS, "monitors": MONITORS,
-                      "active_jobs": ANNOTATORS, "queued_jobs": ANNOTATORS}), flush=True)
+    print(json.dumps({"seeded": True, "phase": PHASE, "annotators": ANNOTATORS,
+                      "monitors": MONITORS, "original_jobs": ANNOTATORS,
+                      "queued_followups_fixture": ANNOTATORS}), flush=True)
 
 
 def annotation(identifier):
@@ -189,7 +251,8 @@ def simulate():
 
     app = FastAPI()
     rng = random.Random(20261110)
-    state = {"started": None, "latency": .05, "fail_rate": 0.0,
+    state = {"started": None, "phase": PHASE, "incomplete_rate": INCOMPLETE_RATE,
+             "latency": .05, "fail_rate": 0.0,
              "profile_scale": 1.0, "timeout_rate": 0.0, "timeouts": 0,
              "assumed_publish_ms": 1000,
              "calls": Counter(), "failures": 0, "unhandled": [], "published": 0,
@@ -400,7 +463,19 @@ def simulate():
             ), [])
             entities = []
             for image_id in selected:
-                for position, obj in enumerate(annotation(image_id)["objects"]):
+                # For the initial 300 original jobs, a deterministic subset
+                # lacks a head keypoint. Frame completeness is assessed by the
+                # REAL validator; the simulator never labels jobs incomplete.
+                original_index = (image_id - 100000) // FRAMES
+                missing = (
+                    PHASE == "turnaround" and 0 <= original_index < ANNOTATORS
+                    and original_index / ANNOTATORS < INCOMPLETE_RATE
+                    and (image_id - 100000) % FRAMES == 0
+                )
+                objects = annotation(image_id)["objects"]
+                if missing:
+                    objects = [obj for obj in objects if obj["classTitle"] != "crown"]
+                for position, obj in enumerate(objects):
                     figure_id = image_id * 10 + position
                     entities.append({
                         "id": figure_id, "imageId": image_id, "entityId": image_id,
@@ -418,7 +493,8 @@ def simulate():
             index = next((item["value"] - 2000 for item in body.get("filter", [])
                           if item["field"] == "datasetId"), None)
             items = ([job(index)] if index is not None and index < ANNOTATORS
-                     and index in submitted_times else [])
+                     and index in submitted_times and PHASE == "turnaround"
+                     else [])
             items.extend(created_job(record) for record in created_jobs.values()
                          if index is None or record["dataset_id"] == 2000 + index)
             return page(items, body)
@@ -655,6 +731,32 @@ def load(seconds, latency, fail_rate, profile_scale=1.0, timeout_rate=0.0,
                            "assumed_publish_ms": assumed_publish_ms,
                            "burst": os.environ.get("BENCHMARK_BURST") == "1"}).raise_for_status()
     deadline = time.monotonic() + seconds
+    if PHASE == "initial":
+        # Release 300 real worker operations at one deterministic instant,
+        # after the load/controller clocks have started.
+        from annotatiathon import models as m
+        from annotatiathon.db import session_factory
+        from annotatiathon.native_operations_api import queue_publish
+        from annotatiathon.worker_timing import enable, milestone
+        enable(str(DATA / "results/worker-timing.jsonl"))
+        with session_factory().begin() as db:
+            plan = db.get(m.LabelingPlan, "plan")
+            if plan.status != "approved":
+                raise RuntimeError("Initial publication fixture already launched")
+            plan.status = "running"
+            jobs = list(db.scalars(select(m.LabelingJob).where(
+                m.LabelingJob.plan_id == plan.id,
+                m.LabelingJob.status == "queued",
+            ).order_by(m.LabelingJob.id)))
+            # Only original 300: the follow-up fixtures have job indices >=300.
+            jobs = [j for j in jobs if int(j.id.split("-")[-1]) < ANNOTATORS]
+            if len(jobs) != ANNOTATORS:
+                raise RuntimeError(f"Expected 300 initial jobs, got {len(jobs)}")
+            for job in jobs:
+                queue_publish(db, job)
+        for job in jobs:
+            milestone("publish_queued", job_id=job.id)
+        phases["initial_enqueue_count"] = len(jobs)
 
     def monitor(index):
         completed = set()
@@ -670,36 +772,17 @@ def load(seconds, latency, fail_rate, profile_scale=1.0, timeout_rate=0.0,
                 tick = time.monotonic()
                 response = call(client, "GET", "/api/v1/labeling/jobs?limit=2000")
                 call(client, "GET", "/api/v1/monitoring/assignments")
+                if PHASE == "initial":
+                    time.sleep(max(0, min(5 - (time.monotonic() - tick), deadline - time.monotonic())))
+                    continue
                 if response is not None and response.status_code == 200:
                     owned = [job for job in response.json()["items"]
                              if int(job["team_id"].split("-")[-1]) % MONITORS == index]
-                    pending = None
-                    for candidate in owned:
-                        if candidate["status"] != "on_review" or candidate["id"] in completed:
-                            continue
-                        review = call(client, "GET", f"/api/v1/review/jobs/{candidate['id']}")
-                        if review is not None and review.status_code == 200 and review.json()["annotation_snapshot_ready"]:
-                            pending = candidate
-                            break
-                    if pending:
-                        job_id = pending["id"]
-                        if review is not None and review.status_code == 200 and review.json()["annotation_snapshot_ready"]:
-                            call(client, "GET", f"/api/v1/labeling/jobs/{job_id}/media?page=1&size=50")
-                            scores_saved = True
-                            for frame in range(FRAMES):
-                                media_id = f"asset-{frame}"
-                                call(client, "GET", f"/api/v1/review/datasets/dataset/assets/{media_id}/image")
-                                call(client, "GET", f"/api/v1/review/jobs/{job_id}/annotations/{media_id}")
-                                score = call(client, "PUT", f"/api/v1/review/jobs/{job_id}/frames", json={
-                                    "media_id": media_id, "verdict": "good", "correct_keypoints": 4})
-                                scores_saved = scores_saved and score is not None and score.status_code == 200
-                            if scores_saved:
-                                decision = call(client, "POST", f"/api/v1/review/jobs/{job_id}/decision",
-                                                json={"decision": "accept"})
-                                if decision is not None and decision.status_code == 200:
-                                    completed.add(job_id)
-                    # Continue browsing representative originals even while
-                    # submitted annotations are waiting for the worker.
+                    # Official frame-level decisions are outside job
+                    # turnaround capacity. Do not fake accepting whole jobs.
+                    # Monitors never accept official 30-frame jobs. The
+                    # isolated benchmark only reads review pages to preserve
+                    # representative API traffic.
                     call(client, "GET", "/api/v1/review/datasets/dataset/assets/asset-1/image")
                 time.sleep(max(0, min(5 - (time.monotonic() - tick), deadline - time.monotonic())))
         return {"monitor": index, "accepted": len(completed)}
@@ -743,6 +826,7 @@ def load(seconds, latency, fail_rate, profile_scale=1.0, timeout_rate=0.0,
     latencies = sorted(item["ms"] for item in records)
     result = {
         "duration_seconds": time.monotonic() - started,
+        "phase": PHASE, "incomplete_rate": INCOMPLETE_RATE,
         "frames_per_job": FRAMES, "annotators": ANNOTATORS, "monitors_count": MONITORS,
         "seconds_per_frame": SECONDS_PER_FRAME,
         "latency_seconds": latency, "failure_rate": fail_rate,
