@@ -2,6 +2,7 @@
 import re
 from fractions import Fraction
 from pathlib import Path
+from typing import Callable
 from typing import Literal
 
 from fastapi import HTTPException
@@ -74,7 +75,8 @@ def natural_frame_key(frame: MediaAsset) -> tuple:
 
 
 def index_supplied_frames(db: Session, video: MediaVideo, media_root: Path,
-                          manifest_path: Path | None, *, strict: bool) -> None:
+                          manifest_path: Path | None, *, strict: bool,
+                          path_for_frame: Callable[[str], Path] | None = None) -> None:
     frames = list(db.scalars(select(MediaAsset).where(MediaAsset.video_id == video.id)))
     descriptions = {}
     declared_total = None
@@ -149,7 +151,8 @@ def index_supplied_frames(db: Session, video: MediaVideo, media_root: Path,
         frame.frame_index = ordinal
         if strict:
             try:
-                with Image.open(media_root / frame.relative_path) as image:
+                with Image.open(path_for_frame(frame.relative_path) if path_for_frame
+                                else media_root / frame.relative_path) as image:
                     width, height = image.size
             except (OSError, UnidentifiedImageError, Image.DecompressionBombError) as exc:
                 raise HTTPException(status_code=422, detail=f"Unreadable frame {frame.relative_path}.") from exc
