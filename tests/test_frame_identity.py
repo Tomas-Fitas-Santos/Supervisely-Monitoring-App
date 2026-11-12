@@ -260,6 +260,21 @@ def test_supplied_prefixed_sampled_frames_import_without_manifest(dataset_ctx):
     assert video["density"] == "sampled"
     assert video["identity_status"] == "gaps"
     assert video["frame_count"] == 3
+    readiness = client.get(f"/api/v1/labeling/datasets/{dataset['id']}/shared-readiness")
+    assert readiness.status_code == 200
+    assert readiness.json()["source_ready"] is True
+    assert readiness.json()["issues"] == []
+    teams(client, csrf)
+    result = act(client, csrf, "/labeling/plans", {
+        "dataset_id": dataset["id"], "mode": "shared_30_v1",
+    })
+    assert result.status_code == 201, result.text
+    assert result.json()["primary_blocks"] == 1
+    with maker() as db:
+        block = db.scalar(select(WorkBlock).where(
+            WorkBlock.plan_id == result.json()["plan_id"],
+        ))
+        assert block.media_ids == [frame.id for frame in frames]
 
 
 def test_supplied_frame_folder_import_without_numeric_filenames_or_json(dataset_ctx):
@@ -324,15 +339,14 @@ def test_sparse_full_mode_frames_import_but_are_not_full_density(dataset_ctx):
     assert video["missing_frame_count"] == 29
     readiness = client.get(f"/api/v1/labeling/datasets/{dataset_id}/shared-readiness")
     assert readiness.status_code == 200
-    assert readiness.json()["source_ready"] is False
-    assert any("ColumbaPalumbus/clip" in message for message in readiness.json()["issues"])
+    assert readiness.json()["source_ready"] is True
+    assert readiness.json()["issues"] == []
     teams(client, csrf)
     planned = act(client, csrf, "/labeling/plans", {
         "dataset_id": dataset_id, "mode": "shared_30_v1",
     })
-    assert planned.status_code == 422
-    assert "ColumbaPalumbus/clip" in planned.json()["detail"]
-    assert "frame density" in planned.json()["detail"]
+    assert planned.status_code == 201, planned.text
+    assert planned.json()["unique_frames"] == 2
 
 
 def test_unlinked_frame_in_existing_video_gets_specific_shared_queue_error(dataset_ctx):
