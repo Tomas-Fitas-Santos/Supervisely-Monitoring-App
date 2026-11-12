@@ -416,11 +416,39 @@ def database_summary():
     from annotatiathon import models as m
     from annotatiathon.db import session_factory
     with session_factory()() as db:
+        oldest_pending = db.scalar(select(func.min(m.NativeOperation.created_at)).where(
+            m.NativeOperation.status == "pending",
+        ))
+        oldest_validation = db.scalar(select(func.min(m.NativeOperation.created_at)).where(
+            m.NativeOperation.status == "pending",
+            m.NativeOperation.kind == "validate_submission",
+        ))
+        grouped_operations = list(db.execute(
+            select(m.NativeOperation.kind, m.NativeOperation.status, func.count())
+            .group_by(m.NativeOperation.kind, m.NativeOperation.status),
+        ))
+        now = m.epoch()
         return {
             "job_states": dict(db.execute(select(m.LabelingJob.status, func.count())
                                             .group_by(m.LabelingJob.status)).all()),
             "operation_states": dict(db.execute(select(m.NativeOperation.status, func.count())
                                                   .group_by(m.NativeOperation.status)).all()),
+            "operation_kinds": {f"{kind}:{status}": count
+                                for kind, status, count in grouped_operations},
+            "oldest_pending_age_seconds": max(0, now - oldest_pending)
+                if oldest_pending is not None else 0,
+            "oldest_validation_task_age_seconds": max(0, now - oldest_validation)
+                if oldest_validation is not None else 0,
+            "review_ready_frames": db.scalar(select(func.count())
+                .select_from(m.ReviewSample).where(
+                    m.ReviewSample.validated_complete.is_(True),
+                    m.ReviewSample.completed_at.is_(None),
+                )),
+            "review_completed_frames": db.scalar(select(func.count())
+                .select_from(m.ReviewSample).where(
+                    m.ReviewSample.validated_complete.is_(True),
+                    m.ReviewSample.completed_at.is_not(None),
+                )),
             "operation_errors": list(db.execute(select(m.NativeOperation.error_code,
                                                          func.count()).where(
                 m.NativeOperation.error_code.is_not(None)
