@@ -288,8 +288,17 @@ input,select{border:1px solid #dfe5ed;border-radius:9px;background:white;padding
 .annotation-view-toolbar span{font-size:11px;font-weight:750;color:#526775}
 .annotation-view-toolbar .btn{font-size:11px;padding:7px 10px}
 .annotation-image-stage{position:relative;width:100%;line-height:0}
+.annotation-image-layer{position:relative;width:100%}
 .annotation-image-stage .review-preview{display:block;width:100%;height:auto;max-height:490px;object-fit:contain;margin:0;line-height:normal}
 .annotation-image-overlay{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible}
+/* A bounded image viewport: zoom and pan move only the image + its SVG.
+   Controls and the legend remain their normal size, with no inner scrollbars. */
+.annotation-image-stage.is-zoomable{height:min(62dvh,620px);overflow:hidden;background:#edf3ef;border:1px solid #dae7e6;border-radius:9px}
+.annotation-image-stage.is-zoomable .annotation-image-layer{position:absolute;inset:0;width:100%;height:100%;transform-origin:center center;will-change:transform}
+.annotation-image-stage.is-zoomable .review-preview{width:100%;height:100%;max-height:none;object-fit:contain;margin:0;border:0;border-radius:0;user-select:none;-webkit-user-drag:none;pointer-events:none}
+.annotation-image-stage.is-zoomable .annotation-image-overlay{overflow:hidden}
+.annotation-image-stage.is-magnified{cursor:grab;touch-action:none}
+.annotation-image-stage.is-panning{cursor:grabbing}
 .annotation-legend{display:flex;flex-wrap:wrap;gap:7px;padding:9px;border-radius:9px;background:#f7f9fa;border:1px solid #e5ebec}
 .annotation-legend span{display:flex;align-items:center;gap:5px;white-space:nowrap;font-size:10px;color:#586a77}
 .annotation-legend i{width:11px;height:11px;display:inline-block;border:1px solid #273746;border-radius:50%;flex-shrink:0}
@@ -363,13 +372,11 @@ input,select{border:1px solid #dfe5ed;border-radius:9px;background:white;padding
 .shared-review-frame-heading p{margin:0}
 .shared-review-zoom-controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .shared-review-zoom-controls>span{font-weight:750;min-width:48px;text-align:center}
-.shared-review-canvas-panel{padding:10px;min-height:0}
-.shared-review-zoom-viewport{width:100%;max-height:72vh;overflow:auto;background:#ebf0ed;border-radius:10px;scrollbar-gutter:stable}
-.shared-review-scalable{min-width:100%}
-.shared-review-scalable .annotation-legend{padding:10px}
-.shared-review-scalable .review-annotation-visual{margin:0}
-.shared-review-scalable .annotation-image-stage .review-preview{max-height:none}
-.shared-review-scalable .annotation-image-stage{background:#edf3ef}
+.shared-review-canvas-panel{padding:10px;min-height:0;min-width:0}
+.shared-review-zoom-viewport{width:100%;min-width:0;overflow:hidden;background:#ebf0ed;border-radius:10px}
+.shared-review-zoom-viewport .annotation-legend{padding:10px}
+.shared-review-zoom-viewport .review-annotation-visual{margin:0}
+.shared-review-zoom-hint{margin:9px 3px 2px}
 .shared-review-grade-panel{margin-top:22px}
 .shared-review-grade-heading{display:flex;justify-content:space-between;align-items:flex-start;gap:18px;margin-bottom:20px}
 .shared-review-grade-heading h3{font-size:20px;margin:6px 0}
@@ -395,7 +402,7 @@ input,select{border:1px solid #dfe5ed;border-radius:9px;background:white;padding
 .shared-review-scoring{max-width:1180px}
 @media(max-width:760px){
   .shared-review-frame-heading,.shared-review-completion{align-items:stretch;flex-direction:column}
-  .shared-review-zoom-viewport{max-height:60vh}
+  .shared-review-canvas-panel .annotation-image-stage.is-zoomable{height:min(55dvh,440px)}
   .shared-review-object-label{min-width:0}
 }
 
