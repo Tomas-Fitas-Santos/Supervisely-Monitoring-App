@@ -27,10 +27,12 @@ type NativeStatus={operations:NativeOperation[];native_bindings:number;
   bindings_by_status:Record<string,number>;last_sync:number|null};
 type TeamOption={id:string;name:string;members:{id:string;name:string;native_ready:boolean}[]};
 type VideoOption={video_group:string;frames:number;morphology:string};
-type ManualOptions={teams:TeamOption[];videos:VideoOption[];
+type BlockOption={video_group:string;block_ordinal:number;first_frame:number;
+  last_frame:number;frames:number;morphology:string;reserved:boolean};
+type ManualOptions={teams:TeamOption[];videos:VideoOption[];blocks:BlockOption[];
   existing:{team_id:string;video_group:string;assignee_person_id:string|null;
     job_id:string;status:string}[]};
-type Draft={team_id:string;assignee_person_id:string;video_group:string};
+type Draft={team_id:string;assignee_person_id:string;video_group:string;block_ordinal:number};
 type AnnotationClass={name:string;shape:"rectangle"|"point";color:string;description:string};
 type AssigneeOption={id:string;name:string;team_name:string;team_id:string;native_ready:boolean};
 type MirrorStatus={state:string;uploaded_frames:number;total_frames:number;
@@ -142,17 +144,19 @@ export function CompetitionScreen({auth,view="progress"}:{
   const currentTeam=options?.teams.find(t=>t.id===teamId);
   useEffect(()=>setReassignTo(""),[chosen]);
   const selectedForTeam=drafts.filter(x=>x.team_id===teamId);
-  const availableVideos=useMemo(()=>{
-    const used=new Set((options?.existing||[]).map(x=>x.video_group));
-    return (options?.videos||[]).filter(v=>allowDuplicates||
-      (!used.has(v.video_group)&&!drafts.some(d=>
-        d.video_group===v.video_group&&d.team_id!==teamId))||
-      drafts.some(d=>d.team_id===teamId&&d.video_group===v.video_group));
+  const availableBlocks=useMemo(()=>{
+    const claimed=drafts.map(d=>d.video_group+":"+d.block_ordinal);
+    return (options?.blocks||[]).filter(block=>{
+      const key=block.video_group+":"+block.block_ordinal;
+      return allowDuplicates||!block.reserved&&!claimed.includes(key)||
+        drafts.some(d=>d.team_id===teamId&&key===d.video_group+":"+d.block_ordinal);
+    });
   },[options,allowDuplicates,drafts,teamId]);
-  function toggleVideo(group:string){
-    setDrafts(prev=>prev.some(row=>row.team_id===teamId&&row.video_group===group)?
-      prev.filter(row=>!(row.team_id===teamId&&row.video_group===group)):
-      [...prev,{team_id:teamId,video_group:group,assignee_person_id:""}]);
+  function toggleVideo(group:string,ordinal:number){
+    setDrafts(prev=>prev.some(row=>row.team_id===teamId&&row.video_group===group&&
+      row.block_ordinal===ordinal)?
+      prev.filter(row=>!(row.team_id===teamId&&row.video_group===group&&row.block_ordinal===ordinal)):
+      [...prev,{team_id:teamId,video_group:group,block_ordinal:ordinal,assignee_person_id:""}]);
   }
   function changeDraftAssignee(index:number,personId:string){
     setDrafts(old=>old.map((row,i)=>i===index?
@@ -204,11 +208,11 @@ export function CompetitionScreen({auth,view="progress"}:{
   async function saveManual(){
     if(!drafts.length)return;
     if(drafts.some(item=>!item.assignee_person_id)){
-      setError("Select an annotator for each chosen video before creating jobs.");return;
+      setError("Select an annotator for each chosen 30-frame segment before creating jobs.");return;
     }
     if(dispatch==="publish"&&!await confirmAction(
       "Queue "+drafts.length+" job(s) for the live Supervisely worker? "+
-      "Every row is one video assigned to one person."))return;
+      "Every row is 30 consecutive frames of one video assigned to one person."))return;
     setBusy(true);setError("");setNotice("");
     try {
       const result=await api<{count:number;message:string}>("/labeling/manual/jobs","POST",{
@@ -217,7 +221,7 @@ export function CompetitionScreen({auth,view="progress"}:{
         allow_duplicates:allowDuplicates,
       },auth.csrf_token);
       setDrafts([]);
-      setNotice(result.count+" video job(s) created. "+result.message);
+      setNotice(result.count+" 30-frame job(s) created. "+result.message);
       setSection("overview");
       await refresh();await refreshOptions();
     }catch(e){setError((e as Error).message);}
@@ -277,8 +281,8 @@ export function CompetitionScreen({auth,view="progress"}:{
         <RefreshCw size={15}/> Refresh Supervisely accounts</button>
       <div className="panel-heading">
         <div><span className="eyebrow">DURING THE EVENT · MANUAL DISPATCH</span>
-          <h3>Assign a video to an annotator</h3>
-          <p>Build one or more jobs for existing teams. Each row becomes a separate Supervisely labeling job for the selected person, with one complete video. No new event is created.</p></div>
+          <h3>Assign a 30-frame segment to an annotator</h3>
+          <p>Select consecutive 30-frame segments from one video for each job. Each part can go to a different team member.</p></div>
         <Video size={25} className="faint-icon"/>
       </div>
       <details className="annotation-palette">
@@ -303,23 +307,29 @@ export function CompetitionScreen({auth,view="progress"}:{
           {options?.teams.map(team=><option key={team.id} value={team.id}>{team.name}</option>)}
         </select></label>
       </div>
-      <h4>2 · Select the videos for {currentTeam?.name||"this team"}</h4>
-      <p className="muted small">Each selected video becomes exactly one job. Automatic jobs are unique across the event. Enable duplicate assignments only to deliberately repeat a video.</p>
+      <h4>2 · Select video segments for {currentTeam?.name||"this team"}</h4>
+      <p className="muted small">Each segment is one 30-frame job. Different teams can receive different parts of one video. Repeating exactly the same segment requires explicit permission.</p>
       <label className="manual-option-checkbox"><input type="checkbox" checked={allowDuplicates}
-        onChange={e=>setAllowDuplicates(e.target.checked)}/> Allow duplicate videos in manual assignments</label>
+        onChange={e=>setAllowDuplicates(e.target.checked)}/> Allow duplicate video segments</label>
       <div className="manual-video-choices">
-        {availableVideos.map(video=><label key={video.video_group} className="manual-video-choice">
-          <input type="checkbox" disabled={busy} checked={selectedForTeam.some(x=>x.video_group===video.video_group)}
-            onChange={()=>toggleVideo(video.video_group)}/>
-          <span><strong>{video.video_group}</strong><small>{video.frames} frames · {video.morphology}</small></span>
+        {availableBlocks.map(block=><label key={block.video_group+":"+block.block_ordinal}
+          className="manual-video-choice">
+          <input type="checkbox" disabled={busy}
+            checked={selectedForTeam.some(x=>x.video_group===block.video_group&&
+              x.block_ordinal===block.block_ordinal)}
+            onChange={()=>toggleVideo(block.video_group,block.block_ordinal)}/>
+          <span><strong>{block.video_group} · Part {block.block_ordinal}</strong>
+            <small>Frames {block.first_frame}–{block.last_frame} · {block.morphology}
+              {block.reserved?" · Already assigned":""}</small></span>
         </label>)}
-        {!availableVideos.length&&<p className="muted small">No unused videos available. You may enable manual duplicates to assign a previously used video.</p>}
+        {!availableBlocks.length&&<p className="muted small">
+          No complete 30-frame segments are available. Check video lengths or allow duplicates.</p>}
       </div>
       {drafts.length>0&&<div className="manual-draft">
         <div className="panel-heading"><h4>3 · Assign each selected video to a person ({drafts.length})</h4>
           <button className="btn secondary" onClick={()=>setDrafts([])} disabled={busy}>Clear all</button></div>
-        {drafts.map((item,index)=><div className="job-plan-row" key={item.team_id+item.video_group+index}>
-          <div><strong>{options?.teams.find(t=>t.id===item.team_id)?.name} · {item.video_group}</strong>
+        {drafts.map((item,index)=><div className="job-plan-row" key={item.team_id+item.video_group+item.block_ordinal+index}>
+          <div><strong>{options?.teams.find(t=>t.id===item.team_id)?.name} · {item.video_group} · Part {item.block_ordinal}</strong>
             <label>Assigned annotator
               <select value={item.assignee_person_id} onChange={e=>changeDraftAssignee(index,e.target.value)}>
                 <option value="">Choose annotator…</option>
