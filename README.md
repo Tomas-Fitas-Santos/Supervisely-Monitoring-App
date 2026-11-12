@@ -59,12 +59,13 @@ upload may still contend for disk and internet capacity on the host:
 schedule the large import **before event opening**, and verify the 300-job
 load test before setting worker replica counts.
 
-A dataset's Supervisely mirror status of `done` **does not** establish
-full-density source video identity. Before approving the automatic
-30-frame queue, use **Job Distribution → Automatic distribution →
-Check source frames**. This preflight identifies standalone images,
-sampled videos and missing source-frame ordinals; it does not weaken the
-final authoritative queue validation.
+A dataset's Supervisely mirror status of `done` does not establish
+its **imported frame ordering**. Automatic 30-frame jobs support both
+sampled and full source videos: original frame-index gaps are allowed.
+Before approving a queue, use **Job Distribution → Automatic distribution →
+Check imported frames** to identify missing source-video grouping,
+unorderable frames, or inconsistent imported frame counts. Existing
+sampled frames need not be reuploaded solely because of gaps.
 
 ## Link a Windows dataset folder without a browser upload
 
@@ -124,13 +125,15 @@ into JPEGs or **1 frame per second** to sample. Existing frame-image folders
 are also supported for both ZIP and folder upload, with **no frames.json or
 other metadata file required**. Source ordinals are read from filenames such
 as `ColumbaPalumbus_f000013.jpg` where possible, or deterministic natural
-filename order is used. If supplied numeric frame indices have gaps, the upload
-succeeds but those groups are not eligible for full-density automatic planning.
+filename order is used. If supplied numeric frame indices have gaps, the
+dataset is still eligible for ordered automatic jobs: each job consumes the
+next available uploaded frames, not every frame of the underlying video.
 The original compressed videos are retained privately in the dataset
 directory. All new imports are video-specific frame groups internally
 (`videos/<species>/<video-title>/<frame>`) because the Supervisely labeling
-workflow operates on image frames. An official automatic labeling job contains 30 consecutive stream frames assigned
-to one annotator. Frames at a video boundary can be combined in that job (for
+workflow operates on image frames. An official automatic labeling job contains the next 30 available **uploaded
+frames in temporal order** assigned to one annotator. The underlying original
+video frame numbers may be sparse. Frames at a video boundary can be combined in that job (for
 example, 14 frames from Video A followed by 16 from Video B). Only the final
 dataset-wide job may contain fewer than 30 frames. Manual jobs continue to
 select 30 consecutive frames from one video. Source video IDs and frame
