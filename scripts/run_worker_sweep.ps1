@@ -3,6 +3,7 @@
 [CmdletBinding()]
 param(
   [int[]]$Workers = @(1, 2, 3),
+  [ValidateRange(1, 4)][int]$Validators = 2,
   [ValidateRange(60, 7200)][int]$Seconds = 480,
   [ValidateSet("burst", "staggered")][string]$Scenario = "burst",
   [ValidateRange(0.1, 10.0)][double]$ProfileScale = 1.0,
@@ -53,17 +54,17 @@ try {
     if ($count -lt 1 -or $count -gt 4) {
       throw "Worker counts must be between 1 and 4 on the test machine."
     }
-    $project = "nightjar-bench-300-$stamp-w$count"
+    $project = "nightjar-bench-300-$stamp-p$count-v$Validators"
     if (-not $project.StartsWith("nightjar-bench-300-")) {
       throw "Refusing to operate on a non-benchmark Docker project."
     }
     $compose = @("compose", "-p", $project, "-f", "compose.benchmark.yaml")
-    $out = Join-Path $rootOut "workers-$count"
+    $out = Join-Path $rootOut "publishers-$count-validators-$Validators"
     New-Item -ItemType Directory -Force -Path $out | Out-Null
     $loadName = "$project-load"
     try {
-      Write-Host "Starting isolated benchmark: $count worker(s), $Scenario, $Seconds seconds"
-      & docker @compose up -d --build --scale "worker=$count" web worker
+      Write-Host "Starting isolated benchmark: $count publisher(s), $Validators validator(s), $Scenario, $Seconds seconds"
+      & docker @compose up -d --build --scale "worker=$count" --scale "validation-worker=$Validators" web worker status-worker validation-worker correction-worker recovery-worker bulk-worker
       if ($LASTEXITCODE -ne 0) { throw "Benchmark environment failed to start." }
       $invariant = [System.Globalization.CultureInfo]::InvariantCulture
       $latencyArg = $FallbackLatency.ToString($invariant)
@@ -95,7 +96,7 @@ try {
       & docker logs $loadName 2>&1 | Out-File (Join-Path $out "load.log") -Encoding utf8
       & docker cp ($loadName + ":/data/results/.") $out
       if ($LASTEXITCODE -ne 0) { throw "Cannot copy benchmark result files." }
-      & docker @compose logs --no-color worker api db 2>&1 | Out-File (Join-Path $out "services.log") -Encoding utf8
+      & docker @compose logs --no-color worker status-worker validation-worker correction-worker recovery-worker bulk-worker api db 2>&1 | Out-File (Join-Path $out "services.log") -Encoding utf8
 
       if ([int]$exitCode -ne 0) {
         throw "Benchmark load exited with $exitCode. See $out\load.log."
@@ -106,7 +107,8 @@ try {
       $errors = if ($null -eq $report.http_errors) { 0 } else { @($report.http_errors).Count }
       $published = [int]$report.workload.simulator.published
       $results += [PSCustomObject]@{
-        Workers = $count
+        Publishers = $count
+        Validators = $Validators
         Scenario = $Scenario
         AssumedPublishMs = $AssumedPublishMs
         Published = $published
