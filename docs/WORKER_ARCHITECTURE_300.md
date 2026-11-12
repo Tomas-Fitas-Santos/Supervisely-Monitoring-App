@@ -104,6 +104,19 @@ From repository root on Windows with Docker Desktop Linux engine running:
 .\scripts\run_worker_sweep.ps1 -Workers 1,2,3 -Validators 4 -Seconds 480 -Scenario burst -ProfileScale 2.5 -FailureRate 0.01
 ```
 
+The runner computes a content fingerprint of the API/native/frontend Docker
+build inputs and records it in `.benchmark-data/worker-sweep-build.sha256`.
+It builds the three shared benchmark images **once** on the first run, when
+build inputs change, or when an image is missing. Subsequent sweeps and
+publisher/validator variants reuse those images without calling Docker build.
+Changes to `scripts/benchmark_full.py` or the load scripts need no rebuild:
+they are mounted read-only into the benchmark containers.
+
+To explicitly request an image rebuild, append `-Rebuild` to the command.
+Each variant still creates a unique Compose project and clean, independent
+PostgreSQL/media volumes; teardown removes only those test containers/volumes,
+not the cached images or live Nightjar stack.
+
 **These commands are test-only.** They use a private Docker network with a
 synthetic Supervisely endpoint and a separate database. The independent
 `nightjar-live` project, users, real native jobs and real dataset are not
