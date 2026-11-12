@@ -334,8 +334,28 @@ def retry_operation(
             status_code=409,
             detail="Job operation cannot be retried in the current plan state.",
         )
-    if op.kind not in {"publish_job", "restart_job", "reassign_job"}:
+    if op.kind not in {"publish_job", "restart_job", "reassign_job",
+                       "validate_submission"}:
         raise HTTPException(status_code=409, detail="Unsupported job operation.")
+    if op.kind == "validate_submission":
+        # Only read-only validation is safe to requeue. A change in native
+        # submission or correction round must not be silently validated under
+        # the previous round's identity.
+        from .models import epoch
+        from .validation_tasks import enqueue_validation
+        if job.status != "on_review":
+            raise HTTPException(status_code=409, detail="Job is not awaiting validation.")
+        if op.status == "running":
+            raise HTTPException(status_code=409, detail="Validation is already running.")
+        op.status = "done"
+        if enqueue_validation(db, job):
+            op = db.get(NativeOperation, operation_id)
+        else:
+            op.status = "pending"
+        op.next_attempt_at = epoch()
+        op.attempts = 0
+        op.lease_owner = None
+        op.lease_until = None
     op.status = "pending"
     op.error_code = None
     op.claimed_at = None
