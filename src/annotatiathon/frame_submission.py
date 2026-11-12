@@ -44,10 +44,11 @@ def pending_ids(db: Session, job: LabelingJob) -> list[str]:
 
 def capture_frame_submission(db: Session, api, job: LabelingJob, *,
                              source_round: int | None = None) -> dict:
-    """Stage a job-scoped JSON snapshot, then add *only complete* frames to review.
+    """Stage a job-scoped JSON snapshot of only structurally complete frames.
 
-    The round manifest allows a crash between writing files and committing SQL
-    to be reconciled without redownloading or double-scoring accepted frames.
+    Accepted snapshots track missing-frame corrections, but review eligibility
+    stays closed until *every* original job frame has passed validation.
+    The immutable round manifest supports crash-safe, idempotent retries.
     """
     dataset = db.get(MediaDataset, job.dataset_id)
     if dataset is None or dataset.status != "ready":
