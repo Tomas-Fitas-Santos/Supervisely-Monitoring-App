@@ -43,9 +43,12 @@ try {
   $runningWorkerIds = @(& docker compose @compose --profile native ps --status running -q worker)
   Check-LastExit "Checking current Supervisely worker state"
   $workerWasRunning = @($runningWorkerIds | Where-Object { $_ }).Count -gt 0
+  $mirrorIds = @(& docker compose @compose --profile native ps --status running -q mirror-worker)
+  Check-LastExit "Checking current Supervisely mirror state"
+  $mirrorWasRunning = @($mirrorIds | Where-Object { $_ }).Count -gt 0
 
   # Pause native writes before the consistent PostgreSQL backup and upgrade.
-  & docker compose @compose --profile native stop worker api web indexer
+  & docker compose @compose --profile native stop worker mirror-worker api web indexer
   Check-LastExit "Stopping web/API/native worker"
   & docker compose @compose up -d --wait db
   Check-LastExit "Starting existing PostgreSQL service"
@@ -79,28 +82,38 @@ try {
 
   & docker compose @compose ps
   Check-LastExit "Checking containers"
-  & curl.exe --fail --silent --show-error http://127.0.0.1:8080/health/ready
+  $portMatch = [regex]::Match($environment, '(?m)^NIGHTJAR_LIVE_TEST_PORT=([0-9]+)')
+  $healthPort = if ($portMatch.Success) { $portMatch.Groups[1].Value } else { "8080" }
+  & curl.exe --fail --silent --show-error "http://127.0.0.1:$healthPort/health/ready"
   Check-LastExit "Nightjar health/ready"
   Write-Host ""
-  Write-Host "Nightjar web/API is healthy on port 8080. Mounted dataset indexer is enabled."
+  Write-Host "Nightjar web/API is healthy on port $healthPort. Mounted dataset indexer is enabled."
 
+  # The SDK upload lane has its own container so large media transfers
+  # do not occupy the publisher/status/validation worker. Preserve running
+  # state on upgrade, and start both with -StartWorker after verification.
   if ($StartWorker -or $workerWasRunning) {
-    # Preserve the pre-deployment running state, or start explicitly after the
-    # organiser has verified the integration. Do not silently disable queued
-    # pre-event media mirroring during otherwise successful deployments.
     & docker compose @compose --profile native up -d --build worker
-    Check-LastExit "Starting Supervisely worker"
-    $startedWorkerIds = @(& docker compose @compose --profile native ps --status running -q worker)
-    Check-LastExit "Checking restarted Supervisely worker"
-    if (@($startedWorkerIds | Where-Object { $_ }).Count -eq 0) {
-      throw "The Supervisely worker exited after deployment. Check its logs before retrying the dataset mirror."
+    Check-LastExit "Starting native job worker"
+    $jobIds = @(& docker compose @compose --profile native ps --status running -q worker)
+    Check-LastExit "Checking native job worker"
+    if (@($jobIds | Where-Object { $_ }).Count -eq 0) {
+      throw "Supervisely job worker is not running; inspect its logs."
     }
-    Write-Host "Native worker started; pending dataset replication will resume automatically."
   }
-  else {
-    Write-Host "Native worker was not running before this deployment and remains stopped."
-    Write-Host "After verifying Supervisely Team ID and Workspace ID in Settings, run:"
-    Write-Host "docker compose --env-file .env.live -f compose.live.yaml --profile native up -d --build worker"
+  if ($StartWorker -or $workerWasRunning -or $mirrorWasRunning) {
+    & docker compose @compose --profile native up -d --build mirror-worker
+    Check-LastExit "Starting dedicated source upload worker"
+    $uploadIds = @(& docker compose @compose --profile native ps --status running -q mirror-worker)
+    Check-LastExit "Checking dedicated source upload worker"
+    if (@($uploadIds | Where-Object { $_ }).Count -eq 0) {
+      throw "Supervisely upload worker is not running; inspect mirror-worker logs."
+    }
+    Write-Host "Media uploads and native job processing now run in separate containers."
+  }
+  if (-not ($StartWorker -or $workerWasRunning -or $mirrorWasRunning)) {
+    Write-Host "SDK workers were stopped and remain stopped; verified integration is required before starting them."
+    Write-Host "docker compose --env-file .env.live -f compose.live.yaml --profile native up -d worker mirror-worker"
   }
 }
 finally {
