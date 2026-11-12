@@ -1645,16 +1645,16 @@ def worker_cycle(lane: str) -> bool:
     """Use independent sessions and SDK clients for each lane."""
     with session_factory()() as db:
         try:
-            if lane in {"mirror", "bulk"}:
-                from .mounted_datasets import process_mounted_index_once
-                indexed = process_mounted_index_once(db)
-                if indexed:
-                    return True
             pending_reset = reset_pending(db)
             if pending_reset and lane != "reset":
                 return False
             if lane == "reset" and not pending_reset:
                 return False
+            if lane in {"mirror", "bulk"}:
+                from .mounted_datasets import process_mounted_index_once
+                indexed = process_mounted_index_once(db)
+                if indexed:
+                    return True
             config = db.get(SuperviselyConfig, 1)
             if (config is None or not config.verified or config.team_id is None
                     or config.workspace_id is None):
