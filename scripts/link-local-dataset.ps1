@@ -81,8 +81,8 @@ try {
     $backupDir = Join-Path $root "backups"
     New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
     $backup = Join-Path $backupDir (".env.live.dataset-" + (Get-Date -Format "yyyyMMdd-HHmmss") + ".bak")
-    [IO.File]::WriteAllText($backup, $original, (New-Object Text.UTF8Encoding($false)))
-    [IO.File]::WriteAllText($envFile, $updated, (New-Object Text.UTF8Encoding($false)))
+    [IO.File]::WriteAllText($backup, $original, [System.Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText($envFile, $updated, [System.Text.UTF8Encoding]::new($false))
     Write-Host "Source mount saved in .env.live. Existing credentials retained."
   }
   else {
