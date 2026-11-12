@@ -15,10 +15,12 @@ def mib(value):
 
 
 def summarize(directory):
-    rows = [json.loads(line) for line in (directory / "resources.jsonl").read_text().splitlines()]
+    rows = [json.loads(line) for line in (directory / "resources.jsonl").read_text(encoding="utf-8-sig").splitlines()
+            if line.strip()]
     services = defaultdict(list)
     for row in rows:
-        service = row["Name"].rsplit("-", 2)[-2]
+        match = re.search(r"-(api|db|web|worker|load)-[0-9]+$", row["Name"])
+        service = match.group(1) if match else "other"
         services[service].append({"cores": float(row["CPUPerc"].rstrip("%")) / 100,
                                   "working_set_mib": mib(row["MemUsage"].split("/")[0])})
     summary = {}
@@ -28,6 +30,11 @@ def summarize(directory):
             "max_sample_cpu_cores": max(item["cores"] for item in samples),
             "max_sample_working_set_mib": max(item["working_set_mib"] for item in samples),
         }
+        summary[service]["sampled_containers"] = len({
+            row["Name"] for row in rows
+            if re.search(r"-(api|db|web|worker|load)-[0-9]+$", row["Name"])
+            and re.search(r"-(api|db|web|worker|load)-[0-9]+$", row["Name"]).group(1) == service
+        })
         peak_file = directory / f"{service}-cgroup.txt"
         if peak_file.exists():
             lines = peak_file.read_text().splitlines()
@@ -35,13 +42,17 @@ def summarize(directory):
             summary[service]["cpu_cgroup"] = {
                 line.split()[0]: int(line.split()[1]) for line in lines[1:]
             }
-    groups = [rows[index:index + 4] for index in range(0, len(rows), 4)]
+    # Samples may contain 1, 2, 3 or 4 native worker containers.
+    # Never assume exactly four services, as the previous benchmark did.
+    by_sample = defaultdict(list)
+    for index, row in enumerate(rows):
+        by_sample[row.get("sample_ms", index // max(1, len(services)))].append(row)
+    groups = list(by_sample.values())
     summary["combined"] = {
-        "max_sample_cpu_cores": max(sum(float(row["CPUPerc"].rstrip("%")) / 100 for row in group)
-                                    for group in groups),
-        "average_cpu_cores": sum(service["average_cpu_cores"] for service in summary.values()),
-        "max_sample_working_set_mib": max(sum(mib(row["MemUsage"].split("/")[0]) for row in group)
-                                           for group in groups),
+        "max_sample_cpu_cores": max((sum(float(item["CPUPerc"].rstrip("%")) / 100
+                                      for item in group) for group in groups), default=0),
+        "max_sample_working_set_mib": max((sum(mib(item["MemUsage"].split("/")[0])
+                                             for item in group) for group in groups), default=0),
     }
     result = {"resources": summary}
     if (directory / "result.json").exists():
@@ -57,6 +68,27 @@ def summarize(directory):
             {"endpoint": path, "count": len(times), "p95_ms": sorted(times)[int(len(times) * .95)]}
             for path, times in paths.items()
         ], key=lambda row: row["p95_ms"], reverse=True)[:15]
+    worker_trace = directory / "worker-timing.jsonl"
+    if worker_trace.exists() and worker_trace.stat().st_size:
+        from analyze_worker_timing import summarize as summarize_worker
+        worker_rows = [json.loads(line) for line in worker_trace.read_text(encoding="utf-8").splitlines()
+                       if line.strip()]
+        worker_summary, _ = summarize_worker(worker_rows)
+        result["worker_timing"] = worker_summary
+        started = result.get("workload", {}).get("simulator", {}).get("started_unix_ms")
+        if isinstance(started, int):
+            received = sorted(row["unix_ms"] for row in worker_rows
+                              if row.get("kind") == "stage"
+                              and row.get("stage") == "publish_confirmed"
+                              and isinstance(row.get("unix_ms"), int))
+            result["publication_cohort"] = {
+                "initial_submit_burst_ms": started,
+                "first_confirmed_ms": received[0] - started if received else None,
+                "two_hundred_ninetieth_confirmed_ms": received[289] - started
+                    if len(received) >= 290 else None,
+                "last_confirmed_ms": received[-1] - started if received else None,
+                "total_published": len(received),
+            }
     (directory / "summary.json").write_text(json.dumps(result, indent=2))
     return result
 
