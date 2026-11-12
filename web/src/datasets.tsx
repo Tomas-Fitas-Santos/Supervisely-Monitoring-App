@@ -32,7 +32,7 @@ export function DatasetScreen({auth}:{auth:Auth}) {
   const [mirror,setMirror]=useState<MirrorStatus|null>(null);
   const [mode,setMode]=useState<"zip"|"folder">("zip");
   const [name,setName]=useState("");
-  const [extractionPolicy,setExtractionPolicy]=useState<"all_frames"|"sample_1fps">("sample_1fps");
+  const [extractionPolicy,setExtractionPolicy]=useState<"all_frames"|"sample_1fps">("all_frames");
   const [videoResult,setVideoResult]=useState<{datasetId:string;items:SourceVideo[]}|null>(null);
   const videosLoaded=videoResult?.datasetId===selected;
   const videos=videosLoaded?videoResult.items:[];
@@ -197,7 +197,7 @@ export function DatasetScreen({auth}:{auth:Auth}) {
     <div className="content-grid datasets-layout">
       {admin&&<section className="panel">
         <span className="eyebrow">PRE-EVENT MEDIA LIBRARY</span><h3>Import and preload videos</h3>
-        <p className="muted small">Upload a folder or ZIP with <code>dataset-name/bird-species/video.mp4</code> or <code>dataset-name/bird-species/video-title/frame.jpg</code>. Multiple species and videos are supported. <strong>No frames.json or other metadata file is required in either upload format.</strong> Source videos are decoded according to the selected extraction mode. For existing frame folders, Nightjar recognizes filenames such as <code>ColumbaPalumbus_f000013.jpg</code>, or infers a consistent natural filename order. If supplied frames have missing source ordinals, import still succeeds but marks them as incomplete for full-density automatic jobs.</p>
+        <p className="muted small">For 30-frame automatic labeling jobs, keep <strong>Every source frame</strong> selected and upload consecutive frames from each source video. Uploading only sampled frames cannot establish full-density job coverage. Upload a folder or ZIP with <code>dataset-name/bird-species/video.mp4</code> or <code>dataset-name/bird-species/video-title/frame.jpg</code>. Multiple species and videos are supported. <strong>No frames.json or other metadata file is required in either upload format.</strong> Source videos are decoded according to the selected extraction mode. For existing frame folders, Nightjar recognizes filenames such as <code>ColumbaPalumbus_f000013.jpg</code>, or infers a consistent natural filename order. If supplied frames have missing source ordinals, import still succeeds but marks them as incomplete for full-density automatic jobs.</p>
         <form className="form-stack" onSubmit={e=>void ingest(e)}>
           <label>Dataset name<input maxLength={200} value={name} placeholder="BirdGaze 2026"
             onChange={e=>setName(e.target.value)}/></label>
