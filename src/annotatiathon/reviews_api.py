@@ -46,6 +46,26 @@ def get_job(db: Session, event_id: str, job_id: str,
     return job
 
 
+def require_legacy_review(job: LabelingJob) -> None:
+    """Prevent old whole-job review actions from changing official frame-review jobs."""
+    official = (
+        job.assignee_person_id is not None
+        and (
+            job.release_mode in {"shared_primary", "shared_repeat"}
+            or (
+                job.release_mode in {"manual_released", "manual_hold"}
+                and job.frame_count == 30
+            )
+        )
+    )
+    if official:
+        raise HTTPException(
+            status_code=409,
+            detail="Official 30-frame jobs are reviewed only through the shared frame "
+                   "review queue. Incomplete submissions are returned automatically.",
+        )
+
+
 def verify_monitor(db: Session, ctx: AuthContext, job: LabelingJob) -> None:
     if "organiser" in ctx.staff.roles:
         return
@@ -186,6 +206,7 @@ def review_frame(
 ):
     event = current_event(db, ctx, writable=True)
     job = get_job(db, event.id, job_id, lock=True)
+    require_legacy_review(job)
     verify_monitor(db, ctx, job)
     if job.status not in ("on_review", "submitted", "needs_correction"):
         raise HTTPException(
@@ -242,6 +263,7 @@ def decide_review(
 ):
     event = current_event(db, ctx, writable=True)
     job = get_job(db, event.id, job_id, lock=True)
+    require_legacy_review(job)
     verify_monitor(db, ctx, job)
     if job.status != "on_review":
         raise HTTPException(
