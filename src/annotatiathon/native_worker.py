@@ -1652,7 +1652,10 @@ def worker_cycle(lane: str) -> bool:
                 return False
             if lane == "reset" and not pending_reset:
                 return False
-            if lane in {"mirror", "bulk"}:
+            # Live deployments have their own source indexer. Never let a
+            # dedicated Supervisely upload worker run CPU-heavy frame extraction.
+            # Preserve the legacy fallback for test/local single-worker setups.
+            if lane in {"mirror", "bulk"} and os.environ.get("NIGHTJAR_DEDICATED_INDEXER") != "1":
                 from .mounted_datasets import process_mounted_index_once
                 indexed = process_mounted_index_once(db)
                 if indexed:
@@ -1732,6 +1735,10 @@ def run_worker(*, once: bool, poll_seconds: int, role: str = "all") -> None:
             else:
                 time.sleep(0.1)
         return
+    # Live mode runs a separate SDK mirror process. The standard worker
+    # continues publishing, status polling, validation and correction only.
+    # Single-worker deployments retain their previous behavior by default.
+    separate_mirror = os.environ.get("NIGHTJAR_DEDICATED_MIRROR") == "1"
     # Legacy single-container mode remains the safe live default until
     # role-based deployment has passed the 300-annotator acceptance tests.
     # Mirroring and native status reconciliation are independent lanes.
@@ -1759,12 +1766,13 @@ def run_worker(*, once: bool, poll_seconds: int, role: str = "all") -> None:
                 time.sleep(poll_seconds)
                 continue
             if once:
-                worker_cycle("mirror")
+                if not separate_mirror:
+                    worker_cycle("mirror")
                 worker_cycle("publish")
                 worker_cycle("background")
                 return
             now = time.monotonic()
-            if mirror is None and now >= next_mirror:
+            if not separate_mirror and mirror is None and now >= next_mirror:
                 mirror = pool.submit(worker_cycle, "mirror")
                 next_mirror = now + poll_seconds
             if background is None and now >= next_background:
