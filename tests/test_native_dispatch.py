@@ -205,7 +205,15 @@ class MockSDK:
                         "classTitle": "bird", "geometryType": "rectangle",
                         "points": {"exterior": [[12, 12], [82, 88]], "interior": []},
                         "tags": [{"job_id": job_id, "image_id": image_id}],
-                    }],
+                    }] + [
+                        {
+                            "classTitle": cls, "geometryType": "point",
+                            "points": {"exterior": [[20 + index, 20 + index]], "interior": []},
+                        }
+                        for index, cls in enumerate(
+                            ("left_eye", "right_eye", "beak", "crown")
+                        )
+                    ],
                     "tags": [],
                 }
             return Obj(to_json=to_json)
