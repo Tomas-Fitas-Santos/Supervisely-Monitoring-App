@@ -6,7 +6,7 @@ from sqlalchemy import delete, select
 
 from .auth import ROLES, normalized_email
 from .db import session_factory
-from .models import AuditEvent, StaffAccount, StaffSession
+from .models import ApprovedStaffEmail, AuditEvent, StaffAccount, StaffSession, epoch
 from .organiser_access import access_roles, configured_emails, is_restricted_mode
 from .security import password_hash
 
@@ -26,7 +26,10 @@ def main() -> None:
     new.add_argument("--email", required=True)
     new.add_argument("--name", required=True)
     new.add_argument("--roles", required=True, help="Comma-separated app roles")
-    cmd.add_parser("sync-organiser-access", help="Restore approved administrator/organiser accounts")
+    cmd.add_parser("sync-organiser-access", help="Bootstrap PostgreSQL approvals once and reconcile staff")
+    approval = cmd.add_parser("approve-email", help="Approve a staff email in PostgreSQL")
+    approval.add_argument("--email", required=True)
+    approval.add_argument("--role", choices=("admin", "organiser"), required=True)
     reset = cmd.add_parser(
         "reset-password",
         help="Securely reset an existing staff password and revoke sessions",
@@ -50,12 +53,47 @@ def main() -> None:
 
         print(backfill_frame_reviews(session_factory(), event_id=args.event_id))
         return
+    if args.action == "approve-email":
+        try:
+            email = normalized_email(args.email)
+        except ValueError as exc:
+            parser.error(str(exc))
+        with session_factory().begin() as db:
+            entry = db.get(ApprovedStaffEmail, email)
+            if entry is None:
+                db.add(ApprovedStaffEmail(email=email, role=args.role,
+                                          enabled=True, created_at=epoch()))
+            else:
+                entry.role = args.role
+                entry.enabled = True
+        print("Approved:", email, "as", args.role)
+        print("Run sync-organiser-access to reconcile an existing login.")
+        return
     if args.action == "sync-organiser-access":
-        approved = configured_emails()
-        if not approved or not any("admin" in roles for roles in approved.values()):
-            parser.error("Set NIGHTJAR_ADMIN_EMAILS and NIGHTJAR_ORGANISER_EMAILS first.")
         updated, missing, disabled = [], [], []
         with session_factory().begin() as db:
+            # Only an empty database allowlist may be initialized from .env.live.
+            # After initialization, PostgreSQL alone governs all authorisation.
+            approvals = db.scalars(select(ApprovedStaffEmail).with_for_update()).all()
+            if not approvals:
+                bootstrap = configured_emails()
+                if not bootstrap or not any("admin" in roles for roles in bootstrap.values()):
+                    parser.error("No approved emails in PostgreSQL. Configure initial private "
+                                 "NIGHTJAR_ADMIN_EMAILS and NIGHTJAR_ORGANISER_EMAILS.")
+                for address, roles in bootstrap.items():
+                    db.add(ApprovedStaffEmail(
+                        email=address, role="admin" if "admin" in roles else "organiser",
+                        enabled=True, created_at=epoch(),
+                    ))
+                db.flush()
+                approvals = db.scalars(select(ApprovedStaffEmail)).all()
+                print("Bootstrapped PostgreSQL allowlist:", len(approvals))
+            approved = {
+                a.email: (["admin", "organiser"] if a.role == "admin" else ["organiser"])
+                for a in approvals if a.enabled
+            }
+            if not any("admin" in roles for roles in approved.values()):
+                parser.error("At least one enabled Admin is required in the approved database.")
             accounts = db.scalars(select(StaffAccount).with_for_update()).all()
             by_email = {a.email: a for a in accounts}
             for address, roles in approved.items():
@@ -71,7 +109,7 @@ def main() -> None:
                 if changed:
                     db.execute(delete(StaffSession).where(StaffSession.staff_id == staff.id))
                     db.add(AuditEvent(
-                        action="staff.access.allowlist_sync", target_type="staff",
+                        action="staff.access.database_sync", target_type="staff",
                         target_id=staff.id, details={"roles": roles, "enabled": True},
                     ))
                     updated.append(address)
@@ -81,22 +119,26 @@ def main() -> None:
                         staff.active = False
                         db.execute(delete(StaffSession).where(StaffSession.staff_id == staff.id))
                         db.add(AuditEvent(
-                            action="staff.access.allowlist_sync", target_type="staff",
-                            target_id=staff.id, details={"enabled": False, "reason": "not_allowlisted"},
+                            action="staff.access.database_sync", target_type="staff",
+                            target_id=staff.id, details={
+                                "enabled": False, "reason": "not_database_approved",
+                            },
                         ))
                         disabled.append(staff.email)
-        print("Enabled/updated:", len(updated), "Needs email setup:", len(missing),
+        print("Enabled/updated:", len(updated), "Can self-register:", len(missing),
               "Other staff disabled:", len(disabled))
         for address in missing:
-            print("Needs email setup:", address)
+            print("Not registered:", address)
         return
     try:
         email = normalized_email(args.email)
     except ValueError as exc:
         parser.error(str(exc))
 
-    if is_restricted_mode() and not access_roles(email):
-        parser.error("Email is not on the Nightjar app access list.")
+    if is_restricted_mode():
+        with session_factory()() as db:
+            if not access_roles(db, email):
+                parser.error("Email is not in the approved staff database.")
     if args.action == "reset-password":
         with session_factory().begin() as db:
             staff = db.scalar(

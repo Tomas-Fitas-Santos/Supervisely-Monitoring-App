@@ -79,7 +79,7 @@ def get_context(request: Request, db: Session = Depends(get_db)) -> AuthContext:
         raise HTTPException(status_code=401, detail="Session expired.")
     staff = db.get(StaffAccount, session.staff_id)
     if (staff is None or not staff.active or
-            (is_restricted_mode() and staff.roles != access_roles(staff.email))):
+            (is_restricted_mode() and staff.roles != access_roles(db, staff.email))):
         raise HTTPException(status_code=401, detail="Account unavailable.")
     return AuthContext(staff=staff, session=session)
 
@@ -114,7 +114,7 @@ def login(payload: Credentials, request: Request, response: Response, db: Sessio
         password_matches(DUMMY_HASH, payload.password)
         raise HTTPException(status_code=401, detail="Invalid credentials.")
     if (not staff.active or
-        (is_restricted_mode() and staff.roles != access_roles(staff.email)) or
+        (is_restricted_mode() and staff.roles != access_roles(db, staff.email)) or
         (staff.locked_until and staff.locked_until > now)):
         raise HTTPException(status_code=401, detail="Invalid credentials.")
     if not password_matches(staff.password_hash, payload.password):

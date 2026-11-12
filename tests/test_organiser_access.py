@@ -1,4 +1,4 @@
-"""Production account access is independent of event membership or native roles."""
+"""Nightjar Admin/Organiser self-signup is driven only by PostgreSQL approval records."""
 import sys
 from types import SimpleNamespace
 
@@ -8,35 +8,30 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from annotatiathon import manage, organiser_access, organiser_setup_api
+from annotatiathon import manage, organiser_access
 from annotatiathon.app import app
 from annotatiathon.db import get_db
-from annotatiathon.models import DEFAULT_EVENT_ID, AuditEvent, Base, Event, Person, StaffAccount
+from annotatiathon.models import (
+    DEFAULT_EVENT_ID, ApprovedStaffEmail, AuditEvent, Base, Event, Person, StaffAccount,
+)
 from annotatiathon.people_api import align_staff_access
 from annotatiathon.security import password_hash, password_matches
 
 
 @pytest.fixture
-def approved(monkeypatch):
-    settings = SimpleNamespace(
+def settings(monkeypatch):
+    values = SimpleNamespace(
         app_env="production",
         nightjar_admin_emails="owner@example.org; coadmin@example.org",
         nightjar_organiser_emails="organiser@example.org; owner@example.org",
-        nightjar_public_url="https://nightjar.example",
-        nightjar_smtp_host="smtp.example.org",
-        nightjar_smtp_port=587,
-        nightjar_smtp_from="nightjar@example.org",
-        nightjar_smtp_user="",
-        nightjar_smtp_password=None,
     )
-    monkeypatch.setattr(organiser_access, "get_settings", lambda: settings)
-    monkeypatch.setattr(organiser_setup_api, "get_settings", lambda: settings)
-    monkeypatch.setattr("annotatiathon.auth.get_settings", lambda: settings)
-    return settings
+    monkeypatch.setattr(organiser_access, "get_settings", lambda: values)
+    monkeypatch.setattr("annotatiathon.auth.get_settings", lambda: values)
+    return values
 
 
 @pytest.fixture
-def clients(approved, monkeypatch):
+def setup(settings, monkeypatch):
     engine = create_engine("sqlite+pysqlite://",
         connect_args={"check_same_thread": False}, poolclass=StaticPool)
     Base.metadata.create_all(engine)
@@ -66,17 +61,19 @@ def clients(approved, monkeypatch):
     engine.dispose()
 
 
-def test_allowlist_roles_and_no_roster_deactivation(clients, monkeypatch):
-    http, maker = clients
-    with maker.begin() as db:
-        p = db.scalar(select(Person).where(Person.email == "owner@example.org"))
-        align_staff_access(db, p)
-        assert db.scalar(select(StaffAccount).where(
-            StaffAccount.email == p.email)).active is False  # unchanged until sync
-
+def bootstrap(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["nightjar-manage", "sync-organiser-access"])
     manage.main()
+
+
+def test_one_time_database_bootstrap_and_existing_passwords(setup, monkeypatch, settings):
+    http, maker = setup
+    with maker.begin() as db:
+        roster = db.scalar(select(Person).where(Person.email == "owner@example.org"))
+        align_staff_access(db, roster)
+    bootstrap(monkeypatch)
     with maker() as db:
+        assert len(db.scalars(select(ApprovedStaffEmail)).all()) == 3
         owner = db.scalar(select(StaffAccount).where(
             StaffAccount.email == "owner@example.org"))
         outsider = db.scalar(select(StaffAccount).where(
@@ -91,61 +88,75 @@ def test_allowlist_roles_and_no_roster_deactivation(clients, monkeypatch):
         "email": "outsider@example.org", "password": "OutsiderPassword123"
     }).status_code == 401
 
-    with maker.begin() as db:
-        p = db.scalar(select(Person).where(Person.email == "owner@example.org"))
-        p.kind = "participant"
-        align_staff_access(db, p)
+    # Later .env changes must NEVER replace the existing DB approvals.
+    settings.nightjar_admin_emails = "intruder@example.org"
+    settings.nightjar_organiser_emails = ""
+    bootstrap(monkeypatch)
     with maker() as db:
+        assert db.get(ApprovedStaffEmail, "owner@example.org") is not None
+        assert db.get(ApprovedStaffEmail, "intruder@example.org") is None
+        roster = db.scalar(select(Person).where(Person.email == "owner@example.org"))
+        roster.kind = "participant"
+        align_staff_access(db, roster)
         assert db.scalar(select(StaffAccount).where(
             StaffAccount.email == "owner@example.org")).active
 
 
-def test_code_free_verified_registration_and_recovery(clients, monkeypatch):
-    http, maker = clients
-    sent = []
-    monkeypatch.setattr(organiser_setup_api, "_send_link",
-                        lambda email, token: sent.append((email, token)))
-    unknown = http.post("/api/v1/auth/setup/request", json={
-        "email": "outsider@example.org",
+def test_database_approved_account_self_signup_without_codes(setup, monkeypatch):
+    http, maker = setup
+    bootstrap(monkeypatch)
+    forbidden = http.post("/api/v1/auth/setup/register", json={
+        "email": "outsider@example.org", "name": "Outsider",
+        "password": "LongPrivatePassword123",
     })
-    assert unknown.status_code == 200 and not sent
-    request = http.post("/api/v1/auth/setup/request", json={
-        "email": "organiser@example.org",
+    assert forbidden.status_code == 403
+    created = http.post("/api/v1/auth/setup/register", json={
+        "email": " ORGANISER@example.org ", "name": "Organiser's Own Name",
+        "password": "LongPrivatePassword123",
     })
-    assert request.status_code == 200 and len(sent) == 1
-    # No password or token is returned in the API response.
-    assert "token" not in request.text and "link" in request.text
-    token = sent[0][1]
-    failed = http.post("/api/v1/auth/setup/complete", json={
-        "email": "organiser@example.org", "password": "NewLongPassword123",
-        "token": "invalid" * 6,
+    assert created.status_code == 201, created.text
+    duplicate = http.post("/api/v1/auth/setup/register", json={
+        "email": "organiser@example.org", "name": "Someone Else",
+        "password": "DifferentPrivatePassword123",
     })
-    assert failed.status_code == 403
-    created = http.post("/api/v1/auth/setup/complete", json={
-        "email": "organiser@example.org", "password": "NewLongPassword123",
-        "token": token,
+    assert duplicate.status_code == 409
+    assert http.post("/api/v1/auth/login", json={
+        "email": "organiser@example.org", "password": "DifferentPrivatePassword123"
+    }).status_code == 401
+    result = http.post("/api/v1/auth/login", json={
+        "email": "organiser@example.org", "password": "LongPrivatePassword123",
     })
-    assert created.status_code == 200, created.text
-    assert http.post("/api/v1/auth/setup/complete", json={
-        "email": "organiser@example.org", "password": "AnotherPassword123",
-        "token": token,
-    }).status_code == 403
-    login = http.post("/api/v1/auth/login", json={
-        "email": "organiser@example.org", "password": "NewLongPassword123",
-    })
-    assert login.status_code == 200
-    assert login.json()["staff"]["roles"] == ["organiser"]
+    assert result.status_code == 200 and result.json()["staff"]["roles"] == ["organiser"]
+    assert http.get("/api/v1/staff/approved").status_code == 403
+
     with maker() as db:
-        staff = db.scalar(select(StaffAccount).where(
+        a = db.scalar(select(StaffAccount).where(
             StaffAccount.email == "organiser@example.org"))
-        assert staff.active and staff.roles == ["organiser"]
+        assert a.active and a.name == "Organiser's Own Name"
         assert db.scalar(select(AuditEvent).where(
-            AuditEvent.action == "staff.account.email_verified_setup")) is not None
+            AuditEvent.action == "staff.account.self_registered")) is not None
 
 
-def test_legacy_roster_registration_is_disabled_in_production(clients):
-    http, _ = clients
-    response = http.post("/api/v1/auth/register", json={
+def test_admin_only_approved_email_list_and_no_legacy_registration(setup, monkeypatch):
+    http, maker = setup
+    bootstrap(monkeypatch)
+    assert http.post("/api/v1/auth/register", json={
         "email": "owner@example.org", "password": "CorrectLongPassword123",
+    }).status_code == 410
+    assert http.post("/api/v1/auth/setup/request", json={
+        "email": "owner@example.org",
+    }).status_code == 404
+    assert http.post("/api/v1/auth/setup/complete", json={
+        "email": "owner@example.org", "password": "CorrectLongPassword123",
+        "token": "a" * 30,
+    }).status_code == 404
+    admin = http.post("/api/v1/auth/login", json={
+        "email": "owner@example.org", "password": "ExistingSecretPhrase123",
     })
-    assert response.status_code == 410
+    assert admin.status_code == 200
+    resp = http.get("/api/v1/staff/approved")
+    assert resp.status_code == 200
+    by_email = {row["email"]: row for row in resp.json()["items"]}
+    assert by_email["owner@example.org"]["role"] == "admin"
+    assert by_email["coadmin@example.org"]["registered"] is False
+    assert by_email["organiser@example.org"]["role"] == "organiser"

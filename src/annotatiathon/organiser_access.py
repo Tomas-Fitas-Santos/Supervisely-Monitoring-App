@@ -1,15 +1,20 @@
-"""Nightjar login allowlist, independent of all event and Supervisely roles.
+"""Database-backed Nightjar staff access, independent of event and Supervisely roles."""
+from sqlalchemy.orm import Session
 
-Set the nine approved addresses in the private .env.live file, not the public repo.
-"""
 from .config import get_settings
+from .models import ApprovedStaffEmail
 
 
 def _emails(raw: str) -> set[str]:
-    return {value.strip().lower() for value in raw.replace(";", ",").split(",") if value.strip()}
+    return {
+        value.strip().lower()
+        for value in raw.replace(";", ",").split(",")
+        if value.strip()
+    }
 
 
 def configured_emails() -> dict[str, list[str]]:
+    """One-time bootstrap inputs from private .env.live; never used by login."""
     settings = get_settings()
     admins = _emails(settings.nightjar_admin_emails)
     organisers = _emails(settings.nightjar_organiser_emails)
@@ -19,8 +24,16 @@ def configured_emails() -> dict[str, list[str]]:
     }
 
 
-def access_roles(email: str) -> list[str]:
-    return configured_emails().get(email.strip().lower(), [])
+def access_roles(db: Session, email: str) -> list[str]:
+    """Only the persisted approval table grants app access."""
+    entry = db.get(ApprovedStaffEmail, email.strip().lower())
+    if entry is None or not entry.enabled:
+        return []
+    if entry.role == "admin":
+        return ["admin", "organiser"]
+    if entry.role == "organiser":
+        return ["organiser"]
+    return []
 
 
 def is_restricted_mode() -> bool:

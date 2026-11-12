@@ -25,45 +25,30 @@ type Tab = "overview" | "checkin" | "tickets" | "activities" | "competition" |
   "staff" | "settings" | "account";
 
 function Login({ onLogin }: { onLogin: (auth: Auth) => void }) {
-  // Links use a URL fragment so the one-time secret is not sent to web/CDN logs.
-  const initial = new URLSearchParams(window.location.hash.replace(/^#/, ""));
-  const initialToken = initial.get("nightjar_setup") || "";
-  const [mode,setMode] = useState<"login"|"request"|"complete">(initialToken?"complete":"login");
-  const [token,setToken] = useState(initialToken);
-  const [email,setEmail] = useState(initial.get("email") || "");
+  const [mode,setMode] = useState<"login"|"register">("login");
+  const [email,setEmail] = useState("");
+  const [name,setName] = useState("");
   const [password,setPassword] = useState("");
   const [confirmation,setConfirmation] = useState("");
   const [showPassword,setShowPassword] = useState(false);
   const [error,setError] = useState("");
-  const [notice,setNotice] = useState("");
   const [working,setWorking] = useState(false);
-  useEffect(()=>{
-    if(initialToken)window.history.replaceState(null,"",window.location.pathname+window.location.search);
-  },[]);
   async function submit(e:React.FormEvent) {
-    e.preventDefault();
-    setError("");setNotice("");setWorking(true);
+    e.preventDefault();setError("");setWorking(true);
     try {
       const accountEmail=email.trim().toLowerCase();
-      if(mode==="request") {
-        const result=await api<{message:string}>("/auth/setup/request","POST",{email:accountEmail});
-        setNotice(result.message);
-      } else if(mode==="complete") {
-        if(password!==confirmation)throw new Error("The passwords do not match.");
-        await api("/auth/setup/complete","POST",{email:accountEmail,token,password});
-        setToken("");setConfirmation("");
-        onLogin(await api<Auth>("/auth/login","POST",{email:accountEmail,password}));
-      } else {
-        onLogin(await api<Auth>("/auth/login","POST",{email:accountEmail,password}));
+      if(mode==="register"){
+        if(password!==confirmation)throw new Error("Passwords do not match.");
+        await api("/auth/setup/register","POST",{email:accountEmail,name:name.trim(),password});
       }
+      onLogin(await api<Auth>("/auth/login","POST",{email:accountEmail,password}));
     }catch(exc){setError((exc as Error).message);}
     finally{setWorking(false);}
   }
-  function switchMode(next:"login"|"request") {
-    setMode(next);setError("");setNotice("");setPassword("");setConfirmation("");
-    setToken("");setShowPassword(false);
+  function switchMode(){
+    setMode(v=>v==="login"?"register":"login");setError("");
+    setPassword("");setConfirmation("");setShowPassword(false);
   }
-
   return <main className="login-shell">
     <section className="login-art">
       <div className="login-brand"><div className="brand-mark"><Bird size={25}/></div>
@@ -78,55 +63,46 @@ function Login({ onLogin }: { onLogin: (auth: Auth) => void }) {
     <section className="login-panel">
       <div className="login-card">
         <div className="mobile-brand"><Bird size={23}/> NIGHTJAR</div>
-        <span className="eyebrow">{mode==="login"?"WELCOME BACK":
-          mode==="request"?"APPROVED STAFF ACCESS":"SECURE ACCOUNT SETUP"}</span>
-        <h2>{mode==="login"?"Sign in to Nightjar":
-          mode==="request"?"Set up or recover your account":"Choose your password"}</h2>
+        <span className="eyebrow">{mode==="login"?"WELCOME BACK":"APPROVED STAFF REGISTRATION"}</span>
+        <h2>{mode==="login"?"Sign in to Nightjar":"Create your Nightjar account"}</h2>
         <p className="muted">{mode==="login"?
-          "Sign in with your Nightjar account, not your Supervisely credentials.":
-          mode==="request"?
-          "Enter your approved Admin or Organiser email. We'll email you a secure setup link. No registration code is needed.":
-          "Your email link confirms your identity. Choose a password of at least 12 characters; numbers and symbols are optional."}</p>
+          "Sign in with your Nightjar email and password, not your Supervisely credentials.":
+          "If your email is in the approved Admin or Organiser list, choose your own password and create your account. No registration code is required."}</p>
         <form onSubmit={e=>void submit(e)} className="form-stack">
+          {mode==="register"&&<label>Full name
+            <input type="text" autoComplete="name" required maxLength={200}
+              value={name} onChange={e=>setName(e.target.value)}
+              placeholder="Your name"/></label>}
           <label>Email address<input type="email" autoComplete="username" autoFocus required
             value={email} onChange={e=>setEmail(e.target.value)}
             placeholder="you@institution.pt"/></label>
-          {mode!=="request"&&<>
-            <label>{mode==="login"?"Password":"New Nightjar password (12+ characters)"}
-              <input type={showPassword?"text":"password"}
-                autoComplete={mode==="login"?"current-password":"new-password"}
-                required minLength={mode==="complete"?12:undefined}
-                value={password} onChange={e=>setPassword(e.target.value)}
-                placeholder="Enter password"/>
-            </label>
-            {mode==="complete"&&<label>Confirm Nightjar password
-              <input type={showPassword?"text":"password"} autoComplete="new-password"
-                minLength={12} required value={confirmation}
-                onChange={e=>setConfirmation(e.target.value)}
-                placeholder="Enter the same password again"/></label>}
-            <label className="muted small"><input type="checkbox" checked={showPassword}
-              onChange={e=>setShowPassword(e.target.checked)}/> Show password</label>
-          </>}
+          <label>{mode==="login"?"Password":"Create a password (12+ characters)"}
+            <input type={showPassword?"text":"password"}
+              autoComplete={mode==="login"?"current-password":"new-password"} required
+              minLength={mode==="register"?12:undefined}
+              value={password} onChange={e=>setPassword(e.target.value)}
+              placeholder="Enter password"/></label>
+          {mode==="register"&&<label>Confirm password
+            <input type={showPassword?"text":"password"} autoComplete="new-password"
+              required minLength={12} value={confirmation}
+              onChange={e=>setConfirmation(e.target.value)}
+              placeholder="Re-enter password"/></label>}
+          <label className="muted small"><input type="checkbox" checked={showPassword}
+            onChange={e=>setShowPassword(e.target.checked)}/> Show password</label>
           {error&&<div role="alert" className="alert danger">{error}</div>}
-          {notice&&<div role="status" className="alert success">{notice}</div>}
           <button className="btn primary large" disabled={working} type="submit">
-            {working?"Working…":mode==="login"?"Sign in":
-              mode==="request"?"Email my secure setup link":"Save password and sign in"}
+            {working?"Working…":mode==="login"?"Sign in":"Create account and sign in"}
             <ArrowRight size={17}/>
           </button>
         </form>
         <div className="settings-action-row" style={{marginTop:15}}>
-          {mode==="login"?<>
-            <button type="button" className="btn secondary" disabled={working}
-              onClick={()=>switchMode("request")}>Create organiser account</button>
-            <button type="button" className="btn secondary" disabled={working}
-              onClick={()=>switchMode("request")}>Forgot password?</button>
-          </>:<button type="button" className="btn secondary" disabled={working}
-            onClick={()=>switchMode("login")}>Back to sign in</button>}
+          <button type="button" className="btn secondary" disabled={working} onClick={switchMode}>
+            {mode==="login"?"Create account":"Back to sign in"}
+          </button>
         </div>
         <p className="login-hint"><CircleHelp size={15}/>
-          Only approved Admins and Organisers can access Nightjar. Event Monitor
-          and Participant roles do not affect app access.</p>
+          Only approved Admin and Organiser emails can register. Existing accounts must sign in;
+          creating a new account cannot replace an existing password.</p>
       </div>
       <div className="login-bottom">TÉCNICO · Bird Annotatiathon</div>
     </section>

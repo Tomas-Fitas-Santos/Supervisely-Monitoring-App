@@ -1,46 +1,62 @@
-# Nightjar Production App Access
+# Nightjar: database-approved self-registration
 
-Nightjar login is independent of Supervisely roles and event-roster Monitor/Participant classification.
+## Access model
 
-## Roles
-Production app access is governed by private .env.live configuration:
-- NIGHTJAR_ADMIN_EMAILS: comma-separated emails for full admins
-- NIGHTJAR_ORGANISER_EMAILS: comma-separated emails for organisers
-Admins receive both admin and organiser privileges so they can reach all existing pages.
-No other email can log in even if it has an old staff account or a participant/monitor roster entry.
+Nightjar app login and event roles are independent. The `approved_staff_emails`
+PostgreSQL table is the single source of truth for app access.
+Each approved row has `email`, `role` (admin/organiser), and `enabled`.
+An Admin has the full app including Organiser functionality. Organisers can
+use the app but cannot edit the approved access list. Supervisely and event
+Monitor/Participant roles never enable or disable Nightjar credentials.
 
-## Existing staff
-Live Compose migration runs python -m annotatiathon.manage sync-organiser-access.
-This restores active status and correct roles for already registered approved accounts,
-keeps their passwords, clears login locks, and revokes obsolete sessions.
-Non-allowlisted accounts are deactivated and their sessions revoked. Missing
-approved accounts are reported as needing account setup, not given a default password.
+## First deployment: import the existing list once
 
-## Code-free email setup and recovery
-Create organiser account and Forgot password? send single-use email links to approved addresses.
-The email link expires in 20 minutes and is not returned to the browser.
-A person must control the mailbox to create or reset the account. A known email alone isn't proof.
-Set these private values in .env.live:
+Add the approved Admin and Organiser email addresses to private `.env.live`:
 
-    NIGHTJAR_PUBLIC_URL=https://your-cloudflare-public-host.example
-    NIGHTJAR_SMTP_HOST=smtp.your-provider.example
-    NIGHTJAR_SMTP_PORT=587
-    NIGHTJAR_SMTP_USER=your-smtp-user
-    NIGHTJAR_SMTP_PASSWORD=your-smtp-secret
-    NIGHTJAR_SMTP_FROM=verified-sender@example.org
+    NIGHTJAR_ADMIN_EMAILS=admin1@example.org,admin2@example.org
+    NIGHTJAR_ORGANISER_EMAILS=organiser1@example.org,organiser2@example.org
 
-Port 587 uses STARTTLS; port 465 uses implicit TLS.
-Without SMTP, link setup returns an explicit 503 and cannot silently grant an account.
-An administrator may securely create an allowlisted account using the create-staff CLI
-with a privately delivered password, then run sync-organiser-access to reconcile its role.
+The deployment migration creates `approved_staff_emails`, then
+`python -m annotatiathon.manage sync-organiser-access` imports those addresses
+ONLY when the database table is empty. After that, all authentication reads
+the database, not `.env.live`. Editing the old env vars doesn't replace the
+existing database records. For a new approved email on an already-seeded
+installation, run:
 
-## Rollout
-1. Add the two Admin and seven Organiser addresses to your private .env.live file.
-2. Configure SMTP and the public Nightjar URL if you want self-registration and recovery.
-3. Run docker compose --env-file .env.live -f compose.live.yaml up -d --build web
-4. Run docker compose --env-file .env.live -f compose.live.yaml ps
-5. Verify one Admin login, one Organiser login, new email setup, and password recovery.
+    python -m annotatiathon.manage approve-email --email new@example.org --role organiser
+    python -m annotatiathon.manage sync-organiser-access
 
-The old monitor registration-code route is disabled in production.
-Event membership edits cannot deactivate staff login; app authorisation is separate.
-Never run docker compose down -v on the live stack.
+Run these inside the `api` container through `/usr/local/bin/nightjar-entrypoint`
+as shown in deployment instructions. Existing staff accounts retain their
+passwords and are reactivated with correct roles. Staff accounts outside the
+approved list are deactivated. No event data, jobs, datasets, or annotations
+are removed.
+
+## Self-registration and login
+
+The public login page has `Create account` and `Sign in`.
+An approved person enters their own name, approved email and new password
+(12 characters minimum) to create their account once.
+No registration code, SMTP, email link, Supervisely account or 2FA is used.
+The backend rejects unknown emails and refuses to overwrite existing
+accounts. Login requires only email and password. Password recovery without
+email verification is not available; an administrator can reset credentials
+locally with `python -m annotatiathon.manage reset-password` when needed.
+
+**Security limitation:** An address-only allowlist does not prove ownership.
+Someone who knows an approved address could register before its rightful
+owner and claim the account. This design implements the requested simple
+registration model, without falsely claiming to verify mailbox ownership.
+Only expose the service to trusted event staff until registration is complete.
+
+## Updating live Nightjar
+
+1. Keep your existing `.env.live` database credentials and encryption key.
+2. Set initial approved addresses in `.env.live` before the first deployment
+   (the import is skipped if the database list already contains records).
+3. Run `git switch main` and `git pull --ff-only origin main`.
+4. Run `.\scripts\deploy-live.ps1` to back up PostgreSQL and rebuild the app.
+5. Visit your existing Cloudflare Tunnel. No new tunnel or database reset.
+6. Verify both Admin logins, one Organiser login, and new self-registration.
+
+Never run `docker compose down -v` on the live application.

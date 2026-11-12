@@ -74,6 +74,15 @@ class EventSnapshot(Base):
     created_at: Mapped[int] = mapped_column(Integer, default=epoch)
 
 
+class ApprovedStaffEmail(Base):
+    """Nightjar login allowlist, completely independent of event membership."""
+    __tablename__ = "approved_staff_emails"
+    email: Mapped[str] = mapped_column(String(320), primary_key=True)
+    role: Mapped[str] = mapped_column(String(20))
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[int] = mapped_column(Integer, default=epoch)
+
+
 class StaffAccount(Base):
     __tablename__ = "staff_accounts"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=identifier)

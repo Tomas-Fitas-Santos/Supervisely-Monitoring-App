@@ -1,74 +1,51 @@
 import { useCallback, useEffect, useState } from "react";
-import { RefreshCw, Send, ShieldCheck } from "lucide-react";
-import { api, type Auth, type Staff } from "./api";
+import { RefreshCw, ShieldCheck } from "lucide-react";
+import { api, type Auth } from "./api";
 
-type StaffRecord = Staff & {active:boolean};
+type Approved = {
+  email:string; role:"admin"|"organiser"; enabled:boolean;
+  registered:boolean; active:boolean;
+};
 
 export function StaffScreen({auth}:{auth:Auth}) {
-  const [people,setPeople]=useState<StaffRecord[]>([]);
-  const [email,setEmail]=useState("");
+  const [people,setPeople]=useState<Approved[]>([]);
   const [error,setError]=useState("");
-  const [notice,setNotice]=useState("");
-  const [working,setWorking]=useState(false);
   const refresh=useCallback(async()=>{
-    try {
-      const data=await api<{items:StaffRecord[]}>("/staff");
-      setPeople(data.items.filter(p=>p.roles.some(r=>r==="admin"||r==="organiser")));
-      setError("");
+    try{
+      const data=await api<{items:Approved[]}>("/staff/approved");
+      setPeople(data.items);setError("");
     }catch(e){setError((e as Error).message);}
   },[]);
   useEffect(()=>{void refresh();},[refresh]);
-  async function sendLink(){
-    if(!email.trim())return;
-    setWorking(true);setError("");setNotice("");
-    try {
-      const result=await api<{message:string}>("/auth/setup/request","POST",
-        {email:email.trim().toLowerCase()});
-      setNotice(result.message);
-    }catch(e){setError((e as Error).message);}
-    finally{setWorking(false);}
-  }
   if(!auth.staff.roles.includes("admin"))return null;
   return <section className="panel">
     <div className="panel-heading"><div>
       <span className="eyebrow">ADMIN ACCESS</span>
-      <h3>Admin and Organiser accounts</h3>
-      <p className="muted">App login access is independent of Supervisely and event
-      Monitor/Participant assignments. The approved email list is maintained
-      in private server configuration.</p>
+      <h3>Approved Nightjar accounts</h3>
+      <p className="muted">App access is controlled by the approved email records
+        in PostgreSQL. Event Monitor and Participant roles are independent.</p>
     </div><button className="btn secondary" onClick={()=>void refresh()}>
       <RefreshCw size={15}/> Refresh</button></div>
     {error&&<div className="alert danger">{error}</div>}
-    {notice&&<div className="alert success">{notice}</div>}
-    <section className="staff-registration-codes">
-      <div className="panel-heading"><div>
-        <h3>Email an account setup / recovery link</h3>
-        <p className="muted">Approved organisers receive a private email link.
-          No registration code or event-role approval is needed.</p>
-      </div><Send size={22}/></div>
-      <label>Approved email
-        <input type="email" value={email} onChange={e=>setEmail(e.target.value)}
-          placeholder="organiser@institution.pt"/></label>
-      <button className="btn primary" type="button" disabled={working||!email.trim()}
-        onClick={()=>void sendLink()}>{working?"Sending…":"Email setup link"}</button>
-    </section>
     <div className="staff-list">
-      {people.map(person=><div className="staff-record" key={person.id}>
+      {people.map(person=><div className="staff-record" key={person.email}>
         <div className="staff-person"><div className="mini-avatar">
-          {person.name.slice(0,1).toUpperCase()}</div><div>
-          <strong>{person.name}</strong><span>{person.email}</span>
+          {person.email.slice(0,1).toUpperCase()}</div><div>
+          <strong>{person.email}</strong>
+          <span>{person.role==="admin"?"Admin":"Organiser"}</span>
         </div></div>
         <div className="staff-duty-editor">
-          <strong>{person.roles.includes("admin")?"Admin":"Organiser"}</strong>
-          <span>{person.active?"Active account":"Inactive; reconcile server allowlist"}</span>
+          <strong>{!person.enabled?"Access disabled":
+            !person.registered?"Not registered yet":person.active?"Active":"Inactive"}</strong>
+          <span>{person.enabled&&!person.registered?
+            "This person can create their own Nightjar account.":""}</span>
         </div>
       </div>)}
     </div>
     <div className="settings-note" style={{marginTop:19}}>
       <ShieldCheck size={19}/>
-      <p>Only Admins manage the approved app access list. Event roles never
-        deactivate these accounts. Creating an account requires verification
-        through the address owner's email inbox.</p>
+      <p>Approved people register using their own email and a password they choose.
+        No registration codes, SMTP, or Supervisely account linkage is required.</p>
     </div>
   </section>;
 }

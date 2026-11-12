@@ -15,12 +15,6 @@ class Settings(BaseSettings):
     local_data_dir: str = ".nightjar-data"
     nightjar_admin_emails: str = ""
     nightjar_organiser_emails: str = ""
-    nightjar_public_url: str = ""
-    nightjar_smtp_host: str = ""
-    nightjar_smtp_port: int = 587
-    nightjar_smtp_user: str = ""
-    nightjar_smtp_password: SecretStr | None = None
-    nightjar_smtp_from: str = ""
     max_dataset_bytes: int = 140_000_000_000
     max_dataset_assets: int = 250_000
 

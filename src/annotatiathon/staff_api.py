@@ -11,6 +11,7 @@ from .auth import ROLES, AuthContext, normalized_email, requires, staff_view
 from .db import get_db
 from .events_api import current_event
 from .models import (
+    ApprovedStaffEmail,
     AuditEvent,
     Person,
     RegistrationChallenge,
@@ -21,6 +22,24 @@ from .organiser_access import is_restricted_mode
 from .registration_api import monitor_can_register
 
 router = APIRouter(prefix="/api/v1/staff", tags=["staff"])
+
+
+@router.get("/approved")
+def list_approved_app_emails(
+    _ctx: AuthContext = Depends(requires("admin")),
+    db: Session = Depends(get_db),
+):
+    approvals = db.scalars(select(ApprovedStaffEmail).order_by(ApprovedStaffEmail.email)).all()
+    accounts = {
+        account.email: account
+        for account in db.scalars(select(StaffAccount)).all()
+    }
+    return {"items": [
+        {"email": approval.email, "role": approval.role, "enabled": approval.enabled,
+         "registered": approval.email in accounts,
+         "active": bool(accounts.get(approval.email) and accounts[approval.email].active)}
+        for approval in approvals
+    ]}
 
 
 class RolesChange(BaseModel):
