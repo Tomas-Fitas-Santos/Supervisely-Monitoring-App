@@ -12,10 +12,10 @@ input,select{border:1px solid #dfe5ed;border-radius:9px;background:white;padding
 .login-art-footer{font-size:12px;color:#aac4bc;display:flex;align-items:center;gap:9px;position:relative;z-index:1}
 .login-panel{display:flex;justify-content:center;align-items:center;flex-direction:column;position:relative;padding:50px 28px}
 .login-card{width:min(390px,100%)}.login-card h2{font-size:34px;margin-bottom:12px;letter-spacing:-.048em}.login-card>.muted{font-size:13px;line-height:1.8;margin-bottom:35px}.form-stack{display:flex;flex-direction:column;gap:18px}.form-stack label{gap:8px}.login-hint{display:flex;gap:9px;align-items:center;color:#8794a5;font-size:11px;margin-top:28px}.login-bottom{position:absolute;bottom:27px;color:#a7b0bb;font-size:11px}.mobile-brand{display:none}
-.app-shell{display:flex;min-height:100vh}.sidebar{position:sticky;top:0;height:100vh;width:256px;flex:none;padding:30px 17px 20px;background:#173f3b;color:#fff;display:flex;flex-direction:column}
-.sidebar-logo{display:flex;align-items:center;gap:11px;padding:0 10px;margin-bottom:54px}.sidebar-logo .brand-mark{background:#ffffff19}.sidebar-logo strong{display:block;font-size:15px;letter-spacing:.14em}.sidebar-logo span{display:block;font-size:10px;letter-spacing:.13em;color:#9fc2b7;margin-top:4px}.sidebar-label{font-size:10px;color:#9bb9b0;letter-spacing:.12em;font-weight:800;padding:0 15px;margin-bottom:14px}
-.sidebar nav{display:flex;flex-direction:column;gap:6px}.nav-link{background:transparent;border:0;color:#bdcec7;width:100%;display:flex;align-items:center;gap:12px;padding:14px 15px;border-radius:10px;text-align:left;font-weight:650;font-size:13px}.nav-link:hover{background:#ffffff0f;color:#fff}.nav-link.active{background:#f4fbf7;color:#245b53;box-shadow:0 3px 12px #00000014}.nav-end{margin-left:auto}.sidebar-spacer{flex:1}
-.sidebar-info{padding:14px 10px;display:flex;gap:11px;align-items:center;color:#91bbb0}.sidebar-info strong{display:block;color:#e1efea;font-size:11px}.sidebar-info span{display:block;font-size:10px;margin-top:4px}.account-pane{display:flex;gap:9px;align-items:center;margin-top:18px;padding:16px 7px;border-top:1px solid #ffffff1d}.avatar,.topbar-avatar{display:grid;place-items:center;border-radius:12px;background:#d8eadc;color:#245a50;font-weight:800;flex-shrink:0}.avatar{width:34px;height:34px}.account-text{flex:1;min-width:0}.account-text strong{display:block;font-size:12px;white-space:nowrap;text-overflow:ellipsis;overflow:hidden}.account-text span{display:block;font-size:10px;color:#9fc2b7;margin-top:4px}.nav-link.signout{padding:10px 13px}.sidebar-error{color:#ffc5c2;font-size:11px}
+.app-shell{display:flex;min-height:100vh}.sidebar{position:sticky;top:0;height:100dvh;width:256px;flex:none;padding:18px 14px 12px;background:#173f3b;color:#fff;display:flex;flex-direction:column}
+.sidebar-logo{display:flex;align-items:center;gap:11px;padding:0 10px;margin-bottom:24px}.sidebar-logo .brand-mark{background:#ffffff19}.sidebar-logo strong{display:block;font-size:15px;letter-spacing:.14em}.sidebar-logo span{display:block;font-size:10px;letter-spacing:.13em;color:#9fc2b7;margin-top:4px}.sidebar-label{font-size:10px;color:#9bb9b0;letter-spacing:.12em;font-weight:800;padding:0 12px;margin-bottom:8px}
+.sidebar nav{display:flex;flex-direction:column;gap:3px}.nav-link{background:transparent;border:0;color:#bdcec7;width:100%;display:flex;align-items:center;gap:12px;padding:10px 12px;min-height:39px;line-height:1.25;border-radius:10px;text-align:left;font-weight:650;font-size:13px}.nav-link:hover{background:#ffffff0f;color:#fff}.nav-link.active{background:#f4fbf7;color:#245b53;box-shadow:0 3px 12px #00000014}.nav-end{margin-left:auto}.sidebar-spacer{flex:1}
+.sidebar-info{padding:8px 10px;display:flex;gap:11px;align-items:center;color:#91bbb0}.sidebar-info strong{display:block;color:#e1efea;font-size:11px}.sidebar-info span{display:block;font-size:10px;margin-top:4px}.account-pane{display:flex;gap:9px;align-items:center;margin-top:8px;padding:10px 7px;border-top:1px solid #ffffff1d}.avatar,.topbar-avatar{display:grid;place-items:center;border-radius:12px;background:#d8eadc;color:#245a50;font-weight:800;flex-shrink:0}.avatar{width:34px;height:34px}.account-text{flex:1;min-width:0}.account-text strong{display:block;font-size:12px;white-space:nowrap;text-overflow:ellipsis;overflow:hidden}.account-text span{display:block;font-size:10px;color:#9fc2b7;margin-top:4px}.nav-link.signout{padding:8px 12px}.sidebar-error{color:#ffc5c2;font-size:11px}
 .main-area{flex:1;min-width:0;display:flex;flex-direction:column}.topbar{height:72px;flex:none;background:#fff;border-bottom:1px solid #e9edf3;display:flex;align-items:center;justify-content:space-between;padding:0 43px}.breadcrumb{display:flex;gap:13px;font-size:12px;color:#8b98a6}.breadcrumb span{color:#c8d0da}.breadcrumb strong{color:#293a4b}.topbar-right{display:flex;align-items:center;gap:9px;color:#8c99a6;font-size:11px}.status-dot{width:8px;height:8px;background:#5cae80;border-radius:50%}.topbar-avatar{height:30px;width:30px;margin-left:18px;border-radius:50%}
 .page-body{max-width:1430px;width:100%;margin:0 auto;padding:40px 43px 80px;flex:1}.page-heading{display:flex;justify-content:space-between;align-items:flex-start;gap:22px;margin-bottom:28px}.page-heading p{margin-bottom:0;font-size:13px}.heading-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.last-refresh{font-size:11px;color:#8996a8}
 .stat-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:17px;margin-bottom:24px}.stat-card{background:#fff;border:1px solid #e8edf2;border-radius:16px;padding:23px;display:flex;flex-direction:column;align-items:flex-start;gap:8px;box-shadow:0 3px 15px #1a355005}.stat-card>strong{font-size:32px;letter-spacing:-.06em;margin-top:2px;font-weight:700}.stat-icon{width:43px;height:43px;border-radius:13px;display:grid;place-items:center;margin-bottom:12px}.stat-icon.mint{background:#e4f1ea;color:#32745e}.stat-icon.lavender{background:#eeeafb;color:#7164b2}.stat-icon.peach{background:#fff1e6;color:#bc7957}.stat-grid.compact .stat-card{padding:21px}.stat-grid.compact .stat-card>svg{color:#397b72}.stat-grid.compact .stat-card strong{font-size:26px}
@@ -329,9 +329,22 @@ input,select{border:1px solid #dfe5ed;border-radius:9px;background:white;padding
 
 
 /* Event operations/setup navigation and one-scroll table workspaces. */
-.sidebar{overflow-y:auto;scrollbar-width:thin}
-.sidebar .section-break{margin-top:22px;padding-top:18px;border-top:1px solid #ffffff22}
+/* Keep all ordinary desktop navigation choices visible without a forced
+   independent scrollbar. On unusually short windows (or high browser zoom),
+   let the sidebar scroll instead of hiding accessible actions. */
+.sidebar{overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin}
+.sidebar .section-break{margin-top:10px;padding-top:12px;border-top:1px solid #ffffff22}
 .sidebar nav{flex:0 0 auto}
+@media (max-height:800px) and (min-width:761px){
+  .sidebar{padding-top:12px;padding-bottom:8px}
+  .sidebar-logo{margin-bottom:15px}
+  .sidebar nav{gap:2px}
+  .sidebar .nav-link{padding-top:8px;padding-bottom:8px;min-height:35px}
+  .sidebar .section-break{margin-top:7px;padding-top:9px}
+  .sidebar-info{padding-top:5px;padding-bottom:5px}
+  .account-pane{margin-top:4px;padding-top:7px;padding-bottom:7px}
+}
+
 @media (min-width:981px){
   .app-shell{height:100dvh;min-height:0;overflow:hidden}
   .main-area{height:100dvh;overflow:hidden;min-height:0}
