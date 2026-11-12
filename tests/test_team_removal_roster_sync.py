@@ -10,10 +10,10 @@ from annotatiathon.app import app
 from annotatiathon.db import get_db
 from annotatiathon.models import (
     DEFAULT_EVENT_ID,
-    Base,
-    Event,
     AuditEvent,
+    Base,
     CompetitionTeam,
+    Event,
     LabelingJob,
     LabelingPlan,
     MediaDataset,
