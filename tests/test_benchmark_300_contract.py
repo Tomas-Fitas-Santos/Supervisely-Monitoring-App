@@ -57,6 +57,7 @@ def test_worker_sweep_caches_builds_without_reusing_test_databases():
     # scaled replica-2/3 containers during the actual 300-job tests.
     assert "run -d --no-deps --name $loadName" in script
     assert "Benchmark load altered worker scaling" in script
+    assert "Benchmark worker count changed during load" in script
     assert "up -d --build" not in script
     assert '"nightjar-bench-300-$stamp-$Phase-p$count-v$Validators-c$Correctors-s$StatusWorkers"' in script
     assert "down --volumes --remove-orphans" in script
