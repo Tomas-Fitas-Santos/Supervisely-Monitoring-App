@@ -84,7 +84,7 @@ def test_supplied_numeric_frames_keep_indices_and_unknown_density(dataset_ctx):
     assert video["missing_frame_count"] == 8  # Includes missing first frame.
 
 
-def test_event_folder_rejects_colliding_ordinals(dataset_ctx):
+def test_event_folder_accepts_colliding_ordinals_with_natural_order(dataset_ctx):
     client, _, csrf = dataset_ctx
     image = io.BytesIO()
     Image.new("RGB", (32, 24)).save(image, format="JPEG")
@@ -96,10 +96,14 @@ def test_event_folder_rejects_colliding_ordinals(dataset_ctx):
         assert client.put(f"/api/v1/datasets/uploads/{dataset_id}/chunk", params={
             "relative_path": filename, "offset": 0, "total": len(payload)},
             content=payload, headers={"X-CSRF-Token": csrf}).status_code == 200
-    assert act(client, csrf, f"/datasets/{dataset_id}/finalize").status_code == 422
+    completed = act(client, csrf, f"/datasets/{dataset_id}/finalize")
+    assert completed.status_code == 200, completed.text
+    videos = client.get(f"/api/v1/datasets/{dataset_id}/videos").json()["items"]
+    assert videos[0]["identity_status"] == "complete"
+    assert videos[0]["density"] == "declared_full"
 
 
-def test_legacy_folder_discards_all_ordinals_when_any_collide(dataset_ctx):
+def test_sampled_folder_uses_natural_order_when_ordinals_collide(dataset_ctx):
     client, maker, csrf = dataset_ctx
     dataset = upload_archive(client, csrf, {
         "bird/clip/1.jpg": b"a", "bird/clip/frame_1.jpg": b"b", "bird/clip/2.jpg": b"c",
@@ -108,7 +112,7 @@ def test_legacy_folder_discards_all_ordinals_when_any_collide(dataset_ctx):
     with maker() as db:
         frames = list(db.scalars(select(MediaAsset).where(MediaAsset.dataset_id == dataset["id"])))
     assert len(frames) == 3
-    assert all(frame.frame_index is None for frame in frames)
+    assert sorted(frame.frame_index for frame in frames) == [1, 2, 3]
 
 
 def test_full_extraction_obeys_frame_budget(tmp_path):
@@ -180,6 +184,143 @@ def test_supplied_manifest_resolves_non_numeric_names(dataset_ctx):
     assert video["density"] == "declared_full"
     assert video["extraction_policy"] == "supplied_manifest"
 
+
+
+def test_supplied_prefixed_frames_import_without_manifest_in_full_zip(dataset_ctx):
+    client, maker, csrf = dataset_ctx
+    payload = io.BytesIO()
+    Image.new("RGB", (32, 24), "green").save(payload, format="JPEG")
+    image = payload.getvalue()
+    import zipfile
+
+    stream = io.BytesIO()
+    with zipfile.ZipFile(stream, "w", zipfile.ZIP_DEFLATED) as archive:
+        # The first source ordinal need not be 1 for a selected video segment.
+        for i in range(13, 44):
+            archive.writestr(
+                f"BirdGaze/ColumbaPalumbus/ColumbaPalumba_video_01/"
+                f"ColumbaPalumbus_f{i:06d}.jpg", image,
+            )
+    archive_bytes = stream.getvalue()
+    uploaded = act(client, csrf, "/datasets/uploads", {
+        "name": "Full exported frames", "upload_kind": "zip",
+        "extraction_policy": "all_frames",
+    })
+    assert uploaded.status_code == 201, uploaded.text
+    dataset_id = uploaded.json()["id"]
+    sent = client.put(
+        f"/api/v1/datasets/uploads/{dataset_id}/chunk",
+        params={"relative_path": "source.zip", "offset": 0,
+                "total": len(archive_bytes)},
+        content=archive_bytes, headers={"X-CSRF-Token": csrf},
+    )
+    assert sent.status_code == 200, sent.text
+    finished = act(client, csrf, f"/datasets/{dataset_id}/finalize")
+    assert finished.status_code == 200, finished.text
+    assert finished.json()["frame_count"] == 31
+    with maker() as db:
+        frames = list(db.scalars(select(MediaAsset).where(
+            MediaAsset.dataset_id == dataset_id,
+        ).order_by(MediaAsset.frame_index)))
+        assert [frame.frame_index for frame in frames] == list(range(13, 44))
+    video = client.get(f"/api/v1/datasets/{dataset_id}/videos").json()["items"][0]
+    assert video["identity_status"] == "complete"
+    assert video["density"] == "declared_full"
+    assert video["missing_frame_count"] == 0
+    teams(client, csrf)
+    planned = act(client, csrf, "/labeling/plans", {
+        "dataset_id": dataset_id, "mode": "shared_30_v1",
+    })
+    assert planned.status_code == 201, planned.text
+    assert planned.json()["primary_blocks"] == 2
+    assert planned.json()["short_final_frames"] == 1
+
+
+def test_supplied_prefixed_sampled_frames_import_without_manifest(dataset_ctx):
+    client, maker, csrf = dataset_ctx
+    dataset = upload_archive(client, csrf, {
+        f"BirdGaze/ColumbaPalumbus/ColumbaPalumba_video_01_sampled/"
+        f"ColumbaPalumbus_f{i:06d}.jpg": b"sampled image bytes"
+        for i in (13, 43, 73)
+    })
+    finished = act(client, csrf, f"/datasets/{dataset['id']}/finalize")
+    assert finished.status_code == 200, finished.text
+    with maker() as db:
+        frames = list(db.scalars(select(MediaAsset).where(
+            MediaAsset.dataset_id == dataset["id"],
+        ).order_by(MediaAsset.frame_index)))
+    assert [frame.frame_index for frame in frames] == [13, 43, 73]
+    video = client.get(f"/api/v1/datasets/{dataset['id']}/videos").json()["items"][0]
+    assert video["density"] == "sampled"
+    assert video["identity_status"] == "gaps"
+    assert video["frame_count"] == 3
+
+
+def test_supplied_frame_folder_import_without_numeric_filenames_or_json(dataset_ctx):
+    client, maker, csrf = dataset_ctx
+    output = io.BytesIO()
+    Image.new("RGB", (32, 24), "red").save(output, format="JPEG")
+    image = output.getvalue()
+    created = act(client, csrf, "/datasets/uploads", {
+        "name": "Folder import", "upload_kind": "folder",
+        "extraction_policy": "all_frames",
+    })
+    assert created.status_code == 201, created.text
+    dataset_id = created.json()["id"]
+    for filename in ("flight_03/scene-z.jpg", "flight_03/scene-a.jpg",
+                     "flight_03/scene-b.jpg"):
+        path = f"ColumbaPalumbus/{filename}"
+        sent = client.put(
+            f"/api/v1/datasets/uploads/{dataset_id}/chunk",
+            params={"relative_path": path, "offset": 0, "total": len(image)},
+            content=image, headers={"X-CSRF-Token": csrf},
+        )
+        assert sent.status_code == 200, sent.text
+    finished = act(client, csrf, f"/datasets/{dataset_id}/finalize")
+    assert finished.status_code == 200, finished.text
+    with maker() as db:
+        ordered = list(db.scalars(select(MediaAsset).where(
+            MediaAsset.dataset_id == dataset_id,
+        ).order_by(MediaAsset.frame_index)))
+    assert [frame.relative_path.split("/")[-1] for frame in ordered] == [
+        "scene-a.jpg", "scene-b.jpg", "scene-z.jpg",
+    ]
+    assert [frame.frame_index for frame in ordered] == [1, 2, 3]
+    video = client.get(f"/api/v1/datasets/{dataset_id}/videos").json()["items"][0]
+    assert video["identity_status"] == "complete"
+    assert video["density"] == "declared_full"
+    assert any("natural filename sort" in note for note in video["identity_notes"])
+
+
+def test_sparse_full_mode_frames_import_but_are_not_full_density(dataset_ctx):
+    client, maker, csrf = dataset_ctx
+    output = io.BytesIO()
+    Image.new("RGB", (32, 24), "blue").save(output, format="JPEG")
+    image = output.getvalue()
+    created = act(client, csrf, "/datasets/uploads", {
+        "name": "Gapped source", "upload_kind": "folder",
+        "extraction_policy": "all_frames",
+    })
+    dataset_id = created.json()["id"]
+    for i in (13, 43):
+        path = f"ColumbaPalumbus/clip/ColumbaPalumbus_f{i:06d}.jpg"
+        sent = client.put(
+            f"/api/v1/datasets/uploads/{dataset_id}/chunk",
+            params={"relative_path": path, "offset": 0, "total": len(image)},
+            content=image, headers={"X-CSRF-Token": csrf},
+        )
+        assert sent.status_code == 200, sent.text
+    finished = act(client, csrf, f"/datasets/{dataset_id}/finalize")
+    assert finished.status_code == 200, finished.text
+    video = client.get(f"/api/v1/datasets/{dataset_id}/videos").json()["items"][0]
+    assert video["identity_status"] == "gaps"
+    assert video["density"] == "unknown"
+    assert video["missing_frame_count"] == 29
+    teams(client, csrf)
+    planned = act(client, csrf, "/labeling/plans", {
+        "dataset_id": dataset_id, "mode": "shared_30_v1",
+    })
+    assert planned.status_code == 422
 
 def test_manifest_invalid_time_base_is_a_validation_error():
     from pydantic import ValidationError
