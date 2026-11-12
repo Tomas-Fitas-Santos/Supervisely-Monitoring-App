@@ -37,8 +37,8 @@ def test_supervisely_names_readable_and_deterministic():
     assert remote_dataset.startswith("Team 12 · flight 01")
     assert remote_dataset.endswith("[NJ:" + JOB_ID + "]")
     remote_job = labeling_job_name(job, team, "CorvusCorone/flight_01", "Miguel Marx")
-    assert remote_job.startswith("Team 12 · flight 01 · Miguel Marx")
-    assert remote_job.endswith(" · #" + JOB_ID[:8])
+    assert remote_job.startswith("flight 01 · Team 12 · Miguel Marx")
+    assert remote_job.endswith("[NJ:" + JOB_ID[:12] + "]")
     assert video_label("ColumbaPalumbus/flight_02") == "flight 02"
 
 
