@@ -86,10 +86,18 @@ def seed(frames):
     benchmark_event.seed(root, annotators=ANNOTATORS, monitors=MONITORS)
     password = password_hash(PASSWORD)
     with maker.begin() as db:
+        # The isolated stack uses production authentication rules. Every test
+        # account must match the persistent approved-email table, otherwise
+        # the synthetic load is rejected at login before benchmarking begins.
         for staff in db.scalars(select(m.StaffAccount)):
             staff.password_hash = password
+            staff.roles = ["organiser"]
+            db.add(m.ApprovedStaffEmail(
+                email=staff.email, role="organiser", enabled=True))
         db.add(m.StaffAccount(id="organiser", email="organiser@example.test",
                               name="Synthetic organiser", roles=["organiser"], password_hash=password))
+        db.add(m.ApprovedStaffEmail(
+            email="organiser@example.test", role="organiser", enabled=True))
         dataset = db.get(m.MediaDataset, "dataset")
         dataset.native_project_id = 41
         for frame in range(10, frames):
