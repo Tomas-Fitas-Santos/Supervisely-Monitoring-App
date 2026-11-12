@@ -14,7 +14,6 @@ from sqlalchemy.orm import Session
 from .auth import AuthContext, requires
 from .db import get_db
 from .events_api import current_event
-from .scoring_api import correct_point_types
 from .models import (
     AuditEvent,
     CompetitionTeam,
@@ -29,6 +28,7 @@ from .models import (
     TicketLedgerEntry,
     epoch,
 )
+from .scoring_api import correct_point_types
 
 router = APIRouter(prefix="/api/v1/closeout", tags=["event reports"])
 VIEWERS = ("organiser", "monitor", "observer")
