@@ -182,7 +182,7 @@ def main() -> None:
     parser.add_argument("--repeats", type=int, default=1, choices=(1, 2, 3))
     parser.add_argument("--pause-seconds", type=float, default=3.0)
     parser.add_argument("--output", type=Path,
-                        default=Path("/data/metrics/benchmark-job-write-profile.json"))
+                        default=Path("/data/metrics/benchmark-calibrated.json"))
     args = parser.parse_args()
     if not args.allow_create_delete:
         parser.error("No remote writes permitted without --allow-create-delete.")
@@ -199,7 +199,14 @@ def main() -> None:
         parser.exit(1, f"Benchmark job probe aborted: {type(exc).__name__}. "
                        "Inspect the dedicated test project for possible leftover jobs.\n")
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(profile, indent=2), encoding="utf-8")
+    # Combine read-only live timings and the single real create/delete
+    # measurement. The isolated benchmark reads this ONE aggregate profile.
+    read_profile = Path("/data/metrics/read-only-profile.json")
+    merged = json.loads(read_profile.read_text(encoding="utf-8")) if read_profile.exists() else {}
+    if not isinstance(merged, dict):
+        raise ValueError("Invalid existing read-only timing profile.")
+    merged.update(profile)
+    args.output.write_text(json.dumps(merged, indent=2), encoding="utf-8")
     os.chmod(args.output, 0o600)
     print(json.dumps(summary, indent=2))
 
