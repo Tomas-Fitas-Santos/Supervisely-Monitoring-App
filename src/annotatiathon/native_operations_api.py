@@ -310,13 +310,15 @@ def retry_operation(
     ctx: AuthContext = Depends(requires("organiser", mutation=True)),
     db: Session = Depends(get_db),
 ):
-    event = current_event(db, ctx, writable=True)
+    event = current_event(db, ctx, writable=True, allow_finalizing=True)
     op = db.scalar(select(NativeOperation).where(
         NativeOperation.event_id == event.id,
         NativeOperation.id == operation_id,
     ).with_for_update())
     if op is None:
         raise HTTPException(status_code=404, detail="Operation not found.")
+    if event.status == "finalizing" and op.kind != "validate_submission":
+        raise HTTPException(status_code=409, detail="Only admitted submissions can be retried during closeout.")
     if op.status not in {"blocked", "attention"}:
         raise HTTPException(status_code=409, detail="Only blocked operations can be retried.")
     job = db.scalar(select(LabelingJob).where(
@@ -328,7 +330,7 @@ def retry_operation(
         LabelingPlan.id == job.plan_id, LabelingPlan.event_id == event.id
     ))
     if (plan is None or
-            (plan.status not in {"running", "paused"} if op.kind == "restart_job"
+            (plan.status not in {"running", "paused"} if op.kind in {"restart_job", "validate_submission"}
              else plan.status != "running")):
         raise HTTPException(
             status_code=409,
@@ -343,7 +345,7 @@ def retry_operation(
         # the previous round's identity.
         from .models import epoch
         from .validation_tasks import enqueue_validation
-        if job.status != "on_review":
+        if job.status not in {"on_review", "completed"}:
             raise HTTPException(status_code=409, detail="Job is not awaiting validation.")
         if op.status == "running":
             raise HTTPException(status_code=409, detail="Validation is already running.")

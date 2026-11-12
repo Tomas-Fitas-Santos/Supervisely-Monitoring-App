@@ -37,6 +37,10 @@ def enqueue_validation(db: Session, job: LabelingJob) -> bool:
     """
     if job.status not in {"on_review", "completed"}:
         return False
+    event = db.scalar(select(Event).where(Event.id == job.event_id)
+                      .with_for_update().execution_options(populate_existing=True))
+    if event is None or event.status != "active":
+        return False
     binding = db.scalar(select(NativeJobBinding).where(
         NativeJobBinding.event_id == job.event_id,
         NativeJobBinding.job_id == job.id,
@@ -80,7 +84,8 @@ def enqueue_validation(db: Session, job: LabelingJob) -> bool:
 def claim_validation(db: Session) -> tuple[str, str, str] | None:
     """Claim exactly one runnable task with row-level SKIP LOCKED."""
     now = epoch()
-    op = db.scalar(select(NativeOperation).where(
+    op = db.scalar(select(NativeOperation).join(Event, Event.id == NativeOperation.event_id).where(
+        Event.status.in_(("active", "finalizing")),
         NativeOperation.kind == "validate_submission",
         NativeOperation.status == "pending",
         or_(NativeOperation.next_attempt_at.is_(None),
@@ -95,7 +100,7 @@ def claim_validation(db: Session) -> tuple[str, str, str] | None:
     job = db.get(LabelingJob, op.target_id)
     event = db.get(Event, op.event_id)
     plan = db.get(LabelingPlan, job.plan_id) if job else None
-    if (job is None or event is None or event.status != "active"
+    if (job is None or event is None or event.status not in {"active", "finalizing"}
             or plan is None or plan.status not in {"running", "paused"}
             or job.status not in {"on_review", "completed"}
             or (op.payload or {}).get("correction_round") != job.correction_round):

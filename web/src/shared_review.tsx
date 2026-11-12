@@ -205,7 +205,7 @@ export function SharedReviewScreen({auth}:{auth:Auth}){
     <div className="page-heading">
       <div><span className="eyebrow">EVENT OPERATIONS · SHARED QUALITY REVIEW</span>
         <h2>Monitoring & Review</h2>
-        <p className="muted">Review allocation follows each team's share of submitted frames. Each monitor receives a random available frame from the selected team, with exclusive claims.</p>
+        <p className="muted">Only reviews saved before the leaderboard freezes count. Review allocation follows each team's share of submitted frames. Each monitor receives a random available frame from the selected team, with exclusive claims.</p>
       </div>
       <button className="btn secondary" disabled={busy}
         onClick={()=>{void refreshStatus();if(tab==="rankings")void refreshRankings();}}>

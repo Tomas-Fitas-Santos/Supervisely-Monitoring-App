@@ -103,7 +103,7 @@ class Completion(Lease):
 
 
 def lock_event(db, ctx):
-    return current_event(db, ctx, writable=True)
+    return current_event(db, ctx, writable=True, allow_finalizing=True)
 
 
 def claim_view(db, sample):

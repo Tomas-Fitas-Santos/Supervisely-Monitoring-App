@@ -372,6 +372,12 @@ def manual_media_dataset(api, dataset: MediaDataset, project_id: int) -> int:
     return ds.id
 
 
+def require_open_event(db: Session, event_id: str) -> None:
+    status = db.scalar(select(Event.status).where(Event.id == event_id))
+    if status != "active":
+        raise NativeWorkerError("event_not_open")
+
+
 def publish_job(db: Session, job: LabelingJob, api, config: SuperviselyConfig) -> dict:
     """Idempotent by deterministic project/dataset names and native user IDs."""
     if job.status not in {"queued", "publishing", "in_progress"}:
@@ -470,6 +476,7 @@ def publish_job(db: Session, job: LabelingJob, api, config: SuperviselyConfig) -
         raise NativeWorkerError("unexpected_existing_native_job")
     missing = [uid for uid in roster_ids if uid not in by_user]
     if missing:
+        require_open_event(db, job.event_id)
         api.labeling_job.create(
             name=expected_title,
             dataset_id=remote_ds_id,
@@ -528,7 +535,7 @@ def publish_job(db: Session, job: LabelingJob, api, config: SuperviselyConfig) -
 
 def queue_automatic_incomplete_return(
     db: Session, job: LabelingJob, finished: int, total: int,
-    *, pending_media_ids: list[str] | None = None,
+    *, pending_media_ids: list[str] | None = None, commit: bool = True,
 ) -> str:
     """Automatically return unfinished native submissions without review.
 
@@ -537,6 +544,10 @@ def queue_automatic_incomplete_return(
     """
     if job.assignee_person_id is None:
         raise NativeWorkerError("automatic_return_requires_single_assignee")
+    event = db.scalar(select(Event).where(Event.id == job.event_id)
+                      .with_for_update().execution_options(populate_existing=True))
+    if event is None or event.status != "active":
+        return job.status
     job.status = "needs_correction"
     job.review_status = "returned_incomplete"
     job.correction_round += 1
@@ -569,7 +580,8 @@ def queue_automatic_incomplete_return(
                  "pending_images": len(unresolved),
                  "correction_round": job.correction_round},
     ))
-    db.commit()
+    if commit:
+        db.commit()
     milestone("correction_queued", job_id=job.id,
               frame_count=len(unresolved))
     return job.status
@@ -608,6 +620,11 @@ def sync_one(db: Session, api, job: LabelingJob, *,
         binding.native_status = native.status
         binding.last_synced_at = epoch()
         statuses.append(native)
+    event = db.scalar(select(Event).where(Event.id == job.event_id)
+                      .with_for_update().execution_options(populate_existing=True))
+    if event is None or event.status != "active":
+        db.rollback()
+        return previous_status
     if any(info.status == "stopped" for info in statuses):
         # Preserve deliberate administrative stops. A stopped native job with
         # confirmed frames is still eligible for per-frame validation, but one
@@ -673,7 +690,7 @@ def capture_job_annotations(db: Session, api, job: LabelingJob) -> bool:
         if result["pending"]:
             queue_automatic_incomplete_return(
                 db, job, len(job.media_ids) - len(result["pending"]),
-                job.frame_count, pending_media_ids=result["pending"],
+                job.frame_count, pending_media_ids=result["pending"], commit=False,
             )
         return True
     dataset = db.get(MediaDataset, job.dataset_id)
@@ -931,6 +948,9 @@ def sync_all(db: Session, api, config: SuperviselyConfig, *,
     task_limit = 600 if not capture_snapshots else 5
     scan_limit = 300 if not capture_snapshots else 10
     for plan in event_plans:
+        event = db.get(Event, plan.event_id, populate_existing=True)
+        if event is None or event.status != "active":
+            continue
         if snapshots >= task_limit:
             break
         candidates = next_annotation_snapshot_candidates(
@@ -1051,11 +1071,12 @@ def process_reassignment_once(db: Session, api,
     A lost response is safe to retry because the native job ID and desired
     assignee are immutable in the queued operation payload.
     """
-    op = db.scalar(select(NativeOperation).where(
+    op = db.scalar(select(NativeOperation).join(Event, Event.id == NativeOperation.event_id).where(
+        Event.status == "active",
         NativeOperation.kind == "reassign_job",
         NativeOperation.status == "pending",
     ).order_by(NativeOperation.created_at, NativeOperation.id)
-      .with_for_update(skip_locked=True))
+      .with_for_update(skip_locked=True, of=NativeOperation))
     if op is None:
         db.rollback()
         return None
@@ -1066,6 +1087,9 @@ def process_reassignment_once(db: Session, api,
     db.commit()
     try:
         job = db.get(LabelingJob, jid)
+        event = db.get(Event, op.event_id, populate_existing=True)
+        if event is None or event.status != "active":
+            raise NativeWorkerError("event_not_open")
         person = db.get(Person, payload.get("person_id"))
         if job is None or person is None or job.event_id != person.event_id:
             raise NativeWorkerError("reassign_target_identity_mismatch")
@@ -1139,7 +1163,7 @@ def process_correction_once(db: Session, api, config: SuperviselyConfig) -> dict
             LabelingPlan.status.in_(["running", "paused"]),
             Event.status == "active",
         ).order_by(NativeOperation.created_at)
-        .with_for_update(skip_locked=True).limit(1)
+        .with_for_update(skip_locked=True, of=NativeOperation).limit(1)
     ))
     if not operations:
         db.rollback()
@@ -1158,6 +1182,7 @@ def process_correction_once(db: Session, api, config: SuperviselyConfig) -> dict
     db.commit()
     milestone("correction_publish_started", job_id=jobid, operation_id=opid)
     try:
+        require_open_event(db, job.event_id)
         people = assigned_people(db, job)
         by_person = {p.id: p for p in people}
         bindings = list(db.scalars(select(NativeJobBinding).where(
@@ -1188,6 +1213,7 @@ def process_correction_once(db: Session, api, config: SuperviselyConfig) -> dict
                 if len(matches) > 1:
                     raise NativeWorkerError("duplicate_correction_job")
                 if not matches:
+                    require_open_event(db, job.event_id)
                     api.labeling_job.restart(
                         binding.native_job_id,
                         assignee_ids=[person.supervisely_user_id],
@@ -1275,6 +1301,7 @@ def process_correction_once(db: Session, api, config: SuperviselyConfig) -> dict
                 if len(matches) > 1:
                     raise NativeWorkerError("duplicate_correction_job")
                 if not matches:
+                    require_open_event(db, job.event_id)
                     # SDK create(images_ids=...) uses the supported jobs.add method
                     # and does not invoke restart()'s failing users.info preflight.
                     api.labeling_job.create(
@@ -1675,9 +1702,17 @@ def worker_cycle(lane: str) -> bool:
             else:
                 process_reassignment_once(db, api, config)
                 process_correction_once(db, api, config)
-                result = sync_all(db, api, config)
+                from .validation_tasks import process_validation_once, recover_expired_validations
+                result = sync_all(db, api, config, capture_snapshots=False)
+                recover_expired_validations(db)
+                for _ in range(5):
+                    if process_validation_once(db, api, config) is None:
+                        break
                 if not reset_pending(db):
                     process_export_once(db, api)
+            if lane in {"status", "validation", "background"}:
+                from .closeout_api import finish_pending_closeouts
+                finish_pending_closeouts(db)
             if result:
                 logger.info("Nightjar %s worker: %s", lane, result)
             return bool(result)

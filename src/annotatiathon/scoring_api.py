@@ -9,7 +9,15 @@ from sqlalchemy.orm import Session
 from .auth import AuthContext, requires
 from .db import get_db
 from .events_api import current_event
-from .models import AuditEvent, CompetitionTeam, LabelingJob, ReviewRubric, ReviewSample, epoch
+from .models import (
+    AuditEvent,
+    CompetitionTeam,
+    EventCloseout,
+    LabelingJob,
+    ReviewRubric,
+    ReviewSample,
+    epoch,
+)
 from .review_eligibility import eligible_frame_review
 
 router = APIRouter(prefix="/api/v1", tags=["review scoring"])
@@ -147,7 +155,17 @@ def set_rubric(weights: Weights,
 def rankings(ctx: AuthContext = Depends(requires("organiser", "monitor")),
              db: Session = Depends(get_db)):
     event = current_event(db, ctx)
-    current_rubric = latest_rubric(db, event.id)
+    if event.status == "archived":
+        snapshot = db.scalar(select(EventCloseout.snapshot_json).where(
+            EventCloseout.event_id == event.id,
+        ))
+        if snapshot is not None and "rankings" in snapshot:
+            return snapshot["rankings"]
+    return team_rankings(db, event.id)
+
+
+def team_rankings(db: Session, event_id: str) -> dict:
+    current_rubric = latest_rubric(db, event_id)
     current_weights = resolved_weights(current_rubric.weights) if current_rubric else Weights().model_dump()
     teams = {
         team_id: {"team_id": team_id, "team_name": name, "correct_keypoints": 0,
@@ -156,11 +174,11 @@ def rankings(ctx: AuthContext = Depends(requires("organiser", "monitor")),
                   "available_frames": 0, "active_reviews": 0, "audited_points": 0,
                   "missing_objects": 0, "errors": Counter()}
         for team_id, name in db.execute(select(CompetitionTeam.id, CompetitionTeam.name)
-                                        .where(CompetitionTeam.event_id == event.id))
+                                        .where(CompetitionTeam.event_id == event_id))
     }
     now = epoch()
     eligible = (
-        ReviewSample.event_id == event.id,
+        ReviewSample.event_id == event_id,
         eligible_frame_review(),
         LabelingJob.release_mode.in_(PRIZE_RELEASE_MODES),
     )
