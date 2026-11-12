@@ -35,7 +35,7 @@ def enqueue_validation(db: Session, job: LabelingJob) -> bool:
     Can be called on each status poll. Existing completed/active rounds never
     requeue; a later correction round reuses the same durable task row.
     """
-    if job.status != "on_review":
+    if job.status not in {"on_review", "completed"}:
         return False
     binding = db.scalar(select(NativeJobBinding).where(
         NativeJobBinding.event_id == job.event_id,
@@ -97,7 +97,7 @@ def claim_validation(db: Session) -> tuple[str, str, str] | None:
     plan = db.get(LabelingPlan, job.plan_id) if job else None
     if (job is None or event is None or event.status != "active"
             or plan is None or plan.status not in {"running", "paused"}
-            or job.status != "on_review"
+            or job.status not in {"on_review", "completed"}
             or (op.payload or {}).get("correction_round") != job.correction_round):
         op.status = "attention"
         op.error_code = "validation_submission_state_changed"
@@ -220,7 +220,7 @@ def process_validation_once(db: Session, api, config) -> dict | None:
     try:
         from .native_worker import capture_job_annotations
         job = db.get(LabelingJob, job_id)
-        if job is None or job.status != "on_review":
+        if job is None or job.status not in {"on_review", "completed"}:
             raise ValueError("validation_target_changed")
         task_row = db.get(NativeOperation, task_id)
         payload = task_row.payload or {}
