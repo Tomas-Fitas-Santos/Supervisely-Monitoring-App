@@ -56,21 +56,21 @@ def supplied_frame_number(stem: str) -> int | None:
     Other filenames are handled by deterministic natural ordering below.
     """
     labeled = re.fullmatch(
-        r"(?:.+?[_-])?(?:frame|image|img|f)[_-]?(\\d+)",
+        r"(?:.+?[_-])?(?:frame|image|img|f)[_-]?(\d+)",
         stem, re.IGNORECASE,
     )
     if labeled:
         return int(labeled.group(1))
     if stem.isdecimal():
         return int(stem)
-    generic = re.fullmatch(r".+?[_-](\\d+)", stem)
+    generic = re.fullmatch(r".+?[_-](\d+)", stem)
     return int(generic.group(1)) if generic else None
 
 
 def natural_frame_key(frame: MediaAsset) -> tuple:
     filename = Path(frame.relative_path).name
     return (tuple((0, int(piece)) if piece.isdecimal() else (1, piece.casefold())
-                  for piece in re.split(r"(\\d+)", filename)), filename.casefold(), filename)
+                  for piece in re.split(r"(\d+)", filename)), filename.casefold(), filename)
 
 
 def index_supplied_frames(db: Session, video: MediaVideo, media_root: Path,
@@ -133,6 +133,12 @@ def index_supplied_frames(db: Session, video: MediaVideo, media_root: Path,
         if reliable_numbers else index
         for index, frame in enumerate(frames, start=1)
     ]
+    if (declared_total is not None
+            and (min(ordinals, default=0) < 1 or max(ordinals, default=0) > declared_total)):
+        raise HTTPException(
+            status_code=422,
+            detail=f"Manifest ordinals exceed the declared source frame count in {video.video_group}.",
+        )
     if len(set(ordinals)) != len(ordinals):
         raise HTTPException(
             status_code=422,
