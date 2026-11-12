@@ -17,6 +17,10 @@ x-backend: &backend
     - type: bind
       source: ${NIGHTJAR_MEDIA_DIR:-./.nightjar-live-data}
       target: /data
+    - type: bind
+      source: ${NIGHTJAR_DATASET_HOST_DIR:-./.nightjar-source}
+      target: /source-datasets
+      read_only: true
   restart: unless-stopped
 
 services:
