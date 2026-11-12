@@ -65,9 +65,29 @@ def legacy_dataset_name(job: LabelingJob) -> str:
     return f"Nightjar-{job.id}"
 
 
+def source_parts_label(parts: list[tuple[str, int | None]]) -> str:
+    """Show original video and part for a logical single or mixed-video job."""
+    segments: list[tuple[str, int | None, int | None]] = []
+    for group, index in parts:
+        if segments and segments[-1][0] == group:
+            previous = segments[-1]
+            segments[-1] = (group, previous[1], index)
+        else:
+            segments.append((group, index, index))
+    labels = []
+    for group, start, last in segments:
+        part = f" · Part {(start - 1) // 30 + 1}" if start is not None else ""
+        span = f" ({start}–{last})" if start is not None and last is not None else ""
+        labels.append(f"{video_label(group)}{part}{span}")
+    return " + ".join(labels) if labels else "Video frames"
+
+
 def labeling_job_name(job: LabelingJob, team: CompetitionTeam,
-                      video_group: str | None, assignee: str) -> str:
+                      video_group: str | None, assignee: str,
+                      source_parts: list[tuple[str, int | None]] | None = None) -> str:
+    prefix = source_parts_label(source_parts) if source_parts else video_label(video_group)
+    # Keep the ID marker stable for remote create/reconcile and retries.
     return (
-        f"{display(team.name, 42)} · {video_label(video_group)}"
-        f" · {display(assignee, 44)} · #{job.id[:8]}"
+        f"{display(prefix, 158)} · {display(team.name, 24)}"
+        f" · {display(assignee, 24)} [NJ:{job.id[:12]}]"
     )
