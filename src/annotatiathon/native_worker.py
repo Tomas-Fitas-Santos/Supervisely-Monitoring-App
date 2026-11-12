@@ -67,7 +67,6 @@ from .native_media_pool import (
 from .native_names import (
     dataset_name,
     labeling_job_name,
-    source_parts_label,
     legacy_dataset_name,
     legacy_project_name,
     owned_project_event_id,
