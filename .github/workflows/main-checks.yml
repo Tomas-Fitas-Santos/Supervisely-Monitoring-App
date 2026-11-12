@@ -85,6 +85,31 @@ jobs:
           PY
       - name: Validate live-test Compose configuration
         run: docker compose --env-file .env.live -f compose.live.yaml config --quiet
+      - name: Validate private 300-person benchmark configuration
+        run: |
+          docker compose -f compose.benchmark.yaml config --quiet
+          python - <<'PY'
+          import json
+          import subprocess
+          cfg = json.loads(subprocess.check_output([
+              "docker", "compose", "-f", "compose.benchmark.yaml",
+              "config", "--format", "json",
+          ]))
+          assert cfg["networks"]["benchmark"]["internal"] is True
+          roles = {
+              "worker": "publish",
+              "status-worker": "status",
+              "validation-worker": "validation",
+              "correction-worker": "correction",
+              "recovery-worker": "recovery",
+              "bulk-worker": "bulk",
+          }
+          for service, role in roles.items():
+              command = cfg["services"][service]["command"]
+              assert "--role" in command
+              assert command[command.index("--role") + 1] == role
+              assert not cfg["services"][service].get("ports")
+          PY
       - name: Build and start live-test web, API, migration, and database
         run: docker compose --env-file .env.live -f compose.live.yaml up -d --build web
       - name: Verify directly accessible login page and protected API
