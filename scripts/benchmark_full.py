@@ -167,10 +167,20 @@ def simulate():
     from supervisely.api.workspace_api import WorkspaceApi
     from supervisely.api.team_api import TeamApi
     from annotatiathon.annotation_schema import merge_annotation_meta
+    from annotatiathon.worker_timing import endpoint_group
+
+    # Only aggregate p50/p95/p99 timings are read. The original real-worker
+    # trace remains off the isolated benchmark network and never gets mounted.
+    profile = {}
+    if PROFILE_PATH:
+        profile = json.loads(Path(PROFILE_PATH).read_text(encoding="utf-8"))
+        if not isinstance(profile, dict):
+            raise ValueError("Benchmark profile must be a category-to-latency JSON object.")
 
     app = FastAPI()
     rng = random.Random(20261110)
     state = {"started": None, "latency": .05, "fail_rate": 0.0,
+             "profile_scale": 1.0, "timeout_rate": 0.0, "timeouts": 0,
              "calls": Counter(), "failures": 0, "unhandled": [], "published": 0,
              "binary_upload_bytes": 0, "binary_upload_files": 0}
     remote_datasets = set(range(ANNOTATORS if UPLOAD else ANNOTATORS * 2))
@@ -237,6 +247,8 @@ def simulate():
         body = await request.json()
         state["latency"] = body.get("latency", .05)
         state["fail_rate"] = body.get("fail_rate", 0)
+        state["profile_scale"] = max(.1, min(10.0, float(body.get("profile_scale", 1))))
+        state["timeout_rate"] = max(0.0, min(.25, float(body.get("timeout_rate", 0))))
         state["started"] = time.monotonic()
         state["burst"] = body.get("burst", False)
         for index in range(ANNOTATORS):
@@ -253,7 +265,24 @@ def simulate():
     @app.post("/public/api/v3/{method:path}")
     async def request_api(method: str, request: Request):
         state["calls"][method] += 1
-        await asyncio.sleep(state["latency"] * rng.uniform(.5, 1.5))
+        category = endpoint_group(method)
+        observed = profile.get(category, {})
+        if isinstance(observed, dict) and observed.get("count", 0) >= 2:
+            p50 = max(0, float(observed.get("p50_ms", 0)))
+            p95 = max(p50, float(observed.get("p95_ms", p50)))
+            p99 = max(p95, float(observed.get("p99_ms", p95)))
+            if rng.random() < .95:
+                seconds = rng.uniform(p50, p95) / 1000
+            else:
+                seconds = rng.uniform(p95, p99 * 1.25) / 1000
+        else:
+            seconds = state["latency"] * rng.uniform(.5, 1.5)
+        await asyncio.sleep(min(30.0, seconds * state["profile_scale"]))
+        if rng.random() < state["timeout_rate"]:
+            # Simulated gateway timeout; never makes any real remote request.
+            state["timeouts"] += 1
+            await asyncio.sleep(3)
+            return JSONResponse({"error": "Synthetic timeout"}, status_code=504)
         if rng.random() < state["fail_rate"]:
             state["failures"] += 1
             return JSONResponse({"error": "Synthetic transient failure"}, status_code=503)
@@ -462,7 +491,7 @@ def profile_queries():
     print(json.dumps(result), flush=True)
 
 
-def load(seconds, latency, fail_rate):
+def load(seconds, latency, fail_rate, profile_scale=1.0, timeout_rate=0.0):
     context = ssl.create_default_context(cafile=str(DATA / "tls/ca.pem"))
     records = []
     lock = threading.Lock()
@@ -500,6 +529,7 @@ def load(seconds, latency, fail_rate):
                 time.sleep(1)
         control.post("https://supervisely-sim/control/start",
                      json={"latency": latency, "fail_rate": fail_rate,
+                           "profile_scale": profile_scale, "timeout_rate": timeout_rate,
                            "burst": os.environ.get("BENCHMARK_BURST") == "1"}).raise_for_status()
     deadline = time.monotonic() + seconds
 
@@ -588,6 +618,8 @@ def load(seconds, latency, fail_rate):
         "frames_per_job": FRAMES, "annotators": ANNOTATORS, "monitors_count": MONITORS,
         "seconds_per_frame": SECONDS_PER_FRAME,
         "latency_seconds": latency, "failure_rate": fail_rate,
+        "profile_mode": bool(PROFILE_PATH), "profile_scale": profile_scale,
+        "timeout_rate": timeout_rate,
         "requests": len(records), "status_counts": dict(Counter(str(item["status"]) for item in records)),
         "p95_ms": latencies[int(len(latencies) * .95)] if latencies else None,
         "p99_ms": latencies[int(len(latencies) * .99)] if latencies else None,
@@ -649,13 +681,16 @@ def main():
     parser.add_argument("--frames", type=int, default=FRAMES)
     parser.add_argument("--latency", type=float, default=.05)
     parser.add_argument("--fail-rate", type=float, default=0)
+    parser.add_argument("--profile-scale", type=float, default=1.0)
+    parser.add_argument("--timeout-rate", type=float, default=0.0)
     args = parser.parse_args()
     if args.mode == "seed":
         seed(args.frames)
     elif args.mode == "simulate":
         simulate()
     elif args.mode == "load":
-        load(args.seconds, args.latency, args.fail_rate)
+        load(args.seconds, args.latency, args.fail_rate,
+             args.profile_scale, args.timeout_rate)
     elif args.mode == "profile":
         profile_queries()
     elif args.mode == "history":
