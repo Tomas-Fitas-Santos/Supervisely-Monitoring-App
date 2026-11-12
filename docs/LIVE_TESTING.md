@@ -23,9 +23,9 @@ nothing; the computer running Docker Desktop must stay powered on.
   Nightjar's FastAPI authentication restricts dashboard and operational API
   access using secure HttpOnly session cookies and server-side staff roles.
 - Existing staff log in with their Nightjar email/password. A new monitor
-  clicks **Create monitor account**, enters an email already approved in the
-  active SQL event roster, chooses a Nightjar-only password, then links
-  Supervisely later in Settings. Participants cannot self-register.
+  clicks **Create monitor account**, enters the approved roster email, their
+  private organiser-issued one-time code and a Nightjar-only password, then
+  links Supervisely later in Settings. Participants cannot self-register.
 - Cloudflare Quick Tunnel is launched **without** `--allowed-mail` because
   that option has produced plain 401 responses on login POST requests:
   https://github.com/cloudflare/cloudflared/issues/1752
