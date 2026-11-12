@@ -15,14 +15,19 @@ from sqlalchemy.orm import Session
 
 from .auth import AuthContext, requires
 from .config import get_settings
+from .datasets_api import (
+    IMAGE_EXTENSIONS,
+    VIDEO_EXTENSIONS,
+    dataset_view,
+    extract_video_frames,
+    get_dataset,
+    safe_relative,
+    sha256_file,
+)
 from .db import get_db
 from .events_api import current_event
 from .models import AuditEvent, MediaAsset, MediaDataset, MediaVideo, NativeOperation, epoch
 from .native_media_pool import enqueue_mirror
-from .datasets_api import (
-    IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, dataset_view, extract_video_frames,
-    get_dataset, safe_relative, sha256_file,
-)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/datasets", tags=["datasets"])
@@ -181,8 +186,8 @@ def index_mounted_dataset(db: Session, ds: MediaDataset):
     image_count = 0
     video_count = 0
     settings = get_settings()
-    from .frame_import import index_supplied_frames
     from .frame_extraction import extract_full_video
+    from .frame_import import index_supplied_frames
 
     def count_file(path: Path) -> tuple[str, int]:
         nonlocal source_bytes
