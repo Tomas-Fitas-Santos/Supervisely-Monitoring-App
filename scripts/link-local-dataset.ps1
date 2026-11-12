@@ -92,18 +92,30 @@ try {
   $runningIds = @(& docker compose @compose --profile native ps --status running -q worker)
   Check-Exit "Inspecting Supervisely worker"
   $wasRunning = @($runningIds | Where-Object { $_ }).Count -gt 0
+  $uploadIds = @(& docker compose @compose --profile native ps --status running -q mirror-worker)
+  Check-Exit "Inspecting upload worker"
+  $uploadWasRunning = @($uploadIds | Where-Object { $_ }).Count -gt 0
 
-  # Only the media-consuming services get their read-only source bind updated.
-  # Never call 'down', '--volumes', or recreate the Postgres container.
-  & docker compose @compose up -d --no-deps --force-recreate api
-  Check-Exit "Recreating API with new read-only source mount"
-  & docker compose @compose up -d --no-deps --force-recreate indexer
-  Check-Exit "Starting mounted-folder indexer"
-  & docker compose @compose up -d --no-deps --force-recreate web
-  Check-Exit "Refreshing web proxy"
+  # Recreate only when the Docker bind changed. If the parent mount is
+  # unchanged, selecting another folder from it is fully handled in the app,
+  # without restarting the website for other organisers.
+  if ($updated -ne $original) {
+    # Never delete volumes or recreate the database.
+    & docker compose @compose up -d --no-deps --force-recreate api
+    Check-Exit "Recreating API with new read-only source mount"
+    & docker compose @compose up -d --no-deps --force-recreate indexer
+    Check-Exit "Refreshing mounted folder indexer"
+    & docker compose @compose up -d --no-deps --force-recreate web
+    Check-Exit "Refreshing web proxy"
+  }
+  $refreshFlag = if ($updated -ne $original) { @("--force-recreate") } else { @() }
   if ($wasRunning -or $StartWorker) {
-    & docker compose @compose --profile native up -d --no-deps --force-recreate worker
-    Check-Exit "Recreating source upload worker"
+    & docker compose @compose --profile native up -d --no-deps @refreshFlag worker
+    Check-Exit "Starting native job worker"
+  }
+  if ($wasRunning -or $uploadWasRunning -or $StartWorker) {
+    & docker compose @compose --profile native up -d --no-deps @refreshFlag mirror-worker
+    Check-Exit "Starting dedicated Supervisely upload worker"
   }
 
   $apiId = (& docker compose @compose ps -q api | Select-Object -First 1)
@@ -114,11 +126,11 @@ try {
 
   Write-Host ""
   Write-Host "Dataset '$($info.Name)' is now visible inside Nightjar."
-  Write-Host "In Nightjar: Data -> Source folders & upload -> Refresh."
+  Write-Host "In Nightjar: Dataset -> Link host folder (optional) -> Refresh."
   Write-Host "Select '$($info.Name)' and click 'Link folder & start Supervisely upload'."
-  if (-not ($wasRunning -or $StartWorker)) {
+  if (-not ($wasRunning -or $uploadWasRunning -or $StartWorker)) {
     Write-Warning "Local folder indexing will run automatically, but Supervisely UPLOAD still requires the native worker. Start it after verifying Team/Workspace:"
-    Write-Host "docker compose --env-file .env.live -f compose.live.yaml --profile native up -d --no-deps worker"
+    Write-Host "docker compose --env-file .env.live -f compose.live.yaml --profile native up -d --no-deps worker mirror-worker"
   }
 }
 finally {
