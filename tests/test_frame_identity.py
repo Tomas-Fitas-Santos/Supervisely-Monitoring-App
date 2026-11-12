@@ -56,7 +56,7 @@ def test_event_import_decodes_all_thirty_frames_with_timestamps(dataset_ctx, tmp
     with maker() as db:
         block = db.scalar(select(WorkBlock).where(WorkBlock.plan_id == plan.json()["plan_id"]))
         assert block.media_ids == [frame.id for frame in frames]
-        assert len(set(block.repeat_media_ids)) == 2
+        assert block.repeat_media_ids == block.media_ids
         assert set(block.repeat_media_ids).issubset(block.media_ids)
     team = client.get("/api/v1/labeling/manual/options", params={"dataset_id": dataset_id}).json()["teams"][0]
     manual = act(client, csrf, "/labeling/manual/jobs", {
