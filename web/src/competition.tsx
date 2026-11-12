@@ -41,6 +41,9 @@ type AnnotationClass={name:string;shape:"rectangle"|"point";color:string;descrip
 type AssigneeOption={id:string;name:string;team_name:string;team_id:string;native_ready:boolean};
 type MirrorStatus={state:string;uploaded_frames:number;total_frames:number;
   ready_for_automatic_jobs:boolean;error_code:string|null};
+type SharedReadiness={dataset_id:string;source_ready:boolean;mirror_ready:boolean;
+  ready_for_distribution:boolean;source_frames:number;source_videos:number;
+  primary_jobs:number;issues:string[];extra_issues:number};
 
 export function CompetitionScreen({auth,view="progress"}:{
   auth:Auth;view?:"progress"|"setup"
@@ -70,6 +73,8 @@ export function CompetitionScreen({auth,view="progress"}:{
   const [assignees,setAssignees]=useState<AssigneeOption[]>([]);
   const [reassignTo,setReassignTo]=useState("");
   const [mirror,setMirror]=useState<MirrorStatus|null>(null);
+  const [readiness,setReadiness]=useState<SharedReadiness|null>(null);
+  const [readinessError,setReadinessError]=useState("");
   const [drafts,setDrafts]=useState<Draft[]>([]);
   const [dispatch,setDispatch]=useState<"hold"|"publish">("publish");
   const [filter,setFilter]=useState<"all"|"review"|"active"|"held">("all");
@@ -140,6 +145,26 @@ export function CompetitionScreen({auth,view="progress"}:{
     void api<MirrorStatus>("/datasets/"+dataset+"/mirror-status")
       .then(setMirror).catch(()=>setMirror(null));
   },[dataset,native]);
+  useEffect(()=>{
+    if(!dataset||planMode!=="shared_30_v1"||section!=="automatic"){
+      setReadiness(null);setReadinessError("");return;
+    }
+    let active=true;
+    setReadiness(null);setReadinessError("");
+    void api<SharedReadiness>("/labeling/datasets/"+dataset+"/shared-readiness")
+      .then(result=>{if(active)setReadiness(result);})
+      .catch(e=>{if(active)setReadinessError((e as Error).message);});
+    return ()=>{active=false;};
+  },[dataset,planMode,section]);
+  async function checkReadiness(){
+    if(!dataset)return;
+    try {
+      setReadinessError("");
+      const result=await api<SharedReadiness>(
+        "/labeling/datasets/"+dataset+"/shared-readiness");
+      setReadiness(result);
+    }catch(e){setReadinessError((e as Error).message);}
+  }
   useEffect(()=>{
     void api<{items:AnnotationClass[]}>("/labeling/annotation-classes")
       .then(response=>setAnnotationClasses(response.items))
@@ -530,8 +555,32 @@ export function CompetitionScreen({auth,view="progress"}:{
           value={videoLimit} placeholder="Unlimited"
           onChange={e=>setVideoLimit(e.target.value)}/></label>
       </div>}
-      <p className="muted small">Supervisely mirror: {mirror?.state||"Unknown"} · {mirror?.uploaded_frames||0}/{mirror?.total_frames||0} frames uploaded. {mirror?.ready_for_automatic_jobs?"Ready for instant assignment.":"Wait until the full dataset is mirrored before launching."}</p>
-      <button className="btn secondary" disabled={busy||!dataset||plans.some(p=>p.status==="approved")}
+      <p className="muted small">Supervisely mirror: {mirror?.state||"Unknown"} · {mirror?.uploaded_frames||0}/{mirror?.total_frames||0} frames uploaded. {mirror?.ready_for_automatic_jobs?"Upload verified.":"Wait until the complete dataset is mirrored before launching."}</p>
+      {planMode==="shared_30_v1"&&dataset&&<div className="settings-note">
+        <div className="panel-heading">
+          <strong>30-frame source verification</strong>
+          <button className="btn secondary" type="button" disabled={busy}
+            onClick={()=>void checkReadiness()}><RefreshCw size={14}/> Check source frames</button>
+        </div>
+        {readinessError&&<p className="alert danger" role="alert">{readinessError}</p>}
+        {!readiness&&!readinessError&&<p>Checking dataset source-frame identities…</p>}
+        {readiness&&<div>
+          <p>{readiness.source_frames} frames · {readiness.source_videos} source videos ·
+            {" "}{readiness.primary_jobs} primary blocks (up to 30 frames each).</p>
+          <p>{readiness.source_ready?
+            "Source frame identities and full-density coverage verified.":
+            "Automatic distribution is blocked until the source issues below are corrected."}
+            {" "}{readiness.mirror_ready?
+              "Supervisely upload is complete.":"Supervisely upload is not yet complete."}</p>
+          {!readiness.source_ready&&<ul>
+            {readiness.issues.map((issue,i)=><li key={i}>{issue}</li>)}
+            {readiness.extra_issues>0&&<li>{readiness.extra_issues} other source issues</li>}
+          </ul>}
+        </div>}
+      </div>}
+      <button className="btn secondary" disabled={busy||!dataset||
+        plans.some(p=>p.status==="approved")||
+        (planMode==="shared_30_v1"&&Boolean(readiness&&!readiness.source_ready))}
         onClick={()=>void generate()}><UsersRound size={15}/>{planMode==="shared_30_v1"?"Create shared queue draft":"Generate draft plan"}</button>
       {created&&<div className="job-plan-summary">{"primary_blocks" in created?<>
         <strong>{created.primary_blocks} primary blocks planned</strong>
