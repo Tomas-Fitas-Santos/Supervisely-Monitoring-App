@@ -9,7 +9,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from .annotation_schema import annotation_class_view
@@ -186,6 +186,94 @@ def allocate(
         "morphologies": category_names,
     }
     return result, totals
+
+
+@router.get("/datasets/{dataset_id}/shared-readiness")
+def shared_source_readiness(
+    dataset_id: str,
+    ctx: AuthContext = Depends(requires(*VIEWERS)),
+    db: Session = Depends(get_db),
+):
+    """Read-only preflight for automatic 30-frame jobs, not upload status.
+
+    Aggregate by source video in SQL so the page can inspect 120k+ frames
+    without transferring the full frame catalogue to the browser.
+    Final plan creation still enforces the authoritative full validation.
+    """
+    event = current_event(db, ctx)
+    ds = get_dataset(db, event.id, dataset_id)
+    scope = (MediaAsset.event_id == event.id,
+             MediaAsset.dataset_id == ds.id)
+    total = db.scalar(select(func.count(MediaAsset.id)).where(*scope)) or 0
+    videos = {
+        item.id: item for item in db.scalars(select(MediaVideo).where(
+            MediaVideo.event_id == event.id,
+            MediaVideo.dataset_id == ds.id,
+        ))
+    }
+    issues: list[str] = []
+
+    if ds.status != "ready":
+        issues.append("Local dataset import/indexing is not complete.")
+    if total == 0:
+        issues.append("Dataset has no frames. Import source-video frames first.")
+    unlinked = db.scalar(select(MediaAsset.relative_path).where(
+        *scope, MediaAsset.video_id.is_(None),
+    ).order_by(MediaAsset.relative_path).limit(1))
+    if unlinked:
+        issues.append(
+            f"Frame '{unlinked}' has no source-video identity. "
+            "Use species/video.mp4 or species/video-name/frame_000001.jpg folders."
+        )
+    missing_ordinal = db.scalar(select(MediaAsset.relative_path).where(
+        *scope, MediaAsset.frame_index.is_(None),
+    ).order_by(MediaAsset.relative_path).limit(1))
+    if missing_ordinal:
+        issues.append(
+            f"Frame '{missing_ordinal}' has no source-frame position. "
+            "Select Every source frame when importing."
+        )
+    groups = db.execute(select(
+        MediaAsset.video_id, func.count(MediaAsset.id),
+        func.min(MediaAsset.frame_index), func.max(MediaAsset.frame_index),
+    ).where(*scope, MediaAsset.video_id.is_not(None))
+      .group_by(MediaAsset.video_id)).all()
+    for video_id, count, first, last in groups:
+        video = videos.get(video_id)
+        if video is None:
+            issues.append(f"Frame group '{video_id}' refers to an unknown source video.")
+            continue
+        if video.density not in {"full", "declared_full"}:
+            issues.append(
+                f"Video '{video.video_group}' is '{video.density}' rather than full-density."
+            )
+        if video.identity_status != "complete":
+            issues.append(
+                f"Video '{video.video_group}' has identity '{video.identity_status}' "
+                f"(missing source frames: {video.missing_frame_count})."
+            )
+        if (not count or first is None or last is None
+                or count != video.frame_count or last - first + 1 != count):
+            issues.append(
+                f"Video '{video.video_group}' has inconsistent frame counts or "
+                "nonconsecutive source positions."
+            )
+    from .native_media_pool import mirror_status
+    mirror = mirror_status(db, ds) if ds.status == "ready" else None
+    source_ready = not issues and bool(groups)
+    return {
+        "dataset_id": ds.id,
+        "source_ready": source_ready,
+        "mirror_ready": bool(mirror and mirror["ready_for_automatic_jobs"]),
+        "ready_for_distribution": (
+            source_ready and bool(mirror and mirror["ready_for_automatic_jobs"])
+        ),
+        "source_frames": total,
+        "source_videos": len(videos),
+        "primary_jobs": (total + 29) // 30,
+        "issues": issues[:8],
+        "extra_issues": max(0, len(issues) - 8),
+    }
 
 
 @router.post("/plans", status_code=201)
