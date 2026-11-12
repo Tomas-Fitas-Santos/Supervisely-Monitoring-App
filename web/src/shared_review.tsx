@@ -66,7 +66,6 @@ export function SharedReviewScreen({auth}:{auth:Auth}){
   const [verdicts,setVerdicts]=useState<Record<number,VerdictDraft>>({});
   const [missingClasses,setMissingClasses]=useState<string[]>([]);
   const [zoom,setZoom]=useState(1);
-  const [selectedObject,setSelectedObject]=useState<number|null>(null);
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState("");
   const [notice,setNotice]=useState("");
@@ -150,7 +149,7 @@ export function SharedReviewScreen({auth}:{auth:Auth}){
 
   function setActiveReview(next:ReviewClaim|null){
     activeClaimRef.current=next;
-    setClaim(next);setVerdicts({});setMissingClasses([]);setZoom(1);setSelectedObject(null);
+    setClaim(next);setVerdicts({});setMissingClasses([]);setZoom(1);
   }
 
   async function claimNext(){
@@ -303,8 +302,7 @@ export function SharedReviewScreen({auth}:{auth:Auth}){
               aria-label="Annotated bird image. Zoom in and drag to inspect details.">
               <AnnotationFrame key={claim.review_id} src={claim.image_url}
                 alt={"Frame "+claim.source_filename} annotation={claim.annotation}
-                zoom={zoom} selectedIndex={selectedObject}
-                onSelectObject={setSelectedObject}/>
+                zoom={zoom}/>
             </div>
             {zoom>1&&<p className="muted small shared-review-zoom-hint">
               Drag the enlarged image to inspect details. Zoom and panning stay inside the viewer.
@@ -315,8 +313,8 @@ export function SharedReviewScreen({auth}:{auth:Auth}){
             <div className="shared-review-grade-heading">
               <div><span className="eyebrow">INDIVIDUAL OBJECT REVIEW</span>
                 <h3>Review each annotation</h3>
-                <p className="muted">Select a numbered marker on the image or a row below.
-                  Grade each object separately; incorrect keypoints require a reason.</p>
+                <p className="muted">Use the legend above to show or hide each label class.
+                  Grade every annotation using the rows below; incorrect keypoints require a reason.</p>
               </div><strong>{graded} / {objects.length} graded</strong>
             </div>
             {!objects.length&&<div className="settings-note">No annotated points or boxes in this submitted frame. Confirm any missing landmark classes below before saving.</div>}
@@ -324,28 +322,20 @@ export function SharedReviewScreen({auth}:{auth:Auth}){
               {objects.map((obj,index)=>{
                 const shape=shapeOf(obj),draft=verdicts[index];
                 const classOptions=(claim.classes||[]).filter(c=>c.shape===shape&&c.name!==obj.classTitle);
-                return <div className={"shared-review-object-row "+(selectedObject===index?"selected":"")}
-                  key={index}>
+                return <div className="shared-review-object-row" key={index}>
                   <div className="shared-review-object-label">
                     <span className="soft-pill">{shape==="point"?"Keypoint":shape==="rectangle"?"Bounding box":"Unknown"}</span>
-                    <button className="shared-review-object-select" type="button"
-                      aria-pressed={selectedObject===index}
-                      onClick={()=>setSelectedObject(index)}>
-                      <strong>{index+1}. {obj.classTitle||"Unlabelled object"}</strong>
-                      <small>{selectedObject===index?"Selected on image":"Highlight on image"}</small>
-                    </button>
+                    <strong>{index+1}. {obj.classTitle||"Unlabelled object"}</strong>
                   </div>
                   <div className="shared-review-verdict-buttons" role="group" aria-label={"Classification for "+(obj.classTitle||"object")+" "+(index+1)}>
                     <button type="button" className={"btn "+(draft?.correct===true?"primary":"secondary")}
                       disabled={busy||!shape}
-                      onClick={()=>{setSelectedObject(index);
-                        mark(index,{correct:true,reason:null,corrected_class:""});}}>
+                      onClick={()=>mark(index,{correct:true,reason:null,corrected_class:""})}>
                       <CheckCircle2 size={15}/> Correct
                     </button>
                     <button type="button" className={"btn "+(draft?.correct===false?"danger-outline":"secondary")}
                       disabled={busy||!shape}
-                      onClick={()=>{setSelectedObject(index);
-                        mark(index,{correct:false,reason:null,corrected_class:""});}}>
+                      onClick={()=>mark(index,{correct:false,reason:null,corrected_class:""})}>
                       Incorrect
                     </button>
                   </div>
