@@ -1,8 +1,10 @@
 # Nightjar worker architecture — 300 automated annotators
 
 **Status:** phased implementation. Benchmark multi-role workers are enabled in
-`compose.benchmark.yaml`. `compose.live.yaml` deliberately retains the
-single `--role all` native worker until the 300-person safety gates pass.
+`compose.benchmark.yaml`. `compose.live.yaml` retains one `--role all`
+job-processing worker until the 300-person safety gates pass, but runs
+separate, CPU-bounded `indexer` and `mirror-worker` services for local media
+preparation and Supervisely uploads.
 
 ## Non-negotiable requirements
 
@@ -13,9 +15,10 @@ single `--role all` native worker until the 300-person safety gates pass.
 - Supervisely real-world calibration has a strictly bounded read-only probe
   and an **optional** 1–3 controlled create/delete probe in an isolated
   benchmark project. Never produce 300 real jobs or upload thousands of files.
-- Accepted frames from partial jobs enter review once; incomplete frames
-  return as a smaller native job to the same user; all correction rounds
-  share one original Nightjar competition job.
+- Complete annotations from an incomplete job are staged privately but
+  **no frame enters monitor review** until every original job frame is
+  complete. Missing frames return as a smaller native correction job to
+  the same participant; all correction rounds share one original job.
 - Reviewer UI and original local frames remain fast and independent of
   remote Supervisely availability. Scoring formulas are unchanged.
 - Keep PostgreSQL, existing Docker deployment and production environment.
