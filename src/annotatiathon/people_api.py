@@ -215,20 +215,37 @@ def list_people(
         query.order_by(Person.kind.desc(), Person.name, Person.email)
         .offset((page - 1) * size).limit(size)
     ).all()
+    # Participant membership lives on Person.team_id, but trial-monitor
+    # membership lives on MonitorPairMember. Resolve BOTH with the same active
+    # team records used by GET /teams to avoid contradictory roster columns.
     teams_by_id = {t.id: t for t in db.scalars(select(CompetitionTeam).where(
-        CompetitionTeam.event_id == event.id
+        CompetitionTeam.event_id == event.id, CompetitionTeam.active.is_(True),
     ))}
-    return {
-        "items": [person_record(
-            p, teams_by_id[p.team_id].name if p.team_id in teams_by_id else None,
-            teams_by_id[p.team_id].table_number if p.team_id in teams_by_id else None,
+    pair_teams = {
+        link.person_id: link.team_id for link in db.scalars(select(MonitorPairMember).where(
+            MonitorPairMember.event_id == event.id,
+            MonitorPairMember.active.is_(True),
+            MonitorPairMember.team_id.in_(list(teams_by_id)),
+        ))
+    }
+    result = []
+    for person in people:
+        assigned_id = (
+            person.team_id if person.kind == "participant"
+            else pair_teams.get(person.id)
+        )
+        team = teams_by_id.get(assigned_id)
+        item = person_record(
+            person, team.name if team else None,
+            team.table_number if team else None,
             include_private=bool(
                 {"organiser", "reception"} & set(_ctx.staff.roles)
             ),
             include_food_allergies="distribution" in _ctx.staff.roles,
-        ) for p in people],
-        "total": total, "page": page, "size": size,
-    }
+        )
+        item["team_id"] = team.id if team else None
+        result.append(item)
+    return {"items": result, "total": total, "page": page, "size": size}
 
 
 @router.get("/teams")
@@ -277,11 +294,16 @@ def list_teams(
             "monitor_person_id": (responsibility.get(team.id)
                                   if responsibility.get(team.id) in monitor_names else None),
             "monitor_name": monitor_names.get(responsibility.get(team.id)),
-            "members": [person_record(
-                p, team.name, team.table_number,
-                include_private=can_view_private,
-                include_food_allergies=can_view_allergies,
-            ) for p in members],
+            "members": [{
+                **person_record(
+                    p, team.name, team.table_number,
+                    include_private=can_view_private,
+                    include_food_allergies=can_view_allergies,
+                ),
+                # For trial monitor pairs, the source Person.team_id is NULL.
+                # Expose the active membership, just as /people does.
+                "team_id": team.id,
+            } for p in members],
             "checked_in": sum(1 for p in members if p.check_in_at),
             "first_check_in": min((p.check_in_at for p in members if p.check_in_at),
                                   default=None),
