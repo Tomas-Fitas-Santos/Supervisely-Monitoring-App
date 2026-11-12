@@ -412,7 +412,7 @@ def historical_fixture():
             jobs = [{"id": f"history-{index}", "event_id": "event", "plan_id": "history",
                      "dataset_id": "dataset", "team_id": f"team-{index % (ANNOTATORS // 2)}",
                      "assignee_person_id": f"person-{(index % (ANNOTATORS // 2)) * 2 + (index // (ANNOTATORS // 2)) % 2}",
-                     "sequence": index // 130 + 1,
+                     "sequence": index // (ANNOTATORS // 2) + 1,
                      "media_ids": [f"asset-{frame}" for frame in range(FRAMES)], "frame_count": FRAMES,
                      "video_count": 1, "morphology_counts": {"bird": FRAMES}, "status": "completed",
                      "review_status": "accepted", "native_dataset_id": 1000000 + index}
@@ -519,7 +519,7 @@ def load(seconds, latency, fail_rate):
                 call(client, "GET", "/api/v1/monitoring/assignments")
                 if response is not None and response.status_code == 200:
                     owned = [job for job in response.json()["items"]
-                             if int(job["team_id"].split("-")[-1]) % 10 == index]
+                             if int(job["team_id"].split("-")[-1]) % MONITORS == index]
                     pending = None
                     for candidate in owned:
                         if candidate["status"] != "on_review" or candidate["id"] in completed:
@@ -551,8 +551,8 @@ def load(seconds, latency, fail_rate):
                 time.sleep(max(0, min(5 - (time.monotonic() - tick), deadline - time.monotonic())))
         return {"monitor": index, "accepted": len(completed)}
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
-        monitors = list(pool.map(monitor, range(10)))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=MONITORS) as pool:
+        monitors = list(pool.map(monitor, range(MONITORS)))
     with httpx.Client(verify=context, trust_env=False, timeout=120) as control:
         simulator = control.get("https://supervisely-sim/control/stats").json()
     event_summary = database_summary()
@@ -579,13 +579,14 @@ def load(seconds, latency, fail_rate):
                     raise RuntimeError("Historical workload did not return the populated target event")
                 return {"monitor": index, "status": response.status_code, "returned_jobs": len(rows)}
         history_started = time.monotonic()
-        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
-            phases["history_reads"] = {"requests": list(pool.map(history_reader, range(10)))}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=MONITORS) as pool:
+            phases["history_reads"] = {"requests": list(pool.map(history_reader, range(MONITORS)))}
         phases["history_reads"]["seconds"] = time.monotonic() - history_started
     latencies = sorted(item["ms"] for item in records)
     result = {
         "duration_seconds": time.monotonic() - started,
-        "frames_per_job": FRAMES,
+        "frames_per_job": FRAMES, "annotators": ANNOTATORS, "monitors_count": MONITORS,
+        "seconds_per_frame": SECONDS_PER_FRAME,
         "latency_seconds": latency, "failure_rate": fail_rate,
         "requests": len(records), "status_counts": dict(Counter(str(item["status"]) for item in records)),
         "p95_ms": latencies[int(len(latencies) * .95)] if latencies else None,
@@ -628,9 +629,11 @@ def history_load():
                     "returned_historical_jobs": historical, "ms": response.elapsed.total_seconds() * 1000}
 
     started = time.monotonic()
-    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
-        clients = list(pool.map(reader, range(10)))
-    result = {"mode": "history", "frames_per_job": FRAMES, "duration_seconds": time.monotonic() - started,
+    with concurrent.futures.ThreadPoolExecutor(max_workers=MONITORS) as pool:
+        clients = list(pool.map(reader, range(MONITORS)))
+    result = {"mode": "history", "frames_per_job": FRAMES,
+              "annotators": ANNOTATORS, "monitors_count": MONITORS,
+              "duration_seconds": time.monotonic() - started,
               "requests": len(records), "status_counts": dict(Counter(str(row["status"]) for row in records)),
               "clients": clients, "p95_ms": max(row["ms"] for row in clients)}
     RESULTS.mkdir(exist_ok=True)
