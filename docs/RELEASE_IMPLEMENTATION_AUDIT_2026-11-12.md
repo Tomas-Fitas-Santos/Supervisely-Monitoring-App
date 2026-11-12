@@ -62,8 +62,13 @@
 2. Back up live PostgreSQL, media directory, encryption key and credentials in a private location; verify restore method.
 3. `git pull --ff-only origin main` on the deployment host. Inspect pending migrations and changed native-worker code.
 4. `docker compose --env-file .env.live -f compose.live.yaml up -d --build api web`; migration service runs before the API. Verify `/health/ready`.
-5. Only when the organiser has confirmed the exact active plan and team, start/rebuild the native worker: `docker compose --env-file .env.live -f compose.live.yaml --profile native up -d --build worker`. Never launch test native jobs into official event data accidentally.
-6. Live acceptance: two participants join/refresh → publish distinct jobs → submit frame JSON → two monitors claim different frames → complete/pause → rank score updates exactly once; redo after worker restart and browser crash.
-7. Run a full-scale capacity rehearsal with the **final** agreed queue policy before opening to all participants. Prior simulated benchmarks showed throughput limits; tests with synthetic latency are not equivalent to real Supervisely capacity.
+5. After migrations and **while the native worker is stopped**, backfill any pre-upgrade completed submissions already captured as JSON. This does not contact Supervisely, download images, or overwrite completed reviews:
+   ```powershell
+   docker compose --env-file .env.live -f compose.live.yaml exec -T api /usr/local/bin/nightjar-entrypoint python -m annotatiathon.manage backfill-frame-reviews
+   ```
+   Inspect the reported `frames_queued`, `missing_snapshots` and `failed_jobs` counts; missing/failed jobs require reconciliation before final competition ranking. Re-running the command is safe.
+6. Only when the organiser has confirmed the exact active plan and team, start/rebuild the native worker: `docker compose --env-file .env.live -f compose.live.yaml --profile native up -d --build worker`. Never launch test native jobs into official event data accidentally.
+7. Live acceptance: two participants join/refresh → publish distinct jobs → submit frame JSON → two monitors claim different frames → complete/pause → rank score updates exactly once; redo after worker restart and browser crash.
+8. Run a full-scale capacity rehearsal with the **final** agreed queue policy before opening to all participants. Prior simulated benchmarks showed throughput limits; tests with synthetic latency are not equivalent to real Supervisely capacity.
 
 **No claim of production readiness is valid from unit tests alone.**
