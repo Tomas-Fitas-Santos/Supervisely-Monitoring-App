@@ -43,6 +43,12 @@ def test_distinct_claims_and_duplicate_person_requests():
                             supervisely_role="annotator", native_verified_at=1))
         for i in range(3):
             ids = [f"frame-{30 * i + j}" for j in range(30)]
+            db.add_all(m.MediaAsset(
+                id=mid, event_id=event, dataset_id=dataset, video_id=video,
+                video_group="bird/source", frame_index=30 * i + j + 1,
+                relative_path=f"videos/bird/source/{mid}.jpg",
+                kind="video_frame", morphology="bird", size_bytes=1, sha256="0" * 64,
+            ) for j, mid in enumerate(ids))
             db.add(m.WorkBlock(event_id=event, plan_id=plan, video_id=video, ordinal=i + 1,
                                frame_count=len(ids), media_ids=ids, repeat_media_ids=[]))
     barrier = Barrier(4)
@@ -73,6 +79,12 @@ def test_distinct_claims_and_duplicate_person_requests():
         job.native_dataset_id = 100
         db.add(m.NativeJobBinding(event_id=event, job_id=job_id, person_id=person, native_job_id=101))
         ids = [f"next-{i}" for i in range(30)]
+        db.add_all(m.MediaAsset(
+            id=mid, event_id=event, dataset_id=dataset, video_id=video,
+            video_group="bird/source", frame_index=91 + index,
+            relative_path=f"videos/bird/source/{mid}.jpg",
+            kind="video_frame", morphology="bird", size_bytes=1, sha256="0" * 64,
+        ) for index, mid in enumerate(ids))
         db.add(m.WorkBlock(event_id=event, plan_id=plan, video_id=video, ordinal=4,
                            frame_count=30, media_ids=ids, repeat_media_ids=[]))
     native = SimpleNamespace(id=101, dataset_id=100, status="on_review",
@@ -118,6 +130,12 @@ def test_distinct_claims_and_duplicate_person_requests():
     with Session(engine) as db, db.begin():
         for ordinal in range(5, 21):
             frames = [f"repeat-{ordinal}-{i}" for i in range(30)]
+            db.add_all(m.MediaAsset(
+                id=mid, event_id=event, dataset_id=dataset, video_id=video,
+                video_group="bird/source", frame_index=121 + (ordinal - 5) * 30 + index,
+                relative_path=f"videos/bird/source/{mid}.jpg",
+                kind="video_frame", morphology="bird", size_bytes=1, sha256="0" * 64,
+            ) for index, mid in enumerate(frames))
             primary = m.LabelingJob(
                 event_id=event, plan_id=plan, dataset_id=dataset, team_id=primary_team,
                 sequence=ordinal, assignee_person_id=person, media_ids=frames,
@@ -127,7 +145,7 @@ def test_distinct_claims_and_duplicate_person_requests():
             db.add(primary)
             db.flush()
             db.add(m.WorkBlock(event_id=event, plan_id=plan, video_id=video,
-                               ordinal=ordinal, frame_count=2, media_ids=frames,
+                               ordinal=ordinal, frame_count=30, media_ids=frames,
                                repeat_media_ids=frames, job_id=primary.id))
         db.flush()
         reserve_repeats(db, db.get(m.LabelingPlan, plan), [primary_team, repeat_team])
