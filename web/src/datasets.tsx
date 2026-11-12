@@ -1,5 +1,5 @@
 import { confirmAction } from "./dialogs";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type React from "react";
 import {
   AlertTriangle, Archive, CheckCircle2, CloudUpload, FileArchive,
@@ -37,6 +37,14 @@ export function DatasetScreen({auth}:{auth:Auth}) {
   const videos=videosLoaded?videoResult.items:[];
   const [projectedFrames,setProjectedFrames]=useState(175500);
   const [files,setFiles]=useState<File[]>([]);
+  const fileInputRef=useRef<HTMLInputElement|null>(null);
+  function clearFileSelection(){
+    setFiles([]);
+    // A retained native <input type=file> shows stale file counts after the
+    // transfer clears React state and may not fire a new change event when
+    // the organiser reselects the same folder to resume.
+    if(fileInputRef.current)fileInputRef.current.value="";
+  }
   const [busy,setBusy]=useState(false);
   const [transfer,setTransfer]=useState<DatasetTransferState|null>(getDatasetTransfer);
   useEffect(()=>watchDatasetTransfer(setTransfer),[]);
@@ -116,7 +124,7 @@ export function DatasetScreen({auth}:{auth:Auth}) {
         files,csrf:auth.csrf_token,resume:false
       });
       setNotice("Transfer started. When local validation completes, the native worker will replicate every frame to Supervisely before event launch.");
-      setFiles([]);setName("");
+      clearFileSelection();setName("");
       await refresh();
     }catch(e) {
       setError((e as Error).message+(created?" The unfinished record can be removed below.":""));
@@ -134,7 +142,7 @@ export function DatasetScreen({auth}:{auth:Auth}) {
         datasetId:dataset.id,name:dataset.name,kind:dataset.upload_kind,
         files,csrf:auth.csrf_token,resume:true,
       });
-      setFiles([]);
+      clearFileSelection();
       setNotice("Resuming original files from server-verified upload offsets.");
     }catch(e){setError((e as Error).message);}
   }
@@ -198,17 +206,17 @@ export function DatasetScreen({auth}:{auth:Auth}) {
             <option value="sample_1fps">Sample one frame per second</option>
           </select></label>
           <label>Upload format<select value={mode} disabled={busy}
-            onChange={e=>{setMode(e.target.value as "zip"|"folder");setFiles([]);}}>
+            onChange={e=>{setMode(e.target.value as "zip"|"folder");clearFileSelection();}}>
             <option value="zip">ZIP of species folders</option>
             <option value="folder">Folder containing species folders</option>
           </select></label>
           {mode==="zip"?<label className="dataset-drop">
             <FileArchive size={28}/><span>Select .zip file</span>
-            <input aria-label="ZIP dataset" type="file" accept=".zip,application/zip"
+            <input ref={fileInputRef} aria-label="ZIP dataset" type="file" accept=".zip,application/zip"
               disabled={busy} onChange={e=>setFiles(Array.from(e.target.files||[]))}/>
           </label>:<label className="dataset-drop">
             <FolderOpen size={28}/><span>Select entire dataset folder</span>
-            <input aria-label="Folder dataset" type="file" multiple
+            <input ref={fileInputRef} aria-label="Folder dataset" type="file" multiple
               {...{webkitdirectory:"",directory:""}}
               disabled={busy} onChange={e=>setFiles(Array.from(e.target.files||[]))}/>
           </label>}
