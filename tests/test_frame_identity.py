@@ -293,7 +293,7 @@ def test_supplied_frame_folder_import_without_numeric_filenames_or_json(dataset_
 
 
 def test_sparse_full_mode_frames_import_but_are_not_full_density(dataset_ctx):
-    client, maker, csrf = dataset_ctx
+    client, _maker, csrf = dataset_ctx
     output = io.BytesIO()
     Image.new("RGB", (32, 24), "blue").save(output, format="JPEG")
     image = output.getvalue()
