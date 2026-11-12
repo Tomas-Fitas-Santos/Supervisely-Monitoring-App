@@ -290,3 +290,62 @@ def test_staff_access_readiness_reports_lockout_and_role_mismatch(setup):
     assert http.post("/api/v1/auth/login", json={
         "email": "mismatch@example.org", "password": "MismatchPassword2026",
     }).status_code == 401
+
+
+def test_legacy_mixed_case_organiser_can_sign_in_without_new_account(setup, monkeypatch):
+    """Preserve existing password and roles when old accounts have mixed-case emails."""
+    http, maker = setup
+    bootstrap(monkeypatch)
+    old_password = "RomainExistingSecret2026!"
+    with maker.begin() as db:
+        db.add(ApprovedStaffEmail(email="romain@example.org", role="organiser", enabled=True))
+        db.add(StaffAccount(email="Romain@Example.org", name="Romain",
+                            roles=["monitor"], active=False,
+                            password_hash=password_hash(old_password)))
+
+    bootstrap(monkeypatch)
+    with maker() as db:
+        account = db.scalar(select(StaffAccount).where(StaffAccount.email == "Romain@Example.org"))
+        assert account.active and account.roles == ["organiser"]
+        assert password_matches(account.password_hash, old_password)
+
+    assert http.post("/api/v1/auth/setup/register", json={
+        "email": "romain@example.org", "name": "Someone Else",
+        "password": "DifferentSecretPassword2026!"
+    }).status_code == 409
+    sign_in = http.post("/api/v1/auth/login", json={
+        "email": "romain@example.org", "password": old_password
+    })
+    assert sign_in.status_code == 200
+    assert sign_in.json()["staff"]["name"] == "Romain"
+
+    http.post("/api/v1/auth/login", json={
+        "email": "owner@example.org", "password": "ExistingSecretPhrase123",
+    })
+    records = {item["email"]: item for item in http.get("/api/v1/staff/approved").json()["items"]}
+    assert records["romain@example.org"]["login_ready"] is True
+    assert records["romain@example.org"]["login_issue"] is None
+
+
+def test_ambiguous_case_variant_accounts_are_not_authenticated(setup, monkeypatch):
+    http, maker = setup
+    bootstrap(monkeypatch)
+    with maker.begin() as db:
+        db.add(ApprovedStaffEmail(email="duplicate@example.org", role="organiser", enabled=True))
+        for email in ("duplicate@example.org", "Duplicate@Example.org"):
+            db.add(StaffAccount(email=email, name="Duplicate", roles=["organiser"],
+                                active=True, password_hash=password_hash("SecurePassword2026!")))
+    assert http.post("/api/v1/auth/login", json={
+        "email": "duplicate@example.org", "password": "SecurePassword2026!",
+    }).status_code == 401
+    assert http.post("/api/v1/auth/setup/register", json={
+        "email": "duplicate@example.org", "name": "Other",
+        "password": "DifferentSecurePassword2026!",
+    }).status_code == 409
+    http.post("/api/v1/auth/login", json={
+        "email": "owner@example.org", "password": "ExistingSecretPhrase123",
+    })
+    records = {item["email"]: item for item in http.get("/api/v1/staff/approved").json()["items"]}
+    assert records["duplicate@example.org"]["login_issue"] == "duplicate_email_records"
+    with pytest.raises(SystemExit):
+        bootstrap(monkeypatch)
