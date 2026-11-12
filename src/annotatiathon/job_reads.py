@@ -10,7 +10,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session, aliased
 
 from .auth import AuthContext
-from .models import CompetitionTeam, LabelingJob, MonitorAssignment, NativeJobBinding, Person
+from .models import CompetitionTeam, LabelingJob, NativeJobBinding, Person
 
 
 class JobCursor(BaseModel):
@@ -20,17 +20,12 @@ class JobCursor(BaseModel):
 
 
 def scoped_jobs(event_id: str, ctx: AuthContext):
-    query = select(LabelingJob).where(LabelingJob.event_id == event_id)
-    if "monitor" in ctx.staff.roles and "organiser" not in ctx.staff.roles:
-        teams = select(MonitorAssignment.team_id).join(
-            Person, Person.id == MonitorAssignment.monitor_person_id,
-        ).where(
-            MonitorAssignment.event_id == event_id, MonitorAssignment.active.is_(True),
-            Person.event_id == event_id, Person.email == ctx.staff.email,
-            Person.kind == "monitor", Person.active.is_(True),
-        )
-        query = query.where(LabelingJob.team_id.in_(teams))
-    return query
+    """Event monitors can inspect all teams; they no longer own assigned teams.
+
+    Role-based access remains enforced by the calling API routes, while every
+    underlying query stays isolated to the selected event.
+    """
+    return select(LabelingJob).where(LabelingJob.event_id == event_id)
 
 
 def read_job_page(db: Session, ctx: AuthContext, event_id: str, *,
