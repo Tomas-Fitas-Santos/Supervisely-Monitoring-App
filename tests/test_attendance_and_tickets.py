@@ -112,9 +112,10 @@ def test_staff_can_be_organiser_and_monitor_without_second_account(setup):
         )) is not None
 
 
-def test_reception_check_in_is_idempotent_and_reversible(setup):
+def test_reception_check_in_is_idempotent_and_reversible(setup, verify_participants):
     client, maker, csrf, _staff_id = setup
-    pid = new_person(client, csrf, "arrival@example.org")
+    pid = new_person(client, csrf, "arrival@example.org", "Robins")
+    verify_participants(maker, pid)
     summary = client.get("/api/v1/attendance/summary").json()
     assert summary["registered"] == 1
     assert summary["present"] == 0
@@ -141,16 +142,17 @@ def test_reception_check_in_is_idempotent_and_reversible(setup):
         assert len(events) == 2
 
 
-def test_ticket_preview_is_snapshot_and_confirmation_is_idempotent(setup):
+def test_ticket_preview_is_snapshot_and_confirmation_is_idempotent(setup, verify_participants):
     client, maker, csrf, _staff_id = setup
     a = new_person(client, csrf, "a@example.org", "Team One")
     b = new_person(client, csrf, "b@example.org", "Team One")
     category = new_category(client, csrf)
-    client.post("/api/v1/attendance/"+a+"/check-in", headers={"X-CSRF-Token": csrf}, json={"table_number": 18})
+    verify_participants(maker, a, b)
+    assert client.post("/api/v1/attendance/"+a+"/check-in", headers={"X-CSRF-Token": csrf}).status_code == 200
     first = preview(client, csrf, category, scope="all_checked_in")
     assert first["count"] == 1
     assert first["recipients"][0]["id"] == a
-    client.post("/api/v1/attendance/"+b+"/check-in", headers={"X-CSRF-Token": csrf})
+    assert client.post("/api/v1/attendance/"+b+"/check-in", headers={"X-CSRF-Token": csrf}).status_code == 200
     assert confirm(client, csrf, first["id"]).status_code == 200
     retry = confirm(client, csrf, first["id"])
     assert retry.status_code == 200

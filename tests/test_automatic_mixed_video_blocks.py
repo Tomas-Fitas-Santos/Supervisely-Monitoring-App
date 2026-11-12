@@ -101,6 +101,7 @@ def test_automatic_30_frame_stream_crosses_video_boundary_and_keeps_final_tail(d
         person.supervisely_user_id = 987654
         person.supervisely_role = "annotator"
         person.native_verified_at = 1
+        person.check_in_at = 1
         team_id, person_id = team.id, person.id
 
     jobs = []

@@ -119,9 +119,10 @@ def test_events_separate_people_teams_and_categories(user):
         assert {p.event_id for p in people} == {DEFAULT_EVENT_ID, second_event_id}
 
 
-def test_archive_enforces_read_only_and_can_reopen(user):
-    http, _, csrf = user
+def test_archive_enforces_read_only_and_can_reopen(user, verify_participants):
+    http, dbmaker, csrf = user
     pid = add_person(http, csrf, "archive@example.org")
+    verify_participants(dbmaker, pid)
     archived = mutation(http, csrf, "/events/" + DEFAULT_EVENT_ID + "/archive", {
         "confirmation": "Initial Event"
     })
@@ -139,15 +140,17 @@ def test_archive_enforces_read_only_and_can_reopen(user):
         "confirmation": "Initial Event"
     })
     assert reopen.status_code == 200
-    assert mutation(http, csrf, "/attendance/" + pid + "/check-in", {"table_number": 7}).status_code == 200
+    assert mutation(http, csrf, "/attendance/" + pid + "/check-in").status_code == 200
 
 
-def test_selective_reset_is_audited_snapshot_export_and_zeroed_ledger(user):
+def test_selective_reset_is_audited_snapshot_export_and_zeroed_ledger(user, verify_participants):
     http, dbmaker, csrf = user
     person_id = add_person(http, csrf, "ticket@example.org")
-    assert mutation(http, csrf, "/attendance/" + person_id + "/check-in", {"table_number": 7}).status_code == 200
+    verify_participants(dbmaker, person_id)
+    assert mutation(http, csrf, "/attendance/" + person_id + "/check-in").status_code == 200
+    invited_id = add_person(http, csrf, "invited@example.org")
     assert mutation(http, csrf, "/people/invitations-reported", {
-        "person_ids": [person_id]
+        "person_ids": [invited_id]
     }).status_code == 200
     # Initial test fixture has no migration seed; create a custom ticket category.
     new_cat = mutation(http, csrf, "/tickets/categories", {
@@ -156,7 +159,7 @@ def test_selective_reset_is_audited_snapshot_export_and_zeroed_ledger(user):
     assert new_cat.status_code == 201
     issue(http, csrf, new_cat.json()["id"], [person_id])
     plan = make_plan(http, csrf, "selected", ["attendance", "invitations", "tickets"])
-    assert plan["counts"]["people"] == 1
+    assert plan["counts"]["people"] == 2
     assert plan["counts"]["checked_in"] == 1
     assert plan["counts"]["ticket_ledger_entries"] == 2
     assert mutation(http, csrf, "/events/resets/" + plan["plan_id"] + "/execute", {
@@ -168,7 +171,9 @@ def test_selective_reset_is_audited_snapshot_export_and_zeroed_ledger(user):
     assert reset.status_code == 200, reset.text
     assert reset.json()["mode"] == "selected"
     assert http.get("/api/v1/attendance/summary").json()["present"] == 0
-    assert http.get("/api/v1/people").json()["items"][0]["membership_status"] == "not_invited"
+    people = {person["id"]: person for person in http.get("/api/v1/people").json()["items"]}
+    assert people[invited_id]["membership_status"] == "not_invited"
+    assert people[person_id]["membership_status"] == "joined"
     balance = http.get("/api/v1/tickets/balances").json()["items"][0]
     assert (balance["allocated"], balance["issued"], balance["redeemed"]) == (0, 0, 0)
     snapshot_id = reset.json()["snapshot_id"]
@@ -176,8 +181,8 @@ def test_selective_reset_is_audited_snapshot_export_and_zeroed_ledger(user):
         "/api/v1/events/" + DEFAULT_EVENT_ID + "/snapshots/" + snapshot_id
     )
     assert export.status_code == 200
-    assert export.json()["records"]["people"][0]["check_in_at"] is not None
-    assert export.json()["records"]["people"][0]["email"] == "ticket@example.org"
+    participant = next(p for p in export.json()["records"]["people"] if p["email"] == "ticket@example.org")
+    assert participant["check_in_at"] is not None
     with dbmaker() as db:
         ledger = list(db.scalars(select(TicketLedgerEntry).where(
             TicketLedgerEntry.event_id == DEFAULT_EVENT_ID

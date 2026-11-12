@@ -40,7 +40,8 @@ def test_distinct_claims_and_duplicate_person_requests():
             db.add(m.Person(id=f"person-{suffix}-{i}", team_id=f"team-{suffix}-{i // 2}",
                             name=f"Person {i}", email=f"{i}@example.test", event_id=event,
                             kind="participant", membership_status="joined", supervisely_user_id=i + 1,
-                            supervisely_role="annotator", native_verified_at=1))
+                            supervisely_role="annotator", native_verified_at=1,
+                            check_in_at=None if i == 1 else 1))
         for i in range(3):
             ids = [f"frame-{30 * i + j}" for j in range(30)]
             db.add_all(m.MediaAsset(
@@ -51,6 +52,8 @@ def test_distinct_claims_and_duplicate_person_requests():
             ) for j, mid in enumerate(ids))
             db.add(m.WorkBlock(event_id=event, plan_id=plan, video_id=video, ordinal=i + 1,
                                frame_count=len(ids), media_ids=ids, repeat_media_ids=[]))
+    with Session(engine) as db, db.begin():
+        assert claim_primary_block(db, plan, f"team-{suffix}-0", f"person-{suffix}-1") is None
     barrier = Barrier(4)
 
     def claim(i):
@@ -91,11 +94,8 @@ def test_distinct_claims_and_duplicate_person_requests():
                              images_count=30, finished_images_count=15)
     api = SimpleNamespace(labeling_job=SimpleNamespace(get_info_by_id=lambda _: native))
     with Session(engine) as db:
-        # Keep the fourth person unverified while testing that the incomplete
-        # packet alone cannot claim the available block.
-        other = db.get(m.Person, f"person-{suffix}-1")
-        other.membership_status = "not_invited"
-        db.commit()
+        # The fourth participant is still absent while the incomplete packet
+        # holds the original assignment.
         assert sync_all(db, api, m.SuperviselyConfig())["pending_operations"] == 0
         assert db.get(m.WorkPacket, job_id).submitted_at is None
         incomplete = db.get(m.LabelingJob, job_id)
@@ -117,7 +117,7 @@ def test_distinct_claims_and_duplicate_person_requests():
         # Incomplete frames cannot be claimed for quality review or release
         # another job. Simulate the durable restart worker succeeding before
         # submitting the corrected full 30-frame native job.
-        # The unrelated teammate stays unverified so only this annotator
+        # The unrelated teammate stays absent so only this annotator
         # can claim the next block once their original packet is accepted.
         incomplete.status = "in_progress"
         incomplete.review_status = "unreviewed"

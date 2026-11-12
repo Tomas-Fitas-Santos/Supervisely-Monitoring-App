@@ -43,7 +43,7 @@ def reception(monkeypatch):
             "email": "desk@example.org", "password": "SecureReceptionPassword!",
         })
         assert login.status_code == 200
-        yield client, login.json()["csrf_token"]
+        yield client, login.json()["csrf_token"], maker
     app.dependency_overrides.clear()
     engine.dispose()
 
@@ -53,8 +53,8 @@ def post(client, csrf, path, payload=None, method="POST"):
                           headers={"X-CSRF-Token": csrf})
 
 
-def test_first_arrival_sets_team_table_partner_inherits_without_reentry(reception):
-    client, csrf = reception
+def test_check_in_without_table_then_assign_shared_table(reception, verify_participants):
+    client, csrf, maker = reception
     ids = []
     for n in ["Anna", "Ben"]:
         person = post(client, csrf, "/people", {
@@ -63,12 +63,13 @@ def test_first_arrival_sets_team_table_partner_inherits_without_reentry(receptio
         })
         assert person.status_code == 201
         ids.append(person.json()["id"])
-    first_attempt = post(client, csrf, "/attendance/"+ids[0]+"/check-in")
-    assert first_attempt.status_code == 422
-    first = post(client, csrf, "/attendance/"+ids[0]+"/check-in",
-                 {"table_number": 42})
+    verify_participants(maker, *ids)
+    first = post(client, csrf, "/attendance/"+ids[0]+"/check-in")
     assert first.status_code == 200, first.text
-    assert first.json()["table_number"] == 42
+    assert first.json()["table_number"] is None
+    team_id = first.json()["team_id"]
+    assignment = post(client, csrf, f"/attendance/teams/{team_id}/table", {"table_number": 42}, "PUT")
+    assert assignment.status_code == 200, assignment.text
     partner = post(client, csrf, "/attendance/"+ids[1]+"/check-in")
     assert partner.status_code == 200
     assert partner.json()["table_number"] == 42
@@ -93,8 +94,8 @@ def test_first_arrival_sets_team_table_partner_inherits_without_reentry(receptio
     assert all(p["check_in_at"] is None and p["table_number"] is None for p in new)
 
 
-def test_cannot_change_team_table_by_checking_in_partner(reception):
-    client, csrf = reception
+def test_cannot_change_team_table_by_checking_in_partner(reception, verify_participants):
+    client, csrf, maker = reception
     ids = []
     for name in ["A", "B"]:
         out = post(client, csrf, "/people", {
@@ -102,17 +103,19 @@ def test_cannot_change_team_table_by_checking_in_partner(reception):
             "team_name": "Ducks",
         })
         ids.append(out.json()["id"])
-    assert post(client, csrf, "/attendance/"+ids[0]+"/check-in",
-                {"table_number": 17}).status_code == 200
-    conflicting = post(client, csrf, "/attendance/"+ids[1]+"/check-in",
-                       {"table_number": 25})
-    assert conflicting.status_code == 409
-    assert client.get("/api/v1/attendance/summary").json()["present"] == 1
-    assert post(client, csrf, "/attendance/"+ids[1]+"/check-in").status_code == 200
+    verify_participants(maker, *ids)
+    first = post(client, csrf, "/attendance/"+ids[0]+"/check-in")
+    assert first.status_code == 200
+    team_id = first.json()["team_id"]
+    assert post(client, csrf, f"/attendance/teams/{team_id}/table", {"table_number": 17}, "PUT").status_code == 200
+    partner = post(client, csrf, "/attendance/"+ids[1]+"/check-in", {"table_number": 25})
+    assert partner.status_code == 200
+    assert partner.json()["table_number"] == 17
+    assert client.get("/api/v1/attendance/summary").json()["present"] == 2
 
 
-def test_checkout_clears_table_only_after_last_participant_leaves(reception):
-    client, csrf = reception
+def test_checkout_preserves_table_after_last_participant_leaves(reception, verify_participants):
+    client, csrf, maker = reception
     ids = []
     for name in ("Ava", "Bea"):
         created = post(client, csrf, "/people", {
@@ -121,8 +124,11 @@ def test_checkout_clears_table_only_after_last_participant_leaves(reception):
         })
         assert created.status_code == 201
         ids.append(created.json()["id"])
-    assert post(client, csrf, "/attendance/"+ids[0]+"/check-in",
-                {"table_number": 12}).status_code == 200
+    verify_participants(maker, *ids)
+    arrival = post(client, csrf, "/attendance/"+ids[0]+"/check-in")
+    assert arrival.status_code == 200
+    team_id = arrival.json()["team_id"]
+    assert post(client, csrf, f"/attendance/teams/{team_id}/table", {"table_number": 12}, "PUT").status_code == 200
     assert post(client, csrf, "/attendance/"+ids[1]+"/check-in").status_code == 200
 
     first = post(client, csrf, "/attendance/"+ids[0]+"/reverse")
@@ -133,18 +139,17 @@ def test_checkout_clears_table_only_after_last_participant_leaves(reception):
 
     last = post(client, csrf, "/attendance/"+ids[1]+"/reverse")
     assert last.status_code == 200
-    assert last.json()["table_number"] is None
+    assert last.json()["table_number"] == 12
     people = {p["id"]: p for p in client.get("/api/v1/people").json()["items"]}
-    assert all(people[pid]["table_number"] is None for pid in ids)
+    assert all(people[pid]["table_number"] == 12 for pid in ids)
+    assert all(people[pid]["check_in_at"] is None for pid in ids)
+    later = post(client, csrf, "/attendance/"+ids[0]+"/check-in")
+    assert later.status_code == 200
+    assert later.json()["table_number"] == 12
 
-    # A later arrival must explicitly select a table again.
-    assert post(client, csrf, "/attendance/"+ids[0]+"/check-in").status_code == 422
-    assert post(client, csrf, "/attendance/"+ids[0]+"/check-in",
-                {"table_number": 14}).status_code == 200
 
-
-def test_monitor_staff_can_check_in_participants_but_not_monitors(reception):
-    client, csrf = reception
+def test_monitor_staff_can_check_in_participants_but_not_monitors(reception, verify_participants):
+    client, csrf, maker = reception
     participant = post(client, csrf, "/people", {
         "name": "Alice", "email": "alice@example.org",
         "kind": "participant", "team_name": "Owls",
@@ -164,8 +169,12 @@ def test_monitor_staff_can_check_in_participants_but_not_monitors(reception):
     })
     assert logged_in.status_code == 200
     monitor_csrf = logged_in.json()["csrf_token"]
-    checked = post(client, monitor_csrf, "/attendance/"+participant+"/check-in",
-                   {"table_number": 21})
+    path = "/attendance/"+participant+"/check-in"
+    unverified = post(client, monitor_csrf, path)
+    assert unverified.status_code == 409
+    assert "Supervisely" in unverified.json()["detail"]
+    verify_participants(maker, participant)
+    checked = post(client, monitor_csrf, path)
     assert checked.status_code == 200, checked.text
     assert client.get("/api/v1/attendance/summary").json() == {
         "registered": 1, "present": 1, "not_arrived": 0,
