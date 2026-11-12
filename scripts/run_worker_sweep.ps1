@@ -99,7 +99,12 @@ try {
       & docker @compose logs --no-color worker status-worker validation-worker correction-worker recovery-worker bulk-worker api db 2>&1 | Out-File (Join-Path $out "services.log") -Encoding utf8
 
       if ([int]$exitCode -ne 0) {
-        throw "Benchmark load exited with $exitCode. See $out\load.log."
+        $loadLog = Join-Path $out "load.log"
+        Write-Warning "Benchmark load failed (exit $exitCode). Last 80 log lines:"
+        if (Test-Path $loadLog) {
+          Get-Content -Path $loadLog -Tail 80 | ForEach-Object { Write-Host $_ }
+        }
+        throw "Benchmark load exited with $exitCode. See $loadLog."
       }
       & python scripts/analyze_full_benchmark.py $out
       if ($LASTEXITCODE -ne 0) { throw "Benchmark result analysis failed." }
