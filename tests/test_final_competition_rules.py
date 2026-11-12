@@ -80,6 +80,31 @@ def test_unequal_current_round_frame_reviews_allow_final_closeout(dataset_ctx):
         assert fairness["ready_for_winner"]
         assert fairness["total_reviewed_frames"] == 2
         assert fairness["total_available_frames"] == 3
+    # A native job already marked submitted must have its JSON captured
+    # before finalization. A job that is still in progress is unscored and
+    # must not indefinitely prevent the organiser closing the event.
+    with maker.begin() as db:
+        submitted = db.scalar(select(LabelingJob).where(
+            LabelingJob.event_id == DEFAULT_EVENT_ID,
+        ).order_by(LabelingJob.team_id))
+        unsynced = LabelingJob(
+            event_id=DEFAULT_EVENT_ID, dataset_id=submitted.dataset_id,
+            plan_id=submitted.plan_id, team_id=submitted.team_id,
+            assignee_person_id=submitted.assignee_person_id, sequence=2,
+            release_mode="shared_primary", media_ids=list(submitted.media_ids),
+            frame_count=1, video_count=1, morphology_counts={"bird": 1},
+            status="on_review",
+        )
+        db.add(unsynced)
+        db.flush()
+        unsynced_id = unsynced.id
+    denied = act(client, csrf, "/closeout/finalize", {
+        "confirmation": "CLOSE Initial Event",
+    })
+    assert denied.status_code == 409
+    assert "synced annotation JSON" in denied.json()["detail"]
+    with maker.begin() as db:
+        db.get(LabelingJob, unsynced_id).status = "in_progress"
     successful = act(client, csrf, "/closeout/finalize", {
         "confirmation": "CLOSE Initial Event",
     })
@@ -94,4 +119,5 @@ def test_unequal_current_round_frame_reviews_allow_final_closeout(dataset_ctx):
     assert coverage["total_reviewed_frames"] == 2
     assert sorted(item["reviewed_frames"] for item in coverage["teams"]) == [0, 1, 1]
     assert successful.json()["report"]["labeling"]["jobs_accepted"] == 3
-    assert successful.json()["report"]["labeling"]["jobs_needing_action"] == 0
+    assert successful.json()["report"]["labeling"]["jobs_needing_action"] == 1
+    assert successful.json()["report"]["closeout_readiness"]["unfinished_unscored_jobs"] == 1
