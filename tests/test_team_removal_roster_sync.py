@@ -20,9 +20,11 @@ from annotatiathon.models import (
     MonitorPairMember,
     Person,
     StaffAccount,
+    SuperviselyConfig,
     epoch,
 )
 from annotatiathon.security import password_hash
+from annotatiathon.supervisely_client import NativeMember, NativeTeamSnapshot
 
 
 @pytest.fixture
@@ -204,3 +206,46 @@ def test_team_remove_requires_organiser_and_active_event(ctx):
     assert mutate(http, csrf, f"/teams/{team_id}/remove").status_code == 409
     with maker() as db:
         assert db.get(CompetitionTeam, team_id).active
+
+
+def test_native_membership_refresh_updates_user_ids_but_preserves_local_teams(ctx, monkeypatch):
+    http, maker, csrf = ctx
+    created = mutate(http, csrf, "/people", {
+        "name": "Joined participant", "email": "joined@example.org",
+        "kind": "participant", "team_name": "Original local team",
+    })
+    assert created.status_code == 201, created.text
+    person_id = created.json()["id"]
+    team_id = created.json()["team_id"]
+    with maker.begin() as db:
+        db.add(SuperviselyConfig(
+            id=1, server_url="https://app.supervisely.com", team_id=125980,
+        ))
+    source = NativeTeamSnapshot(
+        team_id=125980, team_name="Event team", workspace_id=None,
+        account_id=100, account_login="event-owner",
+        members=(NativeMember(
+            id=98745, login="joined_native", email="joined@example.org",
+            role="annotator",
+        ),),
+    )
+    monkeypatch.setattr(
+        "annotatiathon.native_sync_api.read_team_snapshot",
+        lambda _config: source,
+    )
+    synced = mutate(http, csrf, "/people/supervisely/refresh")
+    assert synced.status_code == 200, synced.text
+    assert synced.json()["status"] == "ok"
+    person = next(p for p in http.get("/api/v1/people").json()["items"]
+                  if p["id"] == person_id)
+    assert person["membership_status"] == "joined"
+    assert person["native_verified_at"] is not None
+    assert person["supervisely_user_id"] == 98745
+    assert person["supervisely_login"] == "joined_native"
+    assert person["team_name"] == "Original local team"
+    assert person["team_id"] == team_id
+    second = mutate(http, csrf, "/people/supervisely/refresh")
+    assert second.status_code == 200
+    assert second.json()["created"] == 0
+    with maker() as db:
+        assert db.get(Person, person_id).team_id == team_id
