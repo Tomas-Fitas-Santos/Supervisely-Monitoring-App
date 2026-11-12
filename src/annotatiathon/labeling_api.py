@@ -239,7 +239,7 @@ def create_plan(
     )))
     reserved = {mid for job in prior_jobs for mid in job.media_ids}
     if payload.mode == "shared_30_v1":
-        from .work_queue import sample_repeat_frames, split_video
+        from .work_queue import split_video
 
         if reserved or payload.video_limit is not None:
             raise HTTPException(status_code=409, detail="Use an unassigned dataset without a video limit for the shared queue.")
@@ -259,13 +259,18 @@ def create_plan(
         db.flush()
         blocks = []
         for video_id, media_ids in by_video.items():
+            if len(media_ids) < 30 or len(media_ids) % 30:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Each video must contain a whole multiple of 30 frames. "
+                           "No source frames may be discarded, duplicated or mixed "
+                           "across videos without an explicit organiser decision.",
+                )
             for ordinal, block in enumerate(split_video(media_ids), start=1):
                 blocks.append(WorkBlock(
                     event_id=event.id, plan_id=plan.id, video_id=video_id, ordinal=ordinal,
                     frame_count=len(block), media_ids=block,
-                    repeat_media_ids=sample_repeat_frames(
-                        block, seed=plan.queue_seed, block_key=f"{video_id}:{ordinal}",
-                    ),
+                    repeat_media_ids=list(block),
                 ))
         db.add_all(blocks)
         summary = {"primary_blocks": len(blocks), "unique_frames": len(assets),

@@ -103,11 +103,11 @@ def test_distinct_claims_and_duplicate_person_requests():
     repeat_team = f"team-{suffix}-1"
     with Session(engine) as db, db.begin():
         for ordinal in range(5, 21):
-            frames = [f"repeat-{ordinal}-{i}" for i in range(2)]
+            frames = [f"repeat-{ordinal}-{i}" for i in range(30)]
             primary = m.LabelingJob(
                 event_id=event, plan_id=plan, dataset_id=dataset, team_id=primary_team,
                 sequence=ordinal, assignee_person_id=person, media_ids=frames,
-                frame_count=2, video_count=1, morphology_counts={"bird": 2},
+                frame_count=30, video_count=1, morphology_counts={"bird": 30},
                 release_mode="shared_primary", status="completed",
             )
             db.add(primary)
@@ -132,7 +132,7 @@ def test_distinct_claims_and_duplicate_person_requests():
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         first, second = list(pool.map(claim_repeat, [2, 3]))
-    assert sorted([len(first[1]), len(second[1])]) == [2, 30]
+    assert sorted([len(first[1]), len(second[1])]) == [30, 30]
     assert not first[1].intersection(second[1])
     with Session(engine) as db:
         assigned = db.scalars(select(m.WorkBlock).where(
@@ -142,6 +142,8 @@ def test_distinct_claims_and_duplicate_person_requests():
         packets = dict([first, second])
         for block in assigned:
             assert block.repeat_team_id == repeat_team
-            assert set(block.repeat_media_ids) <= packets[block.repeat_job_id]
+            if block.repeat_job_id is not None:
+                assert set(block.repeat_media_ids) == packets[block.repeat_job_id]
+        assert sum(block.repeat_job_id is not None for block in assigned) == 2
         assert claim_primary_block(db, plan, primary_team, person, include_repeats=True) is None
     engine.dispose()

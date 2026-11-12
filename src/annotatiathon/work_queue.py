@@ -61,21 +61,19 @@ def reserve_repeats(db: Session, plan: LabelingPlan, eligible_team_ids: list[str
 
 
 def repeat_batch(db: Session, plan_id: str, team_id: str) -> tuple[list[WorkBlock], int]:
-    blocks = db.scalars(select(WorkBlock).where(
+    # One native labeling job must contain one contiguous block of a single
+    # video. Never combine two short samples from different video sources.
+    blocks = db.scalars(select(WorkBlock).join(
+        MediaVideo, MediaVideo.id == WorkBlock.video_id,
+    ).where(
         WorkBlock.plan_id == plan_id, WorkBlock.repeat_team_id == team_id,
         WorkBlock.repeat_job_id.is_(None),
-    ).order_by(WorkBlock.id).limit(30).with_for_update(skip_locked=True, of=WorkBlock))
-    selected = []
-    count = 0
+    ).order_by(MediaVideo.video_group, WorkBlock.ordinal, WorkBlock.id)
+        .limit(100).with_for_update(skip_locked=True, of=WorkBlock))
     for block in blocks:
-        size = len(block.repeat_media_ids)
-        if not size or count + size > 30:
-            continue
-        selected.append(block)
-        count += size
-        if count == 30:
-            break
-    return selected, count
+        if len(block.repeat_media_ids) == 30 and len(block.media_ids) == 30:
+            return [block], 30
+    return [], 0
 
 
 def claim_primary_block(
@@ -87,7 +85,7 @@ def claim_primary_block(
     plan = db.scalar(select(LabelingPlan).join(Event, Event.id == LabelingPlan.event_id).where(
         LabelingPlan.id == plan_id, LabelingPlan.queue_seed.is_not(None),
         LabelingPlan.status == "running", Event.status == "active",
-    ).with_for_update(read=True, of=(Event, LabelingPlan)))
+    ).with_for_update(of=(Event, LabelingPlan)))
     if plan is None:
         return None
     team = db.scalar(select(CompetitionTeam).where(
@@ -107,19 +105,27 @@ def claim_primary_block(
         WorkPacket.submitted_at.is_(None),
     )) is not None:
         return None
-    repeats, repeat_count = repeat_batch(db, plan.id, team.id) if include_repeats else ([], 0)
-    block = None
-    if repeat_count < 30:
-        assigned = func.count(WorkBlock.job_id)
-        progress = select(
-            WorkBlock.video_id,
-            (assigned > 0).label("started"),
-            (func.count() - assigned).label("remaining"),
-        ).where(WorkBlock.plan_id == plan.id).group_by(WorkBlock.video_id).subquery()
-        block = db.scalar(select(WorkBlock).join(progress, progress.c.video_id == WorkBlock.video_id).where(
-            WorkBlock.plan_id == plan.id, WorkBlock.event_id == plan.event_id, WorkBlock.job_id.is_(None),
-        ).order_by(progress.c.started.desc(), progress.c.remaining, WorkBlock.video_id, WorkBlock.ordinal)
-            .limit(1).with_for_update(skip_locked=True, of=WorkBlock))
+    # The exclusive plan lock above serializes concurrent claims, preventing
+    # the last block of one video being skipped in favor of another video.
+    assigned = func.count(WorkBlock.job_id)
+    progress = select(
+        WorkBlock.video_id,
+        (assigned > 0).label("started"),
+    ).where(WorkBlock.plan_id == plan.id).group_by(WorkBlock.video_id).subquery()
+    block = db.scalar(select(WorkBlock).join(
+        progress, progress.c.video_id == WorkBlock.video_id,
+    ).join(MediaVideo, MediaVideo.id == WorkBlock.video_id).where(
+        WorkBlock.plan_id == plan.id, WorkBlock.event_id == plan.event_id,
+        WorkBlock.job_id.is_(None),
+    ).order_by(progress.c.started.desc(), MediaVideo.video_group,
+               WorkBlock.ordinal, WorkBlock.id).limit(1)
+        .with_for_update(of=WorkBlock))
+    if block is not None and len(block.media_ids) != 30:
+        raise ValueError("Official shared queue requires 30 consecutive frames per job")
+    repeats, repeat_count = (
+        repeat_batch(db, plan.id, team.id)
+        if block is None and include_repeats else ([], 0)
+    )
     if block is None and not repeats:
         return None
     selected = [block] if block is not None else repeats
