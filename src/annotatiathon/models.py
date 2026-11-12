@@ -383,6 +383,7 @@ class MediaDataset(Base):
     upload_kind: Mapped[str] = mapped_column(String(12))
     status: Mapped[str] = mapped_column(String(24), default="uploading")
     root_path: Mapped[str] = mapped_column(Text)
+    source_folder: Mapped[str | None] = mapped_column(String(200), nullable=True)
     source_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
     image_count: Mapped[int] = mapped_column(Integer, default=0)
     frame_count: Mapped[int] = mapped_column(Integer, default=0)
