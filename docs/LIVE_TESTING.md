@@ -79,7 +79,7 @@ will paste the shared native API token directly into Settings.
 ## 3. Launch the isolated live stack
 
 ```powershell
-docker compose --env-file .env.live -f compose.live.yaml up -d --build web
+.\scripts\deploy-live.ps1
 docker compose --env-file .env.live -f compose.live.yaml ps
 curl.exe -f http://127.0.0.1:8080/health/ready
 ```
