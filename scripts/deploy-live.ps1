@@ -40,7 +40,7 @@ try {
   # Pause native writes before the consistent PostgreSQL backup and upgrade.
   & docker compose @compose --profile native stop worker api web
   Check-LastExit "Stopping web/API/native worker"
-  & docker compose @compose up -d db
+  & docker compose @compose up -d --wait db
   Check-LastExit "Starting existing PostgreSQL service"
 
   $dbContainer = (& docker compose @compose ps -q db | Select-Object -First 1)
