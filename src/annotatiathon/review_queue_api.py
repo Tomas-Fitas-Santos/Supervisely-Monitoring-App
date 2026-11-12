@@ -27,7 +27,7 @@ from .models import (
     epoch,
     identifier,
 )
-from .scoring_api import Weights, latest_rubric
+from .scoring_api import Weights, latest_rubric, resolved_weights, score_verdict
 
 router = APIRouter(prefix="/api/v1/review-queue", tags=["frame review"])
 LEASE_SECONDS = 180
@@ -224,7 +224,7 @@ def complete(review_id: str, payload: Completion,
     if any(name not in classes for name in payload.missing_classes):
         raise HTTPException(422, "Missing items must use a known annotation class.")
     rubric = db.get(ReviewRubric, sample.rubric_id) if sample.rubric_id else None
-    weights = rubric.weights if rubric else Weights().model_dump()
+    weights = resolved_weights(rubric.weights) if rubric else Weights().model_dump()
     correct = Counter()
     errors = Counter()
     for verdict in payload.verdicts:
@@ -236,6 +236,12 @@ def complete(review_id: str, payload: Completion,
             if verdict.reason or verdict.corrected_class:
                 raise HTTPException(422, "Correct objects cannot include correction details.")
             correct[shape] += 1
+            if shape == "point":
+                # Project class identity distinguishes visible and occluded.
+                if str(obj.get("classTitle", "")).endswith("_occ"):
+                    correct["occluded_point"] += 1
+                else:
+                    correct["visible_point"] += 1
         else:
             if verdict.reason == "wrong_class":
                 if (classes.get(verdict.corrected_class) != shape
@@ -244,15 +250,17 @@ def complete(review_id: str, payload: Completion,
             elif verdict.corrected_class or (shape == "point" and not verdict.reason):
                 raise HTTPException(422, "Invalid or missing correction reason.")
             errors[verdict.reason or "incorrect_box"] += 1
-    sample.decision = {
+    decision = {
         "verdicts": [item.model_dump() for item in payload.verdicts],
         "missing_classes": payload.missing_classes,
-        "correct_keypoints": correct["point"], "correct_boxes": correct["rectangle"],
-        "errors": dict(errors), "weighted_score": (
-            correct["point"] * weights["keypoint"] + correct["rectangle"] * weights["box"]
-            - sum(count * weights.get(reason, 0) for reason, count in errors.items())
-        ),
+        "correct_keypoints": correct["point"],
+        "correct_visible_keypoints": correct["visible_point"],
+        "correct_occluded_keypoints": correct["occluded_point"],
+        "correct_boxes": correct["rectangle"],
+        "errors": dict(errors),
     }
+    decision["weighted_score"] = score_verdict(decision, sample.snapshot, weights)
+    sample.decision = decision
     sample.completed_at = epoch()
     db.flush()
     next_review = claim(db, event.id, ctx.staff.id) if payload.action == "next" else None
