@@ -1,6 +1,6 @@
-"""Roster-only Nightjar monitor signup and separate Supervisely linking.
+"""Roster-approved Nightjar signup with private organiser codes.
 
-No SMTP, verification code, or email delivery is used by registration.
+No SMTP service or Supervisely credential is needed to create a Nightjar login.
 """
 from types import SimpleNamespace
 
@@ -69,6 +69,15 @@ def login(http, email="organiser@example.org", password="TEST_LONG_SECURE_PASSWO
     return r.json()["csrf_token"]
 
 
+def code_for(http, email):
+    csrf = login(http)
+    result = http.post("/api/v1/staff/registration-code",
+                       json={"email": email},
+                       headers={"X-CSRF-Token": csrf})
+    assert result.status_code == 200, result.text
+    return result.json()["registration_code"]
+
+
 def native_snapshot():
     return NativeTeamSnapshot(
         team_id=125980, team_name="Event Team", workspace_id=2001,
@@ -104,6 +113,7 @@ def test_monitor_signup_uses_only_approved_sql_roster_and_app_password(setup):
     created = http.post("/api/v1/auth/register", json={
         "email": "  MONITOR@example.org  ",
         "password": "SafeMonitorPassword_123!&",
+        "registration_code": code_for(http, "monitor@example.org"),
     })
     assert created.status_code == 201, created.text
     assert created.json()["registered"] is True
@@ -136,6 +146,7 @@ def test_existing_monitor_credentials_survive_roster_and_event_changes(setup):
         ))
     created = http.post("/api/v1/auth/register", json={
         "email": email, "password": password,
+        "registration_code": code_for(http, email),
     })
     assert created.status_code == 201, created.text
     with maker.begin() as db:
@@ -173,6 +184,7 @@ def test_account_claim_is_single_use_and_signup_requires_strong_password(setup):
     assert short.status_code == 422
     first = http.post("/api/v1/auth/register", json={
         "email": "claimed@example.org", "password": "S#trong&P@ssword?2026",
+        "registration_code": code_for(http, "claimed@example.org"),
     })
     assert first.status_code == 201
     again = http.post("/api/v1/auth/register", json={
@@ -192,6 +204,7 @@ def test_signup_does_not_require_supervisely_membership_before_link(setup):
         ))
     created = http.post("/api/v1/auth/register", json={
         "email": "unlinked@example.org", "password": "OnlyForNightjar123#",
+        "registration_code": code_for(http, "unlinked@example.org"),
     })
     assert created.status_code == 201, created.text
     assert login(http, "unlinked@example.org", "OnlyForNightjar123#")
@@ -330,6 +343,7 @@ def test_auto_sync_imports_participant_and_monitor_then_organiser_can_approve(
     created = http.post("/api/v1/auth/register", json={
         "email": "monitorbird@example.org",
         "password": "SafeMonitorPassword_123",
+        "registration_code": code_for(http, "monitorbird@example.org"),
     })
     assert created.status_code == 201, created.text
     participant_denied = http.post("/api/v1/auth/register", json={
@@ -361,6 +375,7 @@ def test_native_verified_manager_can_register_without_extra_approval(setup, monk
     assert entry["monitor_registration_approved"] is True
     created = http.post("/api/v1/auth/register", json={
         "email": entry["email"], "password": "PersistentNativePassword_2026!",
+        "registration_code": code_for(http, entry["email"]),
     })
     assert created.status_code == 201, created.text
     assert login(http, entry["email"], "PersistentNativePassword_2026!")
@@ -397,6 +412,7 @@ def test_signup_and_login_remain_separate_from_supervisely(setup):
     result = http.post("/api/v1/auth/register", json={
         "email": "event-monitor@example.org",
         "password": "SecureNightjarPassword2026!",
+        "registration_code": code_for(http, "event-monitor@example.org"),
     })
     assert result.status_code == 201, result.text
     assert login(http, "event-monitor@example.org", "SecureNightjarPassword2026!")
@@ -419,3 +435,34 @@ def test_no_email_verification_endpoints_or_mail_settings_are_required(setup):
         "email": "test@example.org",
     }).status_code == 404
     assert http.get("/api/v1/settings/registration-email").status_code == 404
+
+
+def test_monitor_code_cannot_be_guessed_replayed_or_issued_by_monitor(setup):
+    http, maker, _ = setup
+    email = "invite-only@example.org"
+    with maker.begin() as db:
+        db.add(Person(event_id=DEFAULT_EVENT_ID, email=email,
+                      name="Private Monitor", kind="monitor"))
+    without_code = http.post("/api/v1/auth/register", json={
+        "email": email, "password": "StrongUniquePassword_2026",
+    })
+    assert without_code.status_code == 403
+    code = code_for(http, email)
+    wrong_code = http.post("/api/v1/auth/register", json={
+        "email": email, "password": "StrongUniquePassword_2026",
+        "registration_code": "wrong-code",
+    })
+    assert wrong_code.status_code == 403
+    created = http.post("/api/v1/auth/register", json={
+        "email": email, "password": "StrongUniquePassword_2026",
+        "registration_code": code,
+    })
+    assert created.status_code == 201, created.text
+    assert http.post("/api/v1/auth/register", json={
+        "email": email, "password": "AnotherLongPassword2026",
+        "registration_code": code,
+    }).status_code == 409
+    monitor_csrf = login(http, email, "StrongUniquePassword_2026")
+    assert http.post("/api/v1/staff/registration-code", json={
+        "email": "another@example.org",
+    }, headers={"X-CSRF-Token": monitor_csrf}).status_code == 403
