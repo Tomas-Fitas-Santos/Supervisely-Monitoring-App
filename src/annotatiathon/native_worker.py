@@ -1113,9 +1113,9 @@ def process_correction_once(db: Session, api, config: SuperviselyConfig) -> dict
         # and WorkPacket remain unchanged.
         remaining = pending_ids(db, job)
         payload = op.payload or {}
-        if payload.get("pending_media_ids") is not None:
-            if remaining != payload["pending_media_ids"]:
-                raise NativeWorkerError("correction_pending_media_changed")
+        if (payload.get("pending_media_ids") is not None
+                and remaining != payload["pending_media_ids"]):
+            raise NativeWorkerError("correction_pending_media_changed")
         if not remaining:
             raise NativeWorkerError("correction_has_no_incomplete_frames")
         mappings = {m.media_id: m for m in db.scalars(select(NativeMediaInstance).where(
