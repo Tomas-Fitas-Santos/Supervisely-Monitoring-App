@@ -90,8 +90,11 @@ try {
     # pre-event media mirroring during otherwise successful deployments.
     & docker compose @compose --profile native up -d --build worker
     Check-LastExit "Starting Supervisely worker"
-    & docker compose @compose --profile native ps --status running -q worker
+    $startedWorkerIds = @(& docker compose @compose --profile native ps --status running -q worker)
     Check-LastExit "Checking restarted Supervisely worker"
+    if (@($startedWorkerIds | Where-Object { $_ }).Count -eq 0) {
+      throw "The Supervisely worker exited after deployment. Check its logs before retrying the dataset mirror."
+    }
     Write-Host "Native worker started; pending dataset replication will resume automatically."
   }
   else {
