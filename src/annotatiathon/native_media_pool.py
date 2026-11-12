@@ -8,7 +8,7 @@ from pathlib import Path
 
 from fastapi import HTTPException
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .annotation_schema import AnnotationSchemaError, ensure_project_annotation_classes
@@ -53,9 +53,9 @@ def enqueue_mirror(db: Session, ds: MediaDataset) -> NativeOperation:
 
 def mirror_status(db: Session, ds: MediaDataset) -> dict:
     total = ds.frame_count + ds.image_count
-    uploaded = sum(1 for _ in db.scalars(select(NativeSourceMedia.id).where(
+    uploaded = db.scalar(select(func.count(NativeSourceMedia.id)).where(
         NativeSourceMedia.dataset_id == ds.id,
-    )))
+    )) or 0
     operation = db.scalar(select(NativeOperation).where(
         NativeOperation.kind == "mirror_dataset",
         NativeOperation.target_id == ds.id,
