@@ -4,7 +4,7 @@ import {
   CheckCircle2, ClipboardCheck, Layers3, PlayCircle, RefreshCw,
   Send, Trash2, UsersRound, Video
 } from "lucide-react";
-import { api, refreshSuperviselyRoster, type Auth } from "./api";
+import { api, refreshSuperviselyRoster, type Auth, type Team, type TeamResponse } from "./api";
 
 type Dataset={id:string;name:string;status:string;image_count:number;
   frame_count:number;video_count:number};
@@ -53,6 +53,7 @@ export function CompetitionScreen({auth,view="progress"}:{
   const [dataset,setDataset]=useState("");
   const [plans,setPlans]=useState<Plan[]>([]);
   const [jobs,setJobs]=useState<Job[]>([]);
+  const [attendanceTeams,setAttendanceTeams]=useState<Team[]>([]);
   const [chosen,setChosen]=useState("");
   const [media,setMedia]=useState<MediaPage|null>(null);
   const [page,setPage]=useState(1);
@@ -78,12 +79,14 @@ export function CompetitionScreen({auth,view="progress"}:{
 
   const refresh=useCallback(async()=>{
     try {
-      const [ds,ps,js,ns]=await Promise.all([
+      const [ds,ps,js,ns,ts]=await Promise.all([
         api<{items:Dataset[]}>("/datasets"),
         api<{items:Plan[]}>("/labeling/plans"),
         api<{items:Job[]}>("/labeling/jobs?limit=2000"),
         api<NativeStatus>("/native/overview"),
+        api<TeamResponse>("/teams"),
       ]);
+      setAttendanceTeams(ts.teams.filter(team=>team.type==="competition"));
       setDatasets(ds.items.filter(item=>item.status==="ready"));
       setPlans(ps.items);setJobs(js.items);setNative(ns);
       setDataset(old=>ds.items.some(item=>item.id===old&&item.status==="ready")?old:
@@ -101,6 +104,10 @@ export function CompetitionScreen({auth,view="progress"}:{
     }catch(e){setError((e as Error).message);}
   },[dataset]);
   useEffect(()=>{void refresh();},[refresh]);
+  useEffect(()=>{
+    const timer=window.setInterval(()=>{if(!document.hidden)void refresh();},5000);
+    return ()=>window.clearInterval(timer);
+  },[refresh]);
   const syncAssignees=useCallback(async()=>{
     setBusy(true);setError("");
     try {
@@ -284,6 +291,24 @@ export function CompetitionScreen({auth,view="progress"}:{
       <div className="stat-card"><ClipboardCheck size={19}/><span className="muted small">Submitted / checking</span><strong>{awaiting}</strong></div>
       <div className="stat-card"><CheckCircle2 size={19}/><span className="muted small">Complete submissions</span><strong>{complete}</strong></div>
     </div>}
+    {section==="overview"&&<section className="panel">
+      <div className="panel-heading"><div><span className="eyebrow">SHARED QUEUE · TEAM READINESS</span>
+        <h3>Checked-in annotators</h3><p>Jobs start only after launch. Late arrivals appear on refresh and receive work while the queue is running.</p></div></div>
+      {attendanceTeams.filter(t=>t.checked_in>0).map(team=><div key={team.id} className="job-plan-row">
+        <strong>{team.name}</strong>
+        {team.members.filter(person=>person.check_in_at).map(person=>{
+          const assigned=jobs.filter(job=>job.assignee_person_id===person.id)
+            .sort((a,b)=>a.sequence-b.sequence);
+          const current=assigned.find(job=>["queued","publishing","in_progress","needs_correction"].includes(job.status));
+          const verified=person.supervisely_user_id!==null&&person.membership_status==="joined"&&person.native_verified_at!==null;
+          return <p key={person.id}>{person.name} · Supervisely {person.supervisely_user_id??"None"} · {verified?
+            current?"Job "+(assigned.indexOf(current)+1)+" · "+current.status:
+              assigned.length?assigned.length+" assigned · waiting for next job":"Ready · waiting for launch or block":
+            "Supervisely membership not verified"}</p>;
+        })}
+      </div>)}
+      {!attendanceTeams.some(t=>t.checked_in>0)&&<p className="muted">No participants checked in yet.</p>}
+    </section>}
 
     {admin&&view==="setup"&&section==="manual"&&<section className="panel manual-job-panel">
       <button className="btn secondary" disabled={busy} onClick={()=>void syncAssignees()}>

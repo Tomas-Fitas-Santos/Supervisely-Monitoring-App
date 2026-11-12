@@ -5,10 +5,10 @@ import {
   CheckCircle2, Clock3, RefreshCw, Search, Undo2, UserRoundCheck,
   UsersRound, X
 } from "lucide-react";
-import { api, refreshSuperviselyRoster, type Auth, type Person, type PeopleResponse } from "./api";
+import { api, refreshSuperviselyRoster, type Auth, type Person, type PeopleResponse, type Team, type TeamResponse } from "./api";
+import { useTableSort } from "./table_sort";
 
 type Summary={registered:number;present:number;not_arrived:number};
-type TableDialog={person:Person;mode:"assign"|"edit"};
 
 export function AttendanceScreen({auth}:{auth:Auth}) {
   const organiser=auth.staff.roles.includes("organiser");
@@ -16,24 +16,30 @@ export function AttendanceScreen({auth}:{auth:Auth}) {
   const [search,setSearch]=useState("");
   const [filter,setFilter]=useState<"all"|"present"|"missing">("all");
   const [page,setPage]=useState(1);
+  const peopleSort=useTableSort(()=>setPage(1));
+  const teamSort=useTableSort();
+  const sortQuery=peopleSort.query;
   const [people,setPeople]=useState<PeopleResponse>({items:[],total:0,page:1,size:100});
   const [summary,setSummary]=useState<Summary|null>(null);
   const [error,setError]=useState("");
   const [notice,setNotice]=useState("");
   const [working,setWorking]=useState<string|null>(null);
-  const [tableDialog,setTableDialog]=useState<TableDialog|null>(null);
+  const [section,setSection]=useState<"checkin"|"tables">("checkin");
+  const [teams,setTeams]=useState<Team[]>([]);
+  const [tableDialog,setTableDialog]=useState<Team|null>(null);
   const [tableInput,setTableInput]=useState("");
 
   const refresh=useCallback(async()=>{
     try{
-      const [roster,counts]=await Promise.all([
+      const [roster,counts,grouped]=await Promise.all([
         api<PeopleResponse>("/people?kind=participant&search="+encodeURIComponent(search)+
-          "&attendance="+filter+"&page="+page+"&size=100"),
-        api<Summary>("/attendance/summary")
+          "&attendance="+filter+"&page="+page+"&size=100"+sortQuery),
+        api<Summary>("/attendance/summary"),
+        api<TeamResponse>("/teams")
       ]);
-      setPeople(roster);setSummary(counts);setError("");
+      setPeople(roster);setSummary(counts);setTeams(grouped.teams.filter(t=>t.type==="competition"));setError("");
     }catch(e){setError((e as Error).message);}
-  },[search,page,filter]);
+  },[search,page,filter,sortQuery]);
 
   useEffect(()=>{
     void refresh();
@@ -54,26 +60,23 @@ export function AttendanceScreen({auth}:{auth:Auth}) {
     }catch(e){setError("Supervisely sync: "+(e as Error).message);}
   }
 
-  function openTable(person:Person,mode:TableDialog["mode"]){
-    setTableDialog({person,mode});
-    setTableInput(person.table_number?String(person.table_number):"");
+  function openTable(team:Team){
+    setTableDialog(team);
+    setTableInput(team.table_number?String(team.table_number):"");
     setError("");
   }
 
-  async function applyAttendance(person:Person,checkOut:boolean,tableNumber?:number):Promise<boolean>{
+  async function applyAttendance(person:Person,checkOut:boolean):Promise<boolean>{
     if(!allowed||working!==null)return false;
     setWorking(person.id);setError("");setNotice("");
     try{
       const result=await api<{changed:boolean;table_number:number|null}>(
         "/attendance/"+person.id+"/"+(checkOut?"reverse":"check-in"),
-        "POST",checkOut?undefined:{table_number:tableNumber??person.table_number},
+        "POST",undefined,
         auth.csrf_token
       );
       setNotice(!result.changed?"Attendance was already up to date.":
-        checkOut?(result.table_number===null?
-          person.name+" checked out. The unused table assignment was cleared.":
-          person.name+" checked out. The teammate's table remains assigned."):
-          person.name+" checked in at table "+result.table_number+".");
+        checkOut?person.name+" checked out.":person.name+" checked in.");
       await refresh();
       return true;
     }catch(e){setError((e as Error).message);return false;}
@@ -83,29 +86,22 @@ export function AttendanceScreen({auth}:{auth:Auth}) {
   async function checkInOrOut(person:Person){
     if(!allowed||working!==null)return;
     if(person.check_in_at){await applyAttendance(person,true);return;}
-    if(person.table_number===null){openTable(person,"assign");return;}
     await applyAttendance(person,false);
   }
 
   async function submitTable(e:React.FormEvent<HTMLFormElement>){
     e.preventDefault();
     if(!tableDialog||working!==null)return;
-    const number=Number(tableInput.trim());
-    if(!Number.isInteger(number)||number<1||number>10000){
+    const number=tableInput.trim()===""?null:Number(tableInput.trim());
+    if(number!==null&&(!Number.isInteger(number)||number<1||number>10000)){
       setError("Enter a whole-number table between 1 and 10000.");
       return;
     }
-    const {person,mode}=tableDialog;
-    if(mode==="assign"){
-      if(await applyAttendance(person,false,number))setTableDialog(null);
-      return;
-    }
-    if(!person.team_id)return;
-    setWorking(person.id);setError("");setNotice("");
+    setWorking(tableDialog.id);setError("");setNotice("");
     try{
-      await api("/attendance/teams/"+person.team_id+"/table",
+      await api("/attendance/teams/"+tableDialog.id+"/table",
         "PUT",{table_number:number},auth.csrf_token);
-      setNotice("Table updated to "+number+" for "+(person.team_name||person.name)+".");
+      setNotice("Table updated for "+tableDialog.name+".");
       setTableDialog(null);
       await refresh();
     }catch(err){setError((err as Error).message);}
@@ -117,8 +113,7 @@ export function AttendanceScreen({auth}:{auth:Auth}) {
     <div className="page-heading"><div>
       <span className="eyebrow">EVENT OPERATIONS · ADMISSION</span>
       <h2>Attendance & Check-in</h2>
-      <p className="muted">Participants only. Check in directly when a team table is known;
-        teammates inherit the assigned table. Check-out is one click.</p>
+      <p className="muted">Check in verified participants with one click. Assign team tables separately.</p>
     </div><div className="heading-actions">
       <button className="btn secondary" onClick={()=>void refresh()}>
         <RefreshCw size={15}/> Refresh check-in list</button>
@@ -134,10 +129,26 @@ export function AttendanceScreen({auth}:{auth:Auth}) {
       <div className="stat-card"><Clock3 size={20}/><span className="muted small">Not arrived</span><strong>{summary?.not_arrived??"—"}</strong></div>
     </div>
 
-    <section className="panel table-panel">
+    <nav className="workspace-subtabs" aria-label="Attendance sections">
+      <button className={section==="checkin"?"active":""} onClick={()=>setSection("checkin")}>Check-in</button>
+      <button className={section==="tables"?"active":""} onClick={()=>setSection("tables")}>Table assignment</button>
+    </nav>
+    {section==="tables"&&<section className="panel table-panel"><div className="table-scroll"><table className="data-table">
+      <thead><tr>{teamSort.header("name","Team")}{teamSort.header("members","Checked-in members")}
+        {teamSort.header("table","Table")}<th>Action</th></tr></thead>
+      <tbody>{teamSort.rows(teams.filter(t=>t.checked_in>0),(team,key)=>
+        key==="name"?team.name:key==="table"?team.table_number:
+          team.members.filter(p=>p.check_in_at).map(p=>p.name).join(", ")
+      ).map(team=><tr key={team.id}>
+        <td><strong>{team.name}</strong></td>
+        <td>{team.members.filter(p=>p.check_in_at).map(p=>p.name).join(", ")}</td>
+        <td>{team.table_number?"Table "+team.table_number:"Unassigned"}</td>
+        <td>{allowed&&<button className="btn secondary" disabled={working!==null} onClick={()=>openTable(team)}>Assign / change</button>}</td>
+      </tr>)}</tbody></table></div></section>}
+    {section==="checkin"&&<section className="panel table-panel">
       <div className="panel-header-line">
-        <div className="search-box"><Search size={17}/><input aria-label="Find participants"
-          placeholder="Search participant name or email" value={search}
+        <div className="search-box"><Search size={17}/><input aria-label="Find participants by name, email or team"
+          placeholder="Search name, email or team" value={search}
           onChange={e=>{setSearch(e.target.value);setPage(1);}}/></div>
         <div className="segmented">
           {([["all","All"],["present","Present"],["missing","Not arrived"]] as const).map(([k,v])=>
@@ -146,16 +157,20 @@ export function AttendanceScreen({auth}:{auth:Auth}) {
         </div>
       </div>
       <div className="table-scroll"><table className="data-table">
-        <thead><tr><th>Participant</th><th>Team</th><th>Table</th><th>Arrival</th><th>Action</th></tr></thead>
+        <thead><tr>{peopleSort.header("name","Participant")}{peopleSort.header("team_name","Team")}
+          {peopleSort.header("supervisely_user_id","Supervisely ID")}{peopleSort.header("table_number","Table")}
+          {peopleSort.header("check_in_at","Arrival")}<th>Action</th></tr></thead>
         <tbody>{rows.map(person=><tr key={person.id}>
           <td><div className="person-name"><div className="mini-avatar">{person.name[0]?.toUpperCase()}</div>
             <div><strong>{person.name}</strong><span>{person.email}</span></div></div></td>
           <td>{person.team_name||"—"}</td>
+          <td>{person.supervisely_user_id===null?<strong style={{color:"#b42318"}}>None</strong>:
+            <>{person.supervisely_user_id}{person.membership_status!=="joined"||!person.native_verified_at?
+              <span className="membership"> Not verified</span>:null}</>}</td>
           <td>{person.table_number?
             <strong>Table {person.table_number}</strong>:
             <span className="muted small">Unassigned</span>}
-            {allowed&&person.team_id&&<button className="link-button"
-              disabled={working!==null} onClick={()=>openTable(person,"edit")}>Edit</button>}</td>
+          </td>
           <td>{person.check_in_at?
             <span className="membership joined"><CheckCircle2 size={12}/>
               {formatLisbonTime(person.check_in_at)}</span>:
@@ -174,24 +189,20 @@ export function AttendanceScreen({auth}:{auth:Auth}) {
         <button className="btn secondary" disabled={page*100>=people.total}
           onClick={()=>setPage(v=>v+1)}>Next</button>
       </div>
-    </section>
+    </section>}
 
     {tableDialog&&<div className="modal-overlay" role="presentation">
       <form className="modal-card" role="dialog" aria-modal="true"
         aria-labelledby="attendance-table-title" onSubmit={e=>void submitTable(e)}>
         <div className="modal-heading">
-          <h3 id="attendance-table-title">{tableDialog.mode==="assign"?
-            "Assign table & check in":"Edit team table"}</h3>
+          <h3 id="attendance-table-title">Assign team table</h3>
           <button type="button" className="icon-button" aria-label="Close dialog"
             disabled={working!==null} onClick={()=>setTableDialog(null)}><X size={19}/></button>
         </div>
-        <p className="muted">Participant: <strong>{tableDialog.person.name}</strong>.
-          {tableDialog.person.team_name?
-            " The table is shared with "+tableDialog.person.team_name+".":
-            " Set the table for this participant."}</p>
+        <p className="muted">Team: <strong>{tableDialog.name}</strong>. Leave blank to clear the table.</p>
         <label>Table number
           <input type="number" inputMode="numeric" min={1} max={10000}
-            required autoFocus value={tableInput}
+            autoFocus value={tableInput}
             onChange={e=>setTableInput(e.target.value)}/>
         </label>
         {error&&<p className="alert danger" role="alert">{error}</p>}
@@ -199,7 +210,7 @@ export function AttendanceScreen({auth}:{auth:Auth}) {
           <button className="btn secondary" type="button" disabled={working!==null}
             onClick={()=>setTableDialog(null)}>Cancel</button>
           <button className="btn primary" type="submit" disabled={working!==null}>
-            {working?"Saving…":tableDialog.mode==="assign"?"Assign & check in":"Save table"}
+            {working?"Saving…":"Save table"}
           </button>
         </div>
       </form>

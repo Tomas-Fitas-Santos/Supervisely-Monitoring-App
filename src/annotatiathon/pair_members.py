@@ -22,8 +22,8 @@ def pair_members(db: Session, event_id: str, team_id: str) -> tuple[list[Person]
         Person.kind == "monitor",
         Person.active.is_(True),
     ).order_by(Person.id)))
-    # Mixed types and more/less than two are invalid; do not silently drop members.
-    if len(participants) == 2 and not monitor_rows:
+    # Competition teams may have one or two participants.
+    if 1 <= len(participants) <= 2 and not monitor_rows:
         return participants, "participants"
     if len(monitor_rows) == 2 and not participants:
         return monitor_rows, "monitor_pair"

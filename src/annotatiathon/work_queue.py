@@ -99,7 +99,8 @@ def claim_primary_block(
         Person.id == person_id, Person.event_id == plan.event_id, Person.active.is_(True),
     ).with_for_update().execution_options(populate_existing=True))
     members, _ = pair_members(db, plan.event_id, team.id)
-    if person not in members or not native_identity_assignable(person):
+    if (person not in members or person.check_in_at is None
+            or not native_identity_assignable(person)):
         return None
     if db.scalar(select(WorkPacket.job_id).where(
         WorkPacket.event_id == plan.event_id, WorkPacket.person_id == person.id,

@@ -16,8 +16,8 @@ Professional browser login; organiser, monitor, reception, activity, distributio
 - Configuration can be saved independently of roster, media and competition setup. Missing credentials do not block logistics; Supervisely-dependent actions show what still needs configuration.
 
 ## Logistics (agreed)
-- Roster CSV import populates PostgreSQL. Edit, add, deactivate and search participants/monitors. Teams have two participants; monitors are pinned first in team views. Sorting includes names and check-in order.
-- Reception uses name/email/team lookup; staff confirms identity and enters the first member’s team table number. The partner automatically inherits the same table. No QR scan or Supervisely ID capture at entry. Duplicate check-ins do not duplicate attendance.
+- Roster CSV import populates PostgreSQL. Edit, add, deactivate and search participants/monitors. Named competition teams have one or two participants; monitors are pinned first in team views. Sorting includes names and check-in order.
+- Reception uses name/email/team lookup; staff confirms identity and checks in a participant with verified Supervisely membership in one click. A separate table-assignment view assigns a table to the whole checked-in team. The check-in list shows the linked Supervisely ID or a red **None** when missing. Duplicate check-ins do not duplicate attendance.
 - Ticket categories start with pizza, drinks and massage, and are organiser-configurable. Awarded/allocated, physically issued and redeemed must be distinct. A participant's history links each action to its source and staff actor.
 - Issue/grant to one person, selected people, teams, filtered groups, all checked-in people or everyone. Bulk operations have immutable recipient snapshots, a preview and idempotent batch execution.
 - Soft warnings only, never hard blocking. Defaults: warn when a new issuance exceeds 2 pizza tickets in the rolling last 60 minutes or exceeds 3 drink tickets in the same window. All thresholds, time windows, enabled states and categories are configurable. Massage has no default alert.

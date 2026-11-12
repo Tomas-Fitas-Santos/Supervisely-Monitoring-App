@@ -117,7 +117,7 @@ def manual_options(
              "members": [{"id": p.id, "name": p.name,
                           "native_ready": native_identity_assignable(p)}
                          for p in members]}
-            for team_id, members in teams.items() if len(members) == 2
+            for team_id, members in teams.items() if members
         ],
         "videos": [
             {"video_group": group, "frames": len(frames),
@@ -213,8 +213,8 @@ def create_manual_jobs(
                     status_code=422, detail="Choose an existing consecutive 30-frame segment.",
                 )
         members = teams.get(assignment.team_id, [])
-        if len(members) != 2:
-            raise HTTPException(status_code=422, detail="Selected team needs exactly two members.")
+        if not members:
+            raise HTTPException(status_code=422, detail="Selected team needs one or two members.")
         person = next((p for p in members if p.id == assignment.assignee_person_id), None)
         if person is None:
             raise HTTPException(status_code=422, detail="Assignee is not a member of the selected team.")

@@ -1,3 +1,4 @@
+import { useTableSort } from "./table_sort";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CheckCircle2, ChevronRight, ClipboardCheck, PauseCircle, PlayCircle,
@@ -42,6 +43,7 @@ export function SharedReviewScreen({auth}:{auth:Auth}){
   const activeClaimRef=useRef<ReviewClaim|null>(null);
   const [status,setStatus]=useState<QueueStatus|null>(null);
   const [rankings,setRankings]=useState<Ranking[]>([]);
+  const rankingSort=useTableSort();
   const [verdicts,setVerdicts]=useState<Record<number,VerdictDraft>>({});
   const [missingClasses,setMissingClasses]=useState<string[]>([]);
   const [zoom,setZoom]=useState(1);
@@ -363,12 +365,24 @@ export function SharedReviewScreen({auth}:{auth:Auth}){
       </div><button className="btn secondary" onClick={()=>void refreshRankings()}>
         <RefreshCw size={15}/> Update</button></div>
       <div className="table-scroll"><table className="data-table">
-        <thead><tr><th>Rank</th><th>Team</th><th>Correct visible keypoints</th>
-          <th>Correct occluded keypoints</th><th>Correct boxes</th><th>Raw correct annotations</th>
-          <th>Reviewed / Submitted</th><th>Coverage</th><th>Submission share</th><th>Review share</th>
-          <th>Average / 5</th><th>Errors (class / placement / sabotage)</th>
-          <th>Estimated points</th></tr></thead>
-        <tbody>{rankings.map(team=><tr key={team.team_id}>
+        <thead><tr>
+            {rankingSort.header("rank","Rank")}
+            {rankingSort.header("team_name","Team")}
+            {rankingSort.header("correct_visible_keypoints","Correct visible keypoints")}
+            {rankingSort.header("correct_occluded_keypoints","Correct occluded keypoints")}
+            {rankingSort.header("correct_boxes","Correct boxes")}
+            {rankingSort.header("correct_objects","Raw correct annotations")}
+            {rankingSort.header("reviewed_frames","Reviewed / Submitted")}
+            {rankingSort.header("coverage_pct","Coverage")}
+            {rankingSort.header("submission_share_pct","Submission share")}
+            {rankingSort.header("review_share_pct","Review share")}
+            {rankingSort.header("average_frame_points","Average / 5")}
+            {rankingSort.header("errors","Errors (class / placement / sabotage)")}
+            {rankingSort.header("estimated_points","Estimated points")}
+          </tr></thead>
+        <tbody>{rankingSort.rows(rankings,(team,key)=>key==="errors"
+            ? (team.errors?.wrong_class??0)+(team.errors?.wrong_placement??0)+(team.errors?.sabotage??0)
+            : team[key as keyof Omit<typeof team,"errors">]).map(team=><tr key={team.team_id}>
           <td><strong>{team.rank===null?"—":"#"+team.rank}</strong></td><td><strong>{team.team_name}</strong></td>
           <td>{fmt(team.correct_visible_keypoints)}</td>
           <td>{fmt(team.correct_occluded_keypoints)}</td>

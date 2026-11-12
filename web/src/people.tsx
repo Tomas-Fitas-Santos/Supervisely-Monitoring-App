@@ -10,6 +10,7 @@ import { api, refreshSuperviselyRoster, type Auth, type PeopleResponse, type Per
 import { NativeMembershipPanel } from "./native";
 import { InvitationBatches } from "./invitation_batches";
 import { MonitorPairPanel } from "./monitor_pairs";
+import { useTableSort, type SortValue } from "./table_sort";
 
 type PersonForm = {name:string;email:string;kind:"participant"|"monitor";team_name:string;
   date_of_birth:string;phone:string;under_18:string;image_consent:string;
@@ -112,6 +113,9 @@ export function PeopleScreen({auth}:{auth:Auth}) {
   const [kind,setKind]=useState("all");
   const [membership,setMembership]=useState("all");
   const [page,setPage]=useState(1);
+  const rosterSort=useTableSort(()=>setPage(1));
+  const memberSort=useTableSort();
+  const sortQuery=rosterSort.query;
   const [selectedTeam,setSelectedTeam]=useState<string|null>(null);
   const [selected,setSelected]=useState<string[]>([]);
   const [showImporter,setShowImporter]=useState(false);
@@ -129,11 +133,11 @@ export function PeopleScreen({auth}:{auth:Auth}) {
       const [groups,individuals]=await Promise.all([
         api<TeamResponse>("/teams?sort="+sort),
         api<PeopleResponse>("/people?search="+encodeURIComponent(search)+
-          "&kind="+kind+"&membership="+membership+"&page="+page+"&size=50")
+          "&kind="+kind+"&membership="+membership+"&page="+page+"&size=50"+sortQuery)
       ]);
       setTeams(groups.teams);setPeople(individuals);setUpdated(new Date());setError("");
     }catch(exc){setError((exc as Error).message);}
-  },[sort,search,kind,membership,page]);
+  },[sort,search,kind,membership,page,sortQuery]);
   useEffect(()=>{
     void refresh();
     const timer=window.setInterval(()=>{if(!document.hidden)void refresh();},5000);
@@ -296,17 +300,23 @@ export function PeopleScreen({auth}:{auth:Auth}) {
     return showSensitive?(value?.trim()||"—"):"Restricted";
   }
   function peopleTable(items:Person[],selectable=true,full=true) {
+    const columnSort=full?rosterSort:memberSort;
+    const rows=full?items:memberSort.rows(items,(person,key)=>person[key as keyof Person] as SortValue);
+    const header=columnSort.header;
     return <div className="table-scroll"><table className="data-table">
       <thead><tr>{selectable&&admin&&<th className="check-cell">Select</th>}
-        <th>Name</th>{full&&<>
-          <th>Date of birth</th><th>Email</th><th>Phone</th>
-          <th>Under 18</th><th>Image consent</th><th>Data processing consent</th>
-          <th>Food allergies / intolerances</th>
+        {header("name","Name")}{full&&<>
+          {showSensitive?header("date_of_birth","Date of birth"):<th>Date of birth</th>}
+          {header("email","Email")}{showSensitive?header("phone","Phone"):<th>Phone</th>}
+          {showSensitive?header("under_18","Under 18"):<th>Under 18</th>}
+          {showSensitive?header("image_consent","Image consent"):<th>Image consent</th>}
+          {showSensitive?header("data_consent","Data processing consent"):<th>Data processing consent</th>}
+          {showAllergies?header("food_allergies","Food allergies / intolerances"):<th>Food allergies / intolerances</th>}
         </>}
-        <th>Role</th><th>Team</th><th>Supervisely User ID</th>
-        <th>Supervisely</th><th>Check-in</th>
+        {header("kind","Role")}{header("team_name","Team")}{header("supervisely_user_id","Supervisely User ID")}
+        {header("membership_status","Supervisely")}{header("check_in_at","Check-in")}
         {admin&&<th>Manage</th>}</tr></thead>
-      <tbody>{items.map(p=><tr key={p.id}>
+      <tbody>{rows.map(p=><tr key={p.id}>
         {selectable&&admin&&<td><input aria-label={"Select "+p.name} type="checkbox"
           checked={selected.includes(p.id)} onChange={e=>setSelected(prev=>
             e.target.checked?prev.length<50?[...prev,p.id]:prev:prev.filter(id=>id!==p.id))}/></td>}

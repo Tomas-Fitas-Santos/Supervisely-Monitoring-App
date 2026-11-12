@@ -192,6 +192,12 @@ def list_people(
     attendance: Literal["all", "present", "missing"] = "all",
     page: int = Query(default=1, ge=1),
     size: int = Query(default=50, ge=1, le=200),
+    sort_by: Literal[
+        "name", "email", "kind", "team_name", "supervisely_user_id",
+        "membership_status", "check_in_at", "table_number", "date_of_birth",
+        "phone", "under_18", "image_consent", "data_consent", "food_allergies",
+    ] | None = None,
+    direction: Literal["asc", "desc"] = "asc",
     _ctx: AuthContext = Depends(requires(*VIEWER)),
     db: Session = Depends(get_db),
 ):
@@ -207,14 +213,21 @@ def list_people(
         query = query.where(Person.check_in_at.is_(None))
     if search.strip():
         key = f"%{search.strip().lower()}%"
+        matching_teams = select(CompetitionTeam.id).where(
+            CompetitionTeam.event_id == event.id,
+            CompetitionTeam.active.is_(True),
+            func.lower(CompetitionTeam.name).like(key),
+        )
         query = query.where(
             func.lower(Person.name).like(key) | func.lower(Person.email).like(key)
+            | Person.team_id.in_(matching_teams)
         )
     total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
-    people = db.scalars(
-        query.order_by(Person.kind.desc(), Person.name, Person.email)
-        .offset((page - 1) * size).limit(size)
-    ).all()
+    start = (page - 1) * size
+    ordered = query.order_by(Person.kind.desc(), Person.name, Person.email, Person.id)
+    if sort_by is None:
+        ordered = ordered.offset(start).limit(size)
+    people = db.scalars(ordered).all()
     # Participant membership lives on Person.team_id, but trial-monitor
     # membership lives on MonitorPairMember. Resolve BOTH with the same active
     # team records used by GET /teams to avoid contradictory roster columns.
@@ -245,6 +258,16 @@ def list_people(
         )
         item["team_id"] = team.id if team else None
         result.append(item)
+    if sort_by is not None:
+        populated = [item for item in result if item.get(sort_by) not in (None, "")]
+        empty = [item for item in result if item.get(sort_by) in (None, "")]
+
+        def sort_value(item: dict):
+            value = item[sort_by]
+            return value.casefold() if isinstance(value, str) else value
+
+        populated.sort(key=sort_value, reverse=direction == "desc")
+        result = (populated + empty)[start:start + size]
     return {"items": result, "total": total, "page": page, "size": size}
 
 

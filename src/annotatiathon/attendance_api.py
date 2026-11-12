@@ -22,14 +22,9 @@ class AttendanceResult(BaseModel):
     team_id: str | None
 
 
-class CheckInInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    table_number: int | None = Field(default=None, ge=1, le=10000)
-
-
 class TableChange(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    table_number: int = Field(ge=1, le=10000)
+    table_number: int | None = Field(default=None, ge=1, le=10000)
 
 
 @router.get("/summary")
@@ -51,7 +46,6 @@ def attendance_summary(
 
 def change_check_in(
     db: Session, person_id: str, staff_id: str, event_id: str, check_in: bool,
-    requested_table: int | None = None,
 ) -> AttendanceResult:
     person = db.scalar(select(Person).where(
         Person.id == person_id, Person.event_id == event_id,
@@ -72,47 +66,16 @@ def change_check_in(
     table = team.table_number if team is not None else person.table_number
     existing = person.check_in_at is not None
     if check_in and not existing:
-        if table is None:
-            if requested_table is None and team is not None:
-                raise HTTPException(
-                    status_code=422,
-                    detail="Assign the competition team a table number at first arrival.",
-                )
-            if requested_table is not None:
-                if team is not None:
-                    team.table_number = requested_table
-                else:
-                    person.table_number = requested_table
-                table = requested_table
-        elif requested_table is not None and requested_table != table:
-            raise HTTPException(
-                status_code=409,
-                detail="The team already has a different table. Correct its table separately.",
-            )
+        from .native_operations_api import native_identity_assignable
+        if team is None or not team.name.strip():
+            raise HTTPException(status_code=409, detail="Assign an active named competition team before check-in.")
+        if not native_identity_assignable(person):
+            raise HTTPException(status_code=409, detail="Verify this person's Supervisely team membership before check-in.")
     changed = existing != check_in
     if changed:
         previous = person.check_in_at
         person.check_in_at = epoch() if check_in else None
         table_cleared = False
-        if not check_in:
-            if team is not None:
-                # The team row is locked: keep the table until the last member leaves.
-                still_present = db.scalar(select(Person.id).where(
-                    Person.event_id == event_id,
-                    Person.team_id == team.id,
-                    Person.kind == "participant",
-                    Person.active.is_(True),
-                    Person.id != person.id,
-                    Person.check_in_at.is_not(None),
-                ).limit(1))
-                if still_present is None:
-                    team.table_number = None
-                    table_cleared = True
-                    table = None
-            else:
-                person.table_number = None
-                table_cleared = True
-                table = None
         db.add(AuditEvent(
             staff_id=staff_id, event_id=event_id,
             action="attendance.check_in" if check_in else "attendance.reverse",
@@ -147,6 +110,12 @@ def change_team_table(
         raise HTTPException(status_code=404, detail="Active competition team not found.")
     before = team.table_number
     if before != payload.table_number:
+        if payload.table_number is not None and db.scalar(select(CompetitionTeam.id).where(
+            CompetitionTeam.event_id == event.id, CompetitionTeam.active.is_(True),
+            CompetitionTeam.id != team.id,
+            CompetitionTeam.table_number == payload.table_number,
+        ).limit(1)):
+            raise HTTPException(status_code=409, detail="This table is already assigned to another team.")
         team.table_number = payload.table_number
         db.add(AuditEvent(
             staff_id=ctx.staff.id, event_id=event.id,
@@ -162,15 +131,11 @@ def change_team_table(
 @router.post("/{person_id}/check-in", response_model=AttendanceResult)
 def check_in(
     person_id: str,
-    payload: CheckInInput | None = None,
     ctx: AuthContext = Depends(requires("organiser", "reception", "monitor", mutation=True)),
     db: Session = Depends(get_db),
 ):
     event = current_event(db, ctx, writable=True)
-    return change_check_in(
-        db, person_id, ctx.staff.id, event.id, True,
-        payload.table_number if payload else None,
-    )
+    return change_check_in(db, person_id, ctx.staff.id, event.id, True)
 
 
 @router.post("/{person_id}/reverse", response_model=AttendanceResult)

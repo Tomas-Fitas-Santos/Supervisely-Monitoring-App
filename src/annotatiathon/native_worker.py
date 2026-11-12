@@ -268,7 +268,7 @@ def assigned_people(db: Session, job: LabelingJob):
     if job.assignee_person_id is None:
         return team_members(db, job)
     members, _ = pair_members(db, job.event_id, job.team_id)
-    if len(members) != 2:
+    if not members:
         raise NativeWorkerError("pair_membership_changed")
     person = next((p for p in members if p.id == job.assignee_person_id), None)
     if person is None:
@@ -874,7 +874,8 @@ def sync_all(db: Session, api, config: SuperviselyConfig) -> dict:
             ).order_by(CompetitionTeam.id)))
             for team_id in teams:
                 people, _ = pair_members(db, plan.event_id, team_id)
-                eligible = [person for person in people if native_identity_assignable(person)]
+                eligible = [person for person in people if person.check_in_at is not None
+                            and native_identity_assignable(person)]
                 ready_for_next.extend((team_id, person.id) for person in eligible)
             db.commit()
             for team_id, person_id in dict.fromkeys(ready_for_next):

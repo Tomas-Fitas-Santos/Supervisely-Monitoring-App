@@ -220,10 +220,10 @@ def create_plan(
         raise HTTPException(status_code=422, detail="Import competition teams first.")
     for team in teams:
         people, group = pair_members(db, event.id, team.id)
-        if len(people) != 2 or group == "invalid":
+        if not people or group == "invalid":
             raise HTTPException(
                 status_code=422,
-                detail="Every team needs exactly two active participants or two active "
+                detail="Every team needs one or two active participants or two active "
                        "monitor-pair members before planning.",
             )
     assets = list(db.scalars(select(MediaAsset).where(
@@ -345,7 +345,7 @@ def create_plan(
             db.add(LabelingJob(
                 event_id=event.id, dataset_id=dataset.id, plan_id=plan.id,
                 team_id=team.id, sequence=seq,
-                assignee_person_id=members[(seq - 1) % 2].id,
+                assignee_person_id=members[(seq - 1) % len(members)].id,
                 media_ids=group.media_ids, frame_count=group.frame_count,
                 video_count=len(group.video_groups),
                 morphology_counts=dict(group.morph_counts),

@@ -69,19 +69,19 @@ def native_identity_assignable(person: Person) -> bool:
 
 def team_members(db: Session, job: LabelingJob) -> list[Person]:
     people, _kind = pair_members(db, job.event_id, job.team_id)
-    if len(people) != 2:
+    if not people:
         raise HTTPException(
             status_code=409,
-            detail="Each team must contain exactly two active roster members.",
+            detail="Each team must contain one or two active roster members.",
         )
     for person in people:
         if not native_identity_assignable(person):
             raise HTTPException(
                 status_code=409,
-                detail="Both people must be verified members of the Supervisely team.",
+                detail="Every member must be verified in the Supervisely team.",
             )
     ids = [p.supervisely_user_id for p in people]
-    if len(set(ids)) != 2:
+    if len(set(ids)) != len(ids):
         raise HTTPException(status_code=409, detail="Native user IDs must be distinct.")
     return people
 

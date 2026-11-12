@@ -1,3 +1,4 @@
+import { useTableSort } from "./table_sort";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { BarChart3, RefreshCw, ShieldCheck, Trophy } from "lucide-react";
 import { api, type Auth } from "./api";
@@ -27,6 +28,7 @@ export function TeamReviewOverview({auth,mode}:{auth:Auth;mode:"dashboard"|"rank
   const [error,setError]=useState("");
   const [notice,setNotice]=useState("");
   const [rankingPage,setRankingPage]=useState(0);
+  const rankingSort=useTableSort(()=>setRankingPage(0));
   const refresh=useCallback(async()=>{
     try{
       const [m,a]=await Promise.all([
@@ -113,9 +115,17 @@ export function TeamReviewOverview({auth,mode}:{auth:Auth;mode:"dashboard"|"rank
         <div className="ranking-intro"><Trophy size={24}/><div><h4>Provisional leaderboard</h4>
           <p>{metrics.winner_policy}. Unscored teams are not ranked yet.</p></div></div>
         <div className="table-scroll"><table className="data-table leaderboard-table">
-          <thead><tr><th>Rank</th><th>Team</th><th>Keypoint accuracy</th><th>Reviewed points</th>
-            <th>Completed jobs</th><th>Frames reviewed</th><th>Frames submitted</th><th>Elapsed per frame</th></tr></thead>
-          <tbody>{metrics.teams.slice(rankingPage*25,(rankingPage+1)*25).map(row=><tr key={row.team_id}>
+          <thead><tr>
+            {rankingSort.header("rank","Rank")}
+            {rankingSort.header("team_name","Team")}
+            {rankingSort.header("keypoint_accuracy_pct","Keypoint accuracy")}
+            {rankingSort.header("evaluated_keypoints","Reviewed points")}
+            {rankingSort.header("jobs_completed","Completed jobs")}
+            {rankingSort.header("frames_reviewed","Frames reviewed")}
+            {rankingSort.header("frames_submitted","Frames submitted")}
+            {rankingSort.header("average_seconds_per_frame","Elapsed per frame")}
+          </tr></thead>
+          <tbody>{rankingSort.rows(metrics.teams,(row,key)=>row[key as keyof typeof row]).slice(rankingPage*25,(rankingPage+1)*25).map(row=><tr key={row.team_id}>
             <td><strong>{row.rank===null?"—":row.rank===1?"🥇 1":row.rank===2?"🥈 2":row.rank===3?"🥉 3":"#"+row.rank}</strong></td>
             <td><strong>{row.team_name}</strong></td>
             <td><strong>{accuracy(row.keypoint_accuracy_pct)}</strong></td>

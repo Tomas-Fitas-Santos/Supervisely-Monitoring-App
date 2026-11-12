@@ -7,6 +7,7 @@ import {
   ClipboardCheck, Clock3, MapPin, Plus, RefreshCw, Save, Trash2, Trophy
 } from "lucide-react";
 import { api, type Auth, type PeopleResponse, type Person, type Team, type TeamResponse } from "./api";
+import { useTableSort } from "./table_sort";
 
 type Activity={id:string;name:string;description:string;location:string;
   start_at:number|null;end_at:number|null;status:"scheduled"|"live"|"completed"|"cancelled";
@@ -30,6 +31,8 @@ export function ActivitiesScreen({auth}:{auth:Auth}) {
   const [items,setItems]=useState<Activity[]>([]);
   const [selected,setSelected]=useState("");
   const [detail,setDetail]=useState<Detail|null>(null);
+  const resultSort=useTableSort();
+  const awardSort=useTableSort();
   const [people,setPeople]=useState<Person[]>([]);
   const [teams,setTeams]=useState<Team[]>([]);
   const [categories,setCategories]=useState<Category[]>([]);
@@ -239,8 +242,9 @@ export function ActivitiesScreen({auth}:{auth:Auth}) {
             <h4><ClipboardCheck size={16}/> Ranked results</h4>
             <span className="muted small">{detail.results.length} recorded</span></div>
             {detail.results.length?<div className="table-scroll"><table className="data-table">
-              <thead><tr><th>Rank</th><th>Individual / Team</th><th>Score</th><th>Action</th></tr></thead>
-              <tbody>{detail.results.map(r=><tr key={r.id}>
+              <thead><tr>{resultSort.header("rank","Rank")}{resultSort.header("subject_name","Individual / Team")}
+                {resultSort.header("score_points","Score")}<th>Action</th></tr></thead>
+              <tbody>{resultSort.rows(detail.results,(row,key)=>row[key as keyof Result]).map(r=><tr key={r.id}>
                 <td><strong>#{r.rank}</strong></td><td>{r.subject_name} <span className="muted small">({r.subject_type})</span></td>
                 <td>{r.score_points??"—"}</td>
                 <td>{organiser&&!frozen?<button className="link-button" disabled={busy}
@@ -299,8 +303,11 @@ export function ActivitiesScreen({auth}:{auth:Auth}) {
               <p>{detail.awards.length} recipient allocations · {localDate(active.awards_finalised_at)}</p></div></div>}
           {detail.awards.length>0&&<details className="activity-award-details"><summary>View allocated prize recipients</summary>
             <div className="table-scroll"><table className="data-table"><thead><tr>
-              <th>Recipient</th><th>Prize rule</th><th>Time</th>
-            </tr></thead><tbody>{detail.awards.map(award=><tr key={award.id}>
+              {awardSort.header("person_name","Recipient")}{awardSort.header("prize_id","Prize rule")}
+              {awardSort.header("awarded_at","Time")}
+            </tr></thead><tbody>{awardSort.rows(detail.awards,(award,key)=>key==="prize_id"
+              ?detail.prizes.find(p=>p.id===award.prize_id)?.category_name:award[key as keyof AwardRecord]
+            ).map(award=><tr key={award.id}>
               <td>{award.person_name}</td>
               <td>{detail.prizes.find(p=>p.id===award.prize_id)?.category_name||"—"}</td>
               <td>{localDate(award.awarded_at)}</td>

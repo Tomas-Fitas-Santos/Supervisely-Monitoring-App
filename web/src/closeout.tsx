@@ -1,3 +1,4 @@
+import { useTableSort } from "./table_sort";
 import { confirmAction } from "./dialogs";
 import { useCallback, useEffect, useState } from "react";
 import { Archive, BarChart3, CheckCircle2, Download, RefreshCw, ShieldAlert } from "lucide-react";
@@ -21,11 +22,6 @@ type Report={
     jobs_accepted:number;jobs_needing_action:number};
   reviews:{frames_reviewed:number;good:number;bad:number;incomplete:number;
     keypoint_score:number;temporal_consistency_issues:number};
-  review_fairness:{
-    ready_for_winner:boolean;total_available_frames:number;total_reviewed_frames:number;
-    policy:string;
-    teams:{team_id:string;team_name:string;reviewed_frames:number;available_frames:number}[];
-  };
   closeout_readiness:{ready:boolean;blocking_jobs:number;unfinished_unscored_jobs:number;
     verified_reviews_available:boolean;message:string};
   ticket_totals:Record<string,number>;generated_at:number;
@@ -35,6 +31,7 @@ export function CloseoutScreen({auth}:{auth:Auth}) {
   const [report,setReport]=useState<Report|null>(null);
   const [nativeExport,setNativeExport]=useState<NativeExport|null>(null);
   const [rankings,setRankings]=useState<TeamRank[]>([]);
+  const rankingSort=useTableSort();
   const [reviewCounts,setReviewCounts]=useState<ReviewQueueCounts|null>(null);
   const [error,setError]=useState("");
   const [notice,setNotice]=useState("");
@@ -104,31 +101,6 @@ export function CloseoutScreen({auth}:{auth:Auth}) {
         <div className="stat-card"><Archive size={19}/><span className="muted small">Shared-queue reviews completed</span>
           <strong>{reviewCounts?.completed??"—"}</strong></div>
       </div>
-      <section className="panel event-fairness-panel">
-        <div className="review-analytics-header"><div>
-          <span className="eyebrow">OFFICIAL WINNER ELIGIBILITY</span>
-          <h3>Random review coverage</h3>
-          <p className="muted">Monitors randomly review frames from all complete submissions.
-            Teams submitting more frames may have more reviewed, and each verified
-            correct keypoint or bounding box adds to the team's competition total.
-            Equal numbers of reviews are not required.</p>
-        </div>{report.review_fairness.ready_for_winner?
-          <CheckCircle2 size={26}/>:<ShieldAlert size={26}/>}</div>
-        <div className="table-scroll"><table className="data-table">
-          <thead><tr><th>Team</th><th>Frames eligible for review</th>
-            <th>Frames reviewed</th><th>Review coverage</th></tr></thead>
-          <tbody>{report.review_fairness.teams.map(team=><tr key={team.team_id}>
-            <td>{team.team_name}</td>
-            <td>{team.available_frames.toLocaleString()}</td>
-            <td>{team.reviewed_frames.toLocaleString()}</td>
-            <td>{team.available_frames?
-              (100*team.reviewed_frames/team.available_frames).toFixed(1)+"%":"—"}</td>
-          </tr>)}</tbody>
-        </table></div>
-        <p className="muted small">{report.review_fairness.total_reviewed_frames.toLocaleString()} reviewed out of
-          {" "+report.review_fairness.total_available_frames.toLocaleString()} available submitted frames.
-          The review queue adjusts to each team’s share of eligible submissions.</p>
-      </section>
       <section className="panel event-ranking-panel">
         <div className="review-analytics-header">
           <div><span className="eyebrow">PROPORTIONAL REVIEW LEADERBOARD</span>
@@ -136,11 +108,20 @@ export function CloseoutScreen({auth}:{auth:Auth}) {
             <p className="muted">Estimated points = eligible submitted frames × average review score (0–5).</p>
           </div><BarChart3 size={27}/></div>
         <div className="table-scroll"><table className="data-table">
-          <thead><tr><th>Rank</th><th>Team</th><th>Visible points</th><th>Occluded points</th>
-            <th>Correct boxes</th><th>Total correct annotations</th>
-            <th>Reviewed / available frames</th>
-            <th>Class / placement / sabotage errors</th><th>Estimated points</th></tr></thead>
-          <tbody>{rankings.map(team=><tr key={team.team_id}>
+          <thead><tr>
+            {rankingSort.header("rank","Rank")}
+            {rankingSort.header("team_name","Team")}
+            {rankingSort.header("correct_visible_keypoints","Visible points")}
+            {rankingSort.header("correct_occluded_keypoints","Occluded points")}
+            {rankingSort.header("correct_boxes","Correct boxes")}
+            {rankingSort.header("correct_objects","Total correct annotations")}
+            {rankingSort.header("reviewed_frames","Reviewed / available frames")}
+            {rankingSort.header("errors","Class / placement / sabotage errors")}
+            {rankingSort.header("estimated_points","Estimated points")}
+          </tr></thead>
+          <tbody>{rankingSort.rows(rankings,(team,key)=>key==="errors"
+            ? (team.errors?.wrong_class??0)+(team.errors?.wrong_placement??0)+(team.errors?.sabotage??0)
+            : team[key as keyof Omit<typeof team,"errors">]).map(team=><tr key={team.team_id}>
             <td><strong>{team.rank===null?"—":"#"+team.rank}</strong></td>
             <td><strong>{team.team_name}</strong></td>
             <td>{team.correct_visible_keypoints.toLocaleString()}</td>
