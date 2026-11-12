@@ -14,15 +14,28 @@ def mib(value):
     return float(match[1]) * factors[match[2]]
 
 
+SERVICE_PATTERN = re.compile(
+    r"-(status-worker|validation-worker|correction-worker|recovery-worker|"
+    r"bulk-worker|supervisely-sim|worker|api|db|web|load|seed)-[0-9]+$"
+)
+
+
+def service_name(container: str) -> str:
+    match = SERVICE_PATTERN.search(container)
+    return match.group(1) if match else "other"
+
+
 def summarize(directory):
     rows = [json.loads(line) for line in (directory / "resources.jsonl").read_text(encoding="utf-8-sig").splitlines()
             if line.strip()]
     services = defaultdict(list)
+    by_service_sample = defaultdict(list)
     for row in rows:
-        match = re.search(r"-(api|db|web|worker|load)-[0-9]+$", row["Name"])
-        service = match.group(1) if match else "other"
-        services[service].append({"cores": float(row["CPUPerc"].rstrip("%")) / 100,
-                                  "working_set_mib": mib(row["MemUsage"].split("/")[0])})
+        service = service_name(row["Name"])
+        values = {"cores": float(row["CPUPerc"].rstrip("%")) / 100,
+                  "working_set_mib": mib(row["MemUsage"].split("/")[0])}
+        services[service].append(values)
+        by_service_sample[(service, row.get("sample_ms", 0))].append(values)
     summary = {}
     for service, samples in services.items():
         summary[service] = {
@@ -31,10 +44,16 @@ def summarize(directory):
             "max_sample_working_set_mib": max(item["working_set_mib"] for item in samples),
         }
         summary[service]["sampled_containers"] = len({
-            row["Name"] for row in rows
-            if re.search(r"-(api|db|web|worker|load)-[0-9]+$", row["Name"])
-            and re.search(r"-(api|db|web|worker|load)-[0-9]+$", row["Name"]).group(1) == service
+            row["Name"] for row in rows if service_name(row["Name"]) == service
         })
+        batches = [group for (name, _stamp), group in by_service_sample.items()
+                   if name == service]
+        summary[service]["max_aggregate_cpu_cores"] = max((
+            sum(item["cores"] for item in group) for group in batches
+        ), default=0)
+        summary[service]["max_aggregate_working_set_mib"] = max((
+            sum(item["working_set_mib"] for item in group) for group in batches
+        ), default=0)
         peak_file = directory / f"{service}-cgroup.txt"
         if peak_file.exists():
             lines = peak_file.read_text().splitlines()
@@ -42,8 +61,8 @@ def summarize(directory):
             summary[service]["cpu_cgroup"] = {
                 line.split()[0]: int(line.split()[1]) for line in lines[1:]
             }
-    # Samples may contain 1, 2, 3 or 4 native worker containers.
-    # Never assume exactly four services, as the previous benchmark did.
+    # Samples contain independently scaled publishers and validators.
+    # Aggregate CPU/RAM by timestamp, not by a fixed container count.
     by_sample = defaultdict(list)
     for index, row in enumerate(rows):
         by_sample[row.get("sample_ms", index // max(1, len(services)))].append(row)
