@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import type React from "react";
 import {
   Check, ChevronLeft, ChevronRight, ClipboardCopy, FileSpreadsheet, Filter,
-  Plus, RefreshCw, Search, ShieldCheck, Upload, UserRound, UsersRound, X
+  Plus, RefreshCw, Search, ShieldCheck, Trash2, Upload, UserRound, UsersRound, X
 } from "lucide-react";
 import { api, refreshSuperviselyRoster, type Auth, type PeopleResponse, type Person, type Team, type TeamResponse } from "./api";
 import { NativeMembershipPanel } from "./native";
@@ -139,6 +139,31 @@ export function PeopleScreen({auth}:{auth:Auth}) {
     const timer=window.setInterval(()=>{if(!document.hidden)void refresh();},5000);
     return ()=>window.clearInterval(timer);
   },[refresh]);
+  // Also reconcile joined native identities periodically while this page is
+  // open. The shared helper coalesces requests and applies a cooldown;
+  // errors remain available through the explicit Refresh from Supervisely.
+  useEffect(()=>{
+    let active=true;
+    async function refreshMembership(){
+      if(document.hidden)return;
+      try {
+        const outcome=await refreshSuperviselyRoster(auth.csrf_token);
+        if(!active||!outcome)return;
+        if(outcome.status==="ok"&&(outcome.updated||outcome.created)){
+          setInviteVersion(v=>v+1);
+          await refresh();
+        }
+        if(outcome.status==="needs_review"){
+          setMessage("Supervisely identities have conflicting matches. Open Invitations & membership → Verify & reconcile the team.");
+        }
+      }catch{
+        // Show native connection errors only on explicit refresh.
+      }
+    }
+    void refreshMembership();
+    const timer=window.setInterval(()=>void refreshMembership(),90000);
+    return ()=>{active=false;window.clearInterval(timer);};
+  },[auth.csrf_token,refresh]);
   async function syncNative(){
     try {
       const result=await refreshSuperviselyRoster(auth.csrf_token,true);
@@ -193,6 +218,26 @@ export function PeopleScreen({auth}:{auth:Auth}) {
       setModalError((exc as Error).message+
         (isNativeChange?" Refresh from Supervisely if the remote role may have changed.":""));
     }finally{setModalStatus("");setBusy(false);}
+  }
+  async function removeTeam(team:Team){
+    if(team.type!=="competition")return;
+    if(!await confirmAction(
+      "Remove team "+team.name+" from this event? Its members will remain in the roster "+
+      "but become unassigned. Historical data will be preserved. Teams with labeling jobs "+
+      "cannot be removed."
+    ))return;
+    setBusy(true);setError("");setMessage("");
+    try {
+      const result=await api<{people_unassigned:number;monitor_pair_members_released:number}>(
+        "/teams/"+team.id+"/remove","POST",undefined,auth.csrf_token);
+      setSelectedTeam(null);
+      await refresh();
+      setMessage("Team removed. "+result.people_unassigned+" participants unassigned"+
+        (result.monitor_pair_members_released?
+          "; "+result.monitor_pair_members_released+" monitor pair members released":"")+
+        ". No Supervisely memberships or jobs were deleted.");
+    }catch(exc){setError((exc as Error).message);}
+    finally{setBusy(false);}
   }
   async function deactivate(person:Person) {
     if(!await confirmAction("Deactivate "+person.name+"? Historical records will remain available."))return;
@@ -258,7 +303,8 @@ export function PeopleScreen({auth}:{auth:Auth}) {
           <th>Under 18</th><th>Image consent</th><th>Data processing consent</th>
           <th>Food allergies / intolerances</th>
         </>}
-        <th>Role</th><th>Team</th><th>Supervisely</th><th>Check-in</th>
+        <th>Role</th><th>Team</th><th>Supervisely User ID</th>
+        <th>Supervisely</th><th>Check-in</th>
         {admin&&<th>Manage</th>}</tr></thead>
       <tbody>{items.map(p=><tr key={p.id}>
         {selectable&&admin&&<td><input aria-label={"Select "+p.name} type="checkbox"
@@ -274,12 +320,15 @@ export function PeopleScreen({auth}:{auth:Auth}) {
           <td>{showAllergies?(p.food_allergies?.trim()||"—"):"Restricted"}</td>
         </>}
         <td><span className="soft-pill">{p.kind==="monitor"?"Monitor":"Participant"}</span></td>
-        <td>{p.team_name||"—"}</td>
+        <td>{p.team_name||"Unassigned"}</td>
+        <td>{p.supervisely_user_id!=null?
+          <strong title={p.supervisely_login||"Verified Supervisely member"}>
+            {p.supervisely_user_id}</strong>:
+          <span className="muted small">Not linked</span>}</td>
         <td><span className={"membership "+(p.membership_status==="joined"?"joined":"")}>
-          {statusName(p.membership_status)}</span>{p.supervisely_user_id&&p.native_verified_at?
-          <span className="native-role-chip" title={"Supervisely "+(p.supervisely_login||"")+" · User ID "+p.supervisely_user_id}>
-            Linked #{p.supervisely_user_id}</span>:
-          p.membership_status==="joined"&&<span className="native-role-chip">ID missing</span>}
+          {statusName(p.membership_status)}</span>
+          {p.membership_status==="joined"&&!p.supervisely_user_id&&
+            <span className="native-role-chip">ID missing — refresh</span>}
           {p.supervisely_role&&<span className="native-role-chip">{p.supervisely_role}</span>}</td>
         <td>{p.kind==="monitor"?"Not required":p.check_in_at?formatLisbonTime(p.check_in_at):"Not arrived"}</td>
         {admin&&<td><button className="link-button" onClick={()=>openEdit(p)}>Edit</button></td>}
@@ -343,6 +392,11 @@ export function PeopleScreen({auth}:{auth:Auth}) {
               <span className="muted small">{activeTeam.type==="monitoring"?"Monitoring staff":"Competition team"}</span>
             </div>
             <div className="roster-team-detail-stats">
+              {admin&&activeTeam.type==="competition"&&
+                <button type="button" className="btn danger-outline"
+                  disabled={busy} onClick={()=>void removeTeam(activeTeam)}>
+                  <Trash2 size={15}/> Remove team
+                </button>}
               <span className="soft-pill">{activeTeam.members.length} members</span>
               {activeTeam.type==="competition"&&<>
                 <span className="soft-pill">{activeTeam.checked_in} checked in</span>
