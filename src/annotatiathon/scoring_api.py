@@ -10,6 +10,7 @@ from .auth import AuthContext, requires
 from .db import get_db
 from .events_api import current_event
 from .models import AuditEvent, CompetitionTeam, LabelingJob, ReviewRubric, ReviewSample, epoch
+from .review_eligibility import eligible_frame_review
 
 router = APIRouter(prefix="/api/v1", tags=["review scoring"])
 
@@ -160,8 +161,7 @@ def rankings(ctx: AuthContext = Depends(requires("organiser", "monitor")),
     now = epoch()
     eligible = (
         ReviewSample.event_id == event.id,
-        ReviewSample.correction_round == LabelingJob.correction_round,
-        LabelingJob.status.in_(("on_review", "completed")),
+        eligible_frame_review(),
         LabelingJob.release_mode.in_(PRIZE_RELEASE_MODES),
     )
     counts = select(
