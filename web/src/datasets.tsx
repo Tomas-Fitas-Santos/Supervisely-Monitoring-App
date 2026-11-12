@@ -255,16 +255,16 @@ export function DatasetScreen({auth}:{auth:Auth}) {
             {dataset.frame_count} frames available for annotation</p>
           <p className="muted small">Local status: {dataset.status} · Native project: {dataset.native_project_id||"Not created yet"}</p>
           {dataset.status==="ready"&&<div className="dataset-mirror-status">
-            <strong>Supervisely pre-event replication: {mirror?.ready_for_automatic_jobs?
-              "Ready":"Not ready"}</strong>
+            <strong>Supervisely media upload: {mirror?.ready_for_automatic_jobs?
+              "Complete":"Not complete"}</strong>
             <p className="muted small">{mirror?.state||"Checking…"} · {mirror?.uploaded_frames??0} /
               {mirror?.total_frames??dataset.frame_count} frames mirrored
               {mirror?.attempts? " · attempt "+mirror.attempts:""}</p>
             {mirror?.state==="pending"&&mirror.pending_seconds!=null&&mirror.pending_seconds>90&&
               <p role="status" className="alert warning">
                 Replication has been queued for {Math.floor(mirror.pending_seconds/60)} minutes
-                without starting. The Supervisely worker may be stopped or busy.
-                Check the native worker container and its logs. This does not require
+                without starting. The dedicated Supervisely upload worker may be stopped.
+                Check the mirror-worker container and its logs. This does not require
                 reuploading the local dataset.
               </p>}
             {mirror?.state==="running"&&mirror.uploaded_frames===0&&
@@ -274,7 +274,7 @@ export function DatasetScreen({auth}:{auth:Auth}) {
               mirror.started_seconds_ago>1800&&mirror.uploaded_frames===0&&
               <p role="status" className="alert warning">
                 Replication has been running without recorded frame progress for more than
-                30 minutes. Inspect the worker logs before restarting anything.
+                30 minutes. Inspect mirror-worker logs before restarting anything.
               </p>}
             <progress value={mirror?.uploaded_frames??0}
               max={mirror?.total_frames||dataset.frame_count||1}/>
@@ -283,7 +283,9 @@ export function DatasetScreen({auth}:{auth:Auth}) {
               <button className="btn secondary" type="button" disabled={busy}
                 onClick={()=>void retryMirror()}><RotateCcw size={15}/> Retry Supervisely upload</button>}
             {mirror?.ready_for_automatic_jobs&&<p className="muted small">
-              All source frames are replicated; automatic job creation now uses the same remote images.
+              All frames are mirrored. Before automatic 30-frame job distribution,
+              use Job Distribution → Automatic distribution → Check source frames
+              to verify source-video identity and consecutive frame positions.
               Manual assignments can independently duplicate a video in their separate remote dataset.</p>}
           </div>}
           {videos.length>0&&<div className="settings-note">
