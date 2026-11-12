@@ -63,7 +63,7 @@ def ingest_sample(db: Session, job: LabelingJob, root: Path) -> None:
         if snapshot["source_media_id"] != media_id:
             raise ValueError("Submitted frame source does not match its snapshot")
         if not isinstance(snapshot.get("annotation"), dict):
-            raise ValueError("Submitted frame does not contain annotation JSON")
+            raise TypeError("Submitted frame does not contain annotation JSON")
         snapshot["sha256"] = hashlib.sha256(raw).hexdigest()
         snapshot["selection_reason"] = "submitted_frame"
         db.add(ReviewSample(

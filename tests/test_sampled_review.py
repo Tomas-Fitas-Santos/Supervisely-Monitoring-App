@@ -8,7 +8,7 @@ from sqlalchemy import select
 from test_dataset_workflows import act, ingest, teams
 
 from annotatiathon.app import app
-from annotatiathon.models import LabelingJob, MediaAsset
+from annotatiathon.models import LabelingJob, MediaAsset, Person
 from annotatiathon.review_queue_api import ingest_sample
 from annotatiathon.review_queue_api import router as review_router
 from annotatiathon.scoring_api import router as scoring_router
@@ -23,9 +23,15 @@ def test_sample_claim_scoring_and_retry(dataset_ctx, tmp_path):
     planned = act(client, csrf, "/labeling/plans", {"dataset_id": dataset_id})
     assert planned.status_code == 201, planned.text
     with maker.begin() as db:
-        job = db.scalar(select(LabelingJob).where(LabelingJob.plan_id == planned.json()["plan_id"]))
+        jobs = db.scalars(select(LabelingJob).where(
+            LabelingJob.plan_id == planned.json()["plan_id"],
+        )).all()
+        job = next(j for j in jobs if len(j.media_ids) >= 2)
         job.release_mode = "shared_primary"
-        assert len(job.media_ids) >= 2
+        job.assignee_person_id = db.scalar(select(Person.id).where(
+            Person.team_id == job.team_id,
+        ).limit(1))
+        assert job.assignee_person_id is not None
         for asset_id in job.media_ids:
             asset = db.get(MediaAsset, asset_id)
             snapshot = {
