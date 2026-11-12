@@ -162,7 +162,7 @@ def test_native_role_failure_retains_local_role(setup):
         assert db.get(Person,pid).kind=="participant"
 
 
-def test_participant_demotion_revokes_monitor_account_and_sessions(setup):
+def test_event_roster_demotion_does_not_revoke_app_account(setup):
     http, maker, monkeypatch=setup
     login(http)
     with maker.begin() as db:
@@ -188,12 +188,12 @@ def test_participant_demotion_revokes_monitor_account_and_sessions(setup):
     with maker() as db:
         member=db.scalar(select(StaffAccount).where(
             StaffAccount.email=="monitor@example.org"))
-        assert member.active is False
-        assert not db.scalars(select(StaffSession).where(
+        assert member.active is True
+        assert db.scalars(select(StaffSession).where(
             StaffSession.staff_id==member.id)).all()
     response=http.post("/api/v1/auth/login",json={
         "email":"monitor@example.org","password":"SecretMonitorPassword123!"})
-    assert response.status_code==401
+    assert response.status_code==200
     assert monitor_login
 
 

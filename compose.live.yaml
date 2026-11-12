@@ -55,7 +55,7 @@ services:
         condition: service_healthy
       media-permissions:
         condition: service_completed_successfully
-    command: ["sh", "-c", "alembic upgrade head && python -m annotatiathon.manage backfill-snapshots"]
+    command: ["sh", "-c", "alembic upgrade head && python -m annotatiathon.manage sync-organiser-access && python -m annotatiathon.manage backfill-snapshots"]
 
   api:
     <<: *backend

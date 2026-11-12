@@ -21,7 +21,6 @@ from .models import (
     MonitorPairMember,
     Person,
     StaffAccount,
-    StaffSession,
     SuperviselyConfig,
 )
 from .registration_api import monitor_can_register
@@ -448,23 +447,8 @@ def enforce_native_role(
 
 
 def align_staff_access(db: Session, person: Person) -> None:
-    """Participant role revokes monitoring access and existing sessions.
-
-    A re-promoted person may recover their former Nightjar staff account only
-    when it was disabled by this role conversion.
-    """
-    staff = db.scalar(select(StaffAccount).where(StaffAccount.email == person.email))
-    if staff is None or "organiser" in staff.roles:
-        return
-    fields = dict(person.source_fields or {})
-    if person.kind == "participant" or not person.active:
-        if "monitor" in staff.roles:
-            staff.active = False
-            fields["nightjar_disabled_for_role"] = True
-            db.execute(delete(StaffSession).where(StaffSession.staff_id == staff.id))
-    elif fields.pop("nightjar_disabled_for_role", False) and "monitor" in staff.roles:
-        staff.active = True
-    person.source_fields = fields
+    """Roster changes never mutate Nightjar logins, even across events."""
+    return
 
 
 @router.patch("/people/{person_id}")

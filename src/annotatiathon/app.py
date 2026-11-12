@@ -19,6 +19,7 @@ from .native_sync_api import router as native_router
 from .people_api import router as people_router
 from .personal_settings_api import router as personal_settings_router
 from .registration_api import router as registration_router
+from .organiser_setup_api import router as organiser_setup_router
 from .review_dashboard_api import router as review_dashboard_router
 from .review_queue_api import router as review_queue_router
 from .reviews_api import router as reviews_router
@@ -35,6 +36,7 @@ app = FastAPI(
 )
 app.include_router(auth_router)
 app.include_router(registration_router)
+app.include_router(organiser_setup_router)
 app.include_router(people_router)
 app.include_router(coverage_router)
 app.include_router(teams_router)

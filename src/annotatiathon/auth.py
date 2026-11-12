@@ -13,10 +13,11 @@ from .config import get_settings
 from .db import get_db
 from .models import DEFAULT_EVENT_ID, AuditEvent, Event, StaffAccount, StaffSession
 from .security import DUMMY_HASH, password_matches, random_token, token_digest
+from .organiser_access import access_roles, is_restricted_mode
 
 router = APIRouter(prefix="/api/v1/auth", tags=["authentication"])
 SESSION_SECONDS = 12 * 60 * 60
-ROLES = frozenset({"organiser", "monitor", "reception", "activity", "distribution", "observer"})
+ROLES = frozenset({"admin", "organiser", "monitor", "reception", "activity", "distribution", "observer"})
 
 
 def normalized_email(email: str) -> str:
@@ -77,7 +78,8 @@ def get_context(request: Request, db: Session = Depends(get_db)) -> AuthContext:
     if session is None or session.expires_at <= int(time.time()):
         raise HTTPException(status_code=401, detail="Session expired.")
     staff = db.get(StaffAccount, session.staff_id)
-    if staff is None or not staff.active:
+    if (staff is None or not staff.active or
+            (is_restricted_mode() and staff.roles != access_roles(staff.email))):
         raise HTTPException(status_code=401, detail="Account unavailable.")
     return AuthContext(staff=staff, session=session)
 
@@ -96,7 +98,7 @@ def requires(*roles: str, mutation: bool = False):
     def permission(
         ctx: AuthContext = Depends(require_csrf if mutation else get_context),
     ) -> AuthContext:
-        if not any(role in ctx.staff.roles for role in roles):
+        if "admin" not in ctx.staff.roles and not any(role in ctx.staff.roles for role in roles):
             raise HTTPException(status_code=403, detail="Not authorised for this operation.")
         return ctx
 
@@ -111,7 +113,9 @@ def login(payload: Credentials, request: Request, response: Response, db: Sessio
     if staff is None:
         password_matches(DUMMY_HASH, payload.password)
         raise HTTPException(status_code=401, detail="Invalid credentials.")
-    if not staff.active or (staff.locked_until and staff.locked_until > now):
+    if (not staff.active or
+        (is_restricted_mode() and staff.roles != access_roles(staff.email)) or
+        (staff.locked_until and staff.locked_until > now)):
         raise HTTPException(status_code=401, detail="Invalid credentials.")
     if not password_matches(staff.password_hash, payload.password):
         staff.login_failures += 1

@@ -23,6 +23,7 @@ from .models import (
     epoch,
 )
 from .security import password_hash
+from .organiser_access import is_restricted_mode
 
 router = APIRouter(prefix="/api/v1/auth/register", tags=["staff self-registration"])
 
@@ -95,6 +96,8 @@ def create_monitor_account(
     Organisers must deliver the code to the intended monitor privately.
     """
     same_origin(request)
+    if is_restricted_mode():
+        raise HTTPException(status_code=410, detail="Event-roster signup disabled; use organiser email setup.")
     # Previously created accounts are never re-registered when event/roster
     # configuration changes. Direct people to their existing login.
     if db.scalar(select(StaffAccount.id).where(StaffAccount.email == payload.email)):

@@ -1,4 +1,4 @@
-export type Role = "organiser" | "monitor" | "reception" | "activity" | "distribution" | "observer";
+export type Role = "admin" | "organiser" | "monitor" | "reception" | "activity" | "distribution" | "observer";
 
 export type Staff = { id: string; email: string; name: string; roles: Role[] };
 export type Auth = { staff: Staff; csrf_token: string };

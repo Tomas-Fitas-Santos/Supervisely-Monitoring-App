@@ -97,8 +97,8 @@ jobs:
           for path in /api/v1/auth/login /api/v1/auth/register; do
             test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -d '{}' "http://127.0.0.1:8080$path")" = "422"
           done
-          # Unknown email cannot create a monitor account.
-          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -d '{"email":"not-registered@example.invalid","password":"VeryStrongExamplePassword2026!"}' http://127.0.0.1:8080/api/v1/auth/register)" = "403"
+          # Legacy event-roster self-registration is disabled in production.
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -d '{"email":"not-registered@example.invalid","password":"VeryStrongExamplePassword2026!"}' http://127.0.0.1:8080/api/v1/auth/register)" = "410"
           # Invalid credentials are rejected by the application as JSON, not by Nginx.
           test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -d '{"email":"not-registered@example.invalid","password":"sample-password"}' http://127.0.0.1:8080/api/v1/auth/login)" = "401"
           curl -s -H 'Content-Type: application/json' -d '{"email":"not-registered@example.invalid","password":"sample-password"}' http://127.0.0.1:8080/api/v1/auth/login | grep -q 'Invalid credentials'

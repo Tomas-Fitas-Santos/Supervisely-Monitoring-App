@@ -18,6 +18,7 @@ from .models import (
     epoch,
 )
 from .registration_api import monitor_can_register
+from .organiser_access import is_restricted_mode
 
 router = APIRouter(prefix="/api/v1/staff", tags=["staff"])
 
@@ -45,6 +46,8 @@ def update_staff_roles(
     ctx: AuthContext = Depends(requires("organiser", mutation=True)),
     db: Session = Depends(get_db),
 ):
+    if is_restricted_mode():
+        raise HTTPException(status_code=409, detail="Roles are managed by the approved organiser email list.")
     if len(set(payload.roles)) != len(payload.roles) or any(
         role not in ROLES for role in payload.roles
     ):
@@ -89,6 +92,8 @@ def issue_monitor_registration_code(
 
     The plaintext code is returned once and never stored or logged.
     """
+    if is_restricted_mode():
+        raise HTTPException(status_code=410, detail="Monitor registration codes have been retired.")
     try:
         email = normalized_email(payload.email)
     except ValueError as exc:

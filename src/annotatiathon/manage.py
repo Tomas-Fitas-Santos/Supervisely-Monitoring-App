@@ -8,6 +8,7 @@ from .auth import ROLES, normalized_email
 from .db import session_factory
 from .models import AuditEvent, StaffAccount, StaffSession
 from .security import password_hash
+from .organiser_access import configured_emails, access_roles, is_restricted_mode
 
 
 def prompted_password() -> str:
@@ -25,6 +26,7 @@ def main() -> None:
     new.add_argument("--email", required=True)
     new.add_argument("--name", required=True)
     new.add_argument("--roles", required=True, help="Comma-separated app roles")
+    cmd.add_parser("sync-organiser-access", help="Restore approved administrator/organiser accounts")
     reset = cmd.add_parser(
         "reset-password",
         help="Securely reset an existing staff password and revoke sessions",
@@ -48,11 +50,53 @@ def main() -> None:
 
         print(backfill_frame_reviews(session_factory(), event_id=args.event_id))
         return
+    if args.action == "sync-organiser-access":
+        approved = configured_emails()
+        if not approved or not any("admin" in roles for roles in approved.values()):
+            parser.error("Set NIGHTJAR_ADMIN_EMAILS and NIGHTJAR_ORGANISER_EMAILS first.")
+        updated, missing, disabled = [], [], []
+        with session_factory().begin() as db:
+            accounts = db.scalars(select(StaffAccount).with_for_update()).all()
+            by_email = {a.email: a for a in accounts}
+            for address, roles in approved.items():
+                staff = by_email.get(address)
+                if staff is None:
+                    missing.append(address)
+                    continue
+                changed = staff.roles != roles or not staff.active
+                staff.roles = roles
+                staff.active = True
+                staff.login_failures = 0
+                staff.locked_until = None
+                if changed:
+                    db.execute(delete(StaffSession).where(StaffSession.staff_id == staff.id))
+                    db.add(AuditEvent(
+                        action="staff.access.allowlist_sync", target_type="staff",
+                        target_id=staff.id, details={"roles": roles, "enabled": True},
+                    ))
+                    updated.append(address)
+            if is_restricted_mode():
+                for staff in accounts:
+                    if staff.email not in approved and staff.active:
+                        staff.active = False
+                        db.execute(delete(StaffSession).where(StaffSession.staff_id == staff.id))
+                        db.add(AuditEvent(
+                            action="staff.access.allowlist_sync", target_type="staff",
+                            target_id=staff.id, details={"enabled": False, "reason": "not_allowlisted"},
+                        ))
+                        disabled.append(staff.email)
+        print("Enabled/updated:", len(updated), "Needs email setup:", len(missing),
+              "Other staff disabled:", len(disabled))
+        for address in missing:
+            print("Needs email setup:", address)
+        return
     try:
         email = normalized_email(args.email)
     except ValueError as exc:
         parser.error(str(exc))
 
+    if is_restricted_mode() and not access_roles(email):
+        parser.error("Email is not on the Nightjar app access list.")
     if args.action == "reset-password":
         with session_factory().begin() as db:
             staff = db.scalar(

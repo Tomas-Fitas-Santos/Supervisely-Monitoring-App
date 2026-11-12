@@ -25,44 +25,43 @@ type Tab = "overview" | "checkin" | "tickets" | "activities" | "competition" |
   "staff" | "settings" | "account";
 
 function Login({ onLogin }: { onLogin: (auth: Auth) => void }) {
-  const [mode,setMode] = useState<"login"|"register">("login");
-  const [email,setEmail] = useState("");
+  // Links use a URL fragment so the one-time secret is not sent to web/CDN logs.
+  const initial = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+  const initialToken = initial.get("nightjar_setup") || "";
+  const [mode,setMode] = useState<"login"|"request"|"complete">(initialToken?"complete":"login");
+  const [token,setToken] = useState(initialToken);
+  const [email,setEmail] = useState(initial.get("email") || "");
   const [password,setPassword] = useState("");
   const [confirmation,setConfirmation] = useState("");
-  const [registrationCode,setRegistrationCode] = useState("");
+  const [showPassword,setShowPassword] = useState(false);
   const [error,setError] = useState("");
   const [notice,setNotice] = useState("");
   const [working,setWorking] = useState(false);
-
+  useEffect(()=>{
+    if(initialToken)window.history.replaceState(null,"",window.location.pathname+window.location.search);
+  },[]);
   async function submit(e:React.FormEvent) {
     e.preventDefault();
     setError("");setNotice("");setWorking(true);
     try {
       const accountEmail=email.trim().toLowerCase();
-      if(mode==="register") {
-        if(password!==confirmation)
-          throw new Error("The two passwords do not match.");
-        const result=await api<{registered:boolean;message:string}>(
-          "/auth/register","POST",{email:accountEmail,password,registration_code:registrationCode.trim()});
-        try {
-          // Registration and the independent Supervisely link are separate.
-          onLogin(await api<Auth>("/auth/login","POST",{email:accountEmail,password}));
-        }catch(loginError) {
-          setMode("login");
-          setConfirmation("");
-          setPassword("");
-          setNotice(result.message);
-          setError("Automatic sign-in failed: "+(loginError as Error).message);
-        }
-      }else{
+      if(mode==="request") {
+        const result=await api<{message:string}>("/auth/setup/request","POST",{email:accountEmail});
+        setNotice(result.message);
+      } else if(mode==="complete") {
+        if(password!==confirmation)throw new Error("The passwords do not match.");
+        await api("/auth/setup/complete","POST",{email:accountEmail,token,password});
+        setToken("");setConfirmation("");
+        onLogin(await api<Auth>("/auth/login","POST",{email:accountEmail,password}));
+      } else {
         onLogin(await api<Auth>("/auth/login","POST",{email:accountEmail,password}));
       }
     }catch(exc){setError((exc as Error).message);}
     finally{setWorking(false);}
   }
-  function switchMode(){
-    setMode(v=>v==="login"?"register":"login");
-    setError("");setNotice("");setPassword("");setConfirmation("");setRegistrationCode("");
+  function switchMode(next:"login"|"request") {
+    setMode(next);setError("");setNotice("");setPassword("");setConfirmation("");
+    setToken("");setShowPassword(false);
   }
 
   return <main className="login-shell">
@@ -79,44 +78,55 @@ function Login({ onLogin }: { onLogin: (auth: Auth) => void }) {
     <section className="login-panel">
       <div className="login-card">
         <div className="mobile-brand"><Bird size={23}/> NIGHTJAR</div>
-        <span className="eyebrow">{mode==="login"?"WELCOME BACK":"MONITOR REGISTRATION"}</span>
-        <h2>{mode==="login"?"Sign in to Nightjar":"Create your monitor account"}</h2>
+        <span className="eyebrow">{mode==="login"?"WELCOME BACK":
+          mode==="request"?"APPROVED STAFF ACCESS":"SECURE ACCOUNT SETUP"}</span>
+        <h2>{mode==="login"?"Sign in to Nightjar":
+          mode==="request"?"Set up or recover your account":"Choose your password"}</h2>
         <p className="muted">{mode==="login"?
           "Sign in with your Nightjar account, not your Supervisely credentials.":
-          "Use your approved monitor email and the one-time code supplied privately by your organiser. Choose a separate Nightjar password."}</p>
+          mode==="request"?
+          "Enter your approved Admin or Organiser email. We'll email you a secure setup link. No registration code is needed.":
+          "Your email link confirms your identity. Choose a password of at least 12 characters; numbers and symbols are optional."}</p>
         <form onSubmit={e=>void submit(e)} className="form-stack">
           <label>Email address<input type="email" autoComplete="username" autoFocus required
             value={email} onChange={e=>setEmail(e.target.value)}
             placeholder="you@institution.pt"/></label>
-          <label>{mode==="login"?"Password":"Choose your Nightjar password (12+ characters)"}
-            <input type="password" autoComplete={mode==="login"?"current-password":"new-password"}
-              required minLength={mode==="register"?12:undefined}
-              value={password} onChange={e=>setPassword(e.target.value)}
-              placeholder="Enter password"/></label>
-          {mode==="register"&&<label>One-time registration code from your organiser
-            <input type="text" autoComplete="one-time-code" required
-              value={registrationCode} onChange={e=>setRegistrationCode(e.target.value)}
-              placeholder="Paste your private registration code"/>
-          </label>}
-          {mode==="register"&&<label>Confirm Nightjar password
-            <input type="password" autoComplete="new-password" minLength={12}
-              required value={confirmation} onChange={e=>setConfirmation(e.target.value)}
-              placeholder="Enter the same password again"/></label>}
+          {mode!=="request"&&<>
+            <label>{mode==="login"?"Password":"New Nightjar password (12+ characters)"}
+              <input type={showPassword?"text":"password"}
+                autoComplete={mode==="login"?"current-password":"new-password"}
+                required minLength={mode==="complete"?12:undefined}
+                value={password} onChange={e=>setPassword(e.target.value)}
+                placeholder="Enter password"/>
+            </label>
+            {mode==="complete"&&<label>Confirm Nightjar password
+              <input type={showPassword?"text":"password"} autoComplete="new-password"
+                minLength={12} required value={confirmation}
+                onChange={e=>setConfirmation(e.target.value)}
+                placeholder="Enter the same password again"/></label>}
+            <label className="muted small"><input type="checkbox" checked={showPassword}
+              onChange={e=>setShowPassword(e.target.checked)}/> Show password</label>
+          </>}
           {error&&<div role="alert" className="alert danger">{error}</div>}
           {notice&&<div role="status" className="alert success">{notice}</div>}
           <button className="btn primary large" disabled={working} type="submit">
-            {working?"Working…":mode==="login"?"Sign in":"Create account and sign in"}
+            {working?"Working…":mode==="login"?"Sign in":
+              mode==="request"?"Email my secure setup link":"Save password and sign in"}
             <ArrowRight size={17}/>
           </button>
         </form>
         <div className="settings-action-row" style={{marginTop:15}}>
-          <button type="button" className="btn secondary" disabled={working} onClick={switchMode}>
-            {mode==="login"?"Create monitor account":"Back to sign in"}
-          </button>
+          {mode==="login"?<>
+            <button type="button" className="btn secondary" disabled={working}
+              onClick={()=>switchMode("request")}>Create organiser account</button>
+            <button type="button" className="btn secondary" disabled={working}
+              onClick={()=>switchMode("request")}>Forgot password?</button>
+          </>:<button type="button" className="btn secondary" disabled={working}
+            onClick={()=>switchMode("login")}>Back to sign in</button>}
         </div>
         <p className="login-hint"><CircleHelp size={15}/>
-          Only approved monitors with a private organiser-issued code can register.
-          If your email is not listed, ask the organiser to add or approve you.</p>
+          Only approved Admins and Organisers can access Nightjar. Event Monitor
+          and Participant roles do not affect app access.</p>
       </div>
       <div className="login-bottom">TÉCNICO · Bird Annotatiathon</div>
     </section>
@@ -127,7 +137,7 @@ function Overview({auth,onNavigate}:{
   auth:Auth;onNavigate:(tab:Tab)=>void;
 }) {
   const roles=auth.staff.roles;
-  const organiser=roles.includes("organiser");
+  const organiser=roles.includes("organiser")||roles.includes("admin");
   const reviewer=organiser||roles.includes("monitor");
   const admits=reviewer||roles.includes("reception");
   const tickets=reviewer||roles.some(role=>["distribution","reception","activity"].includes(role));
@@ -274,7 +284,7 @@ function App() {
   }
   if (loading) return <div className="loading-screen"><Bird size={33}/> Loading Nightjar…</div>;
   if (!auth) return <Login onLogin={a=>{setAuth(a);setTab("overview");}}/>;
-  const has=(...roles:string[])=>auth.staff.roles.some(role=>roles.includes(role));
+  const has=(...roles:string[])=>auth.staff.roles.includes("admin")||auth.staff.roles.some(role=>roles.includes(role));
   const organiser=has("organiser");
   const eventNavigation: {id:Tab;label:string;icon:typeof LayoutDashboard}[] = [
     {id:"overview",label:"Overview",icon:LayoutDashboard},
@@ -295,7 +305,7 @@ function App() {
     {id:"people",label:"People & Teams",icon:UsersRound},
     {id:"datasets",label:"Dataset",icon:Database},
     {id:"job_setup",label:"Job Distribution",icon:Cloud},
-    {id:"staff",label:"Staff Access",icon:ShieldCheck},
+    ...(has("admin")?[{id:"staff" as Tab,label:"Staff Access",icon:ShieldCheck}]:[]),
     {id:"settings",label:"Settings",icon:Settings2},
   ]:[];
   const accountNavigation: {id:Tab;label:string;icon:typeof LayoutDashboard}[] =
@@ -356,7 +366,7 @@ function App() {
       {accessibleTab==="job_setup"&&organiser&&<CompetitionScreen auth={auth} view="setup"/>}
       {accessibleTab==="quality"&&<SharedReviewScreen auth={auth}/>}
       {accessibleTab==="closeout"&&<CloseoutScreen auth={auth}/>}
-      {accessibleTab==="staff"&&organiser&&<div className="page-body"><div className="page-heading"><div><span className="eyebrow">EVENT SETUP · PERMISSIONS</span><h2>Staff Access</h2><p className="muted">Only organisers manage Nightjar staff roles and permissions.</p></div></div><StaffScreen auth={auth}/></div>}
+      {accessibleTab==="staff"&&has("admin")&&<div className="page-body"><div className="page-heading"><div><span className="eyebrow">EVENT SETUP · PERMISSIONS</span><h2>Staff Access</h2><p className="muted">Only admins administer the approved Nightjar accounts.</p></div></div><StaffScreen auth={auth}/></div>}
       {((accessibleTab==="settings"&&organiser)||accessibleTab==="account")&&<SettingsScreen auth={auth}/>}
       <footer className="page-footer"><Bird size={14}/> Nightjar Annotatiathon · Técnico</footer>
     </div>
