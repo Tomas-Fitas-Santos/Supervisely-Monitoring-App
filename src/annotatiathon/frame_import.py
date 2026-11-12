@@ -1,8 +1,8 @@
 """Infer supplied frame order from filenames; legacy manifests remain optional."""
 import re
+from collections.abc import Callable
 from fractions import Fraction
 from pathlib import Path
-from typing import Callable
 from typing import Literal
 
 from fastapi import HTTPException
