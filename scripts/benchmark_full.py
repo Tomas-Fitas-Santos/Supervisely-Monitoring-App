@@ -250,6 +250,7 @@ def simulate():
         state["profile_scale"] = max(.1, min(10.0, float(body.get("profile_scale", 1))))
         state["timeout_rate"] = max(0.0, min(.25, float(body.get("timeout_rate", 0))))
         state["started"] = time.monotonic()
+        state["started_unix_ms"] = round(time.time() * 1000)
         state["burst"] = body.get("burst", False)
         for index in range(ANNOTATORS):
             offset = 0 if state["burst"] else index * FRAMES * SECONDS_PER_FRAME / ANNOTATORS
