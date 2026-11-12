@@ -1288,6 +1288,11 @@ def test_partial_submission_accepts_frames_once_and_reissues_only_missing(config
         coverage = _http.get("/api/v1/rankings/teams").json()["items"]
         member_team = next(x for x in coverage if x["team_id"] == job.team_id)
         assert member_team["available_frames"] == 1
+        page = _http.get("/api/v1/labeling/jobs").json()["items"]
+        shown = next(row for row in page if row["id"] == job_id)
+        assert shown["structurally_accepted_frames"] == 1
+        assert shown["structurally_pending_frames"] == 1
+        assert shown["correction_round"] == 1
 
         correction = process_correction_once(db, sdk, db.get(SuperviselyConfig, 1))
         assert correction["status"] == "done", correction
@@ -1322,6 +1327,10 @@ def test_partial_submission_accepts_frames_once_and_reissues_only_missing(config
         assert {a.media_id for a in accepted} == set(source_ids)
         assert all(a.validated_complete for a in accepted)
         assert {a.correction_round for a in accepted} == {0, 1}
+        page = _http.get("/api/v1/labeling/jobs").json()["items"]
+        shown = next(row for row in page if row["id"] == job_id)
+        assert shown["structurally_accepted_frames"] == 2
+        assert shown["structurally_pending_frames"] == 0
         assert len(list(db.scalars(select(LabelingJob).where(
             LabelingJob.id == job_id,
         )))) == 1
