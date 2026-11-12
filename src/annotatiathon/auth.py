@@ -12,8 +12,8 @@ from sqlalchemy.orm import Session
 from .config import get_settings
 from .db import get_db
 from .models import DEFAULT_EVENT_ID, AuditEvent, Event, StaffAccount, StaffSession
-from .security import DUMMY_HASH, password_matches, random_token, token_digest
 from .organiser_access import access_roles, is_restricted_mode
+from .security import DUMMY_HASH, password_matches, random_token, token_digest
 
 router = APIRouter(prefix="/api/v1/auth", tags=["authentication"])
 SESSION_SECONDS = 12 * 60 * 60
