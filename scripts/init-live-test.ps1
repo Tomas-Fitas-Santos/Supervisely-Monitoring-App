@@ -27,4 +27,4 @@ $content = $content.Replace("NIGHTJAR_ENCRYPTION_KEY=GENERATE_WITH_SCRIPT", "NIG
 [IO.File]::WriteAllText($target, $content, (New-Object System.Text.UTF8Encoding($false)))
 New-Item -ItemType Directory -Path (Join-Path $root ".nightjar-live-data") -Force | Out-Null
 Write-Host "Created private .env.live and isolated media directory."
-Write-Host "Configure SMTP in .env.live before real monitor account registrations."
+Write-Host "Monitor signup uses organiser-issued one-time registration codes; SMTP is not required."
