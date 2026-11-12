@@ -212,6 +212,19 @@ try {
         }
         $elapsed = [int]((Get-Date) - $runStart).TotalSeconds
         if ($elapsed - $lastProgress -ge 30) {
+          # A crashed/recreated replica would corrupt the scaling comparison.
+          # Fail immediately rather than silently reporting less capacity.
+          foreach ($role in @(
+            @{ Name = "worker"; Expected = $count },
+            @{ Name = "validation-worker"; Expected = $Validators },
+            @{ Name = "correction-worker"; Expected = $Correctors },
+            @{ Name = "status-worker"; Expected = $StatusWorkers }
+          )) {
+            $active = @(& docker ps --filter "label=com.docker.compose.project=$project" --filter "label=com.docker.compose.service=$($role.Name)" --format '{{.ID}}') | Where-Object { $_ }
+            if ($active.Count -ne $role.Expected) {
+              throw "Benchmark worker count changed during load: expected $($role.Expected) $($role.Name), found $($active.Count). See service logs; results invalid."
+            }
+          }
           Write-Host "Benchmark $count publisher(s), $Validators validator(s): load running, elapsed $elapsed seconds (workload target $Seconds seconds plus setup/export)."
           $lastProgress = $elapsed
         }
