@@ -5,11 +5,10 @@ The first registration claims the approved address; subsequent attempts are deni
 """
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from .auth import normalized_email, same_origin
+from .auth import accounts_for_email, normalized_email, same_origin
 from .db import get_db
 from .models import AuditEvent, StaffAccount
 from .organiser_access import access_roles, is_restricted_mode
@@ -51,7 +50,7 @@ def create_approved_staff_account(
     roles = access_roles(db, payload.email)
     if not roles:
         raise HTTPException(status_code=403, detail="This email is not approved for Nightjar.")
-    if db.scalar(select(StaffAccount.id).where(StaffAccount.email == payload.email)):
+    if accounts_for_email(db, payload.email):
         raise HTTPException(status_code=409, detail="Account already exists. Sign in instead.")
     staff = StaffAccount(
         email=payload.email, name=payload.name, password_hash=password_hash(payload.password),
