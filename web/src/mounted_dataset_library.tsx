@@ -134,13 +134,22 @@ export function MountedDatasetLibrary({auth}:{auth:Auth}){
       <section className="panel">
         <span className="eyebrow">SOURCE DIRECTORY</span><h3>Link folder & upload directly</h3>
         <p className="muted small">Only metadata is stored in Nightjar. Supplied frame files remain in the selected folder, mounted read-only. The worker uses the Supervisely SDK for direct uploads.</p>
-        {!sources.mounted&&<div className="alert warning">
-          No dataset source volume mounted. Set <code>NIGHTJAR_DATASET_HOST_DIR</code> in
-          <code>.env.live</code> to the parent directory and redeploy. The folder must
-          exist on the PC/server running Docker, not only on a remote browser computer.
+        {sources.folders.length===0&&<div className="alert warning" role="status">
+          <strong>No dataset folders visible to Nightjar.</strong>
+          <p>To link a local Windows folder without uploading the files through your browser,
+            run <code>.&#92;scripts&#92;link-local-dataset.ps1 -StartWorker</code> in PowerShell
+            from the Nightjar repository on the PC running Docker Desktop.
+            Choose the <strong>dataset root</strong> containing your species folders.
+            The helper mounts its parent read-only and keeps your database and credentials.</p>
+          <p>{sources.mounted
+            ?"The mounted source directory currently contains no selectable dataset folders."
+            :"The dataset source volume is not accessible in the running Nightjar container."}
+            {" "}A remote browser cannot directly grant the server access to a folder on this PC.</p>
+          <button className="btn secondary" type="button" disabled={busy}
+            onClick={()=>void refreshSources()}><RefreshCw size={15}/> Check folders again</button>
         </div>}
         <form className="form-stack" onSubmit={e=>void register(e)}>
-          <label>Dataset folder<select value={folder} disabled={busy||!sources.mounted}
+          <label>Dataset folder<select value={folder} disabled={busy||!sources.mounted||sources.folders.length===0}
             onChange={e=>{setFolder(e.target.value);if(!name)setName(e.target.value);}}>
             {!sources.folders.length&&<option value="">No folders available</option>}
             {sources.folders.map(x=><option key={x} value={x}>{x}</option>)}
