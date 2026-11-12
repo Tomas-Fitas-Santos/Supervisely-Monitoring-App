@@ -301,9 +301,14 @@ def test_event_schedule_rejects_outside_activities_and_role_escalation(user):
     assert mutation(http, monitor.json()["csrf_token"], schedule_url, {
         "start_at": start + 1, "end_at": end,
     }, "PUT").status_code == 403
-    assert mutation(http, csrf, "/events/" + DEFAULT_EVENT_ID + "/archive", {
+    organiser = http.post("/api/v1/auth/login", json={
+        "email": "boss@example.org", "password": "StrongTemporaryPassword!",
+    })
+    assert organiser.status_code == 200
+    organiser_csrf = organiser.json()["csrf_token"]
+    assert mutation(http, organiser_csrf, "/events/" + DEFAULT_EVENT_ID + "/archive", {
         "confirmation": "Initial Event",
     }).status_code == 200
-    assert mutation(http, csrf, schedule_url, {
+    assert mutation(http, organiser_csrf, schedule_url, {
         "start_at": start, "end_at": end,
     }, "PUT").status_code == 409
