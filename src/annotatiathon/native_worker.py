@@ -37,6 +37,7 @@ from .annotation_schema import (
 )
 from .db import session_factory
 from .events_api import seed_categories
+from .frame_submission import capture_frame_submission, pending_ids
 from .full_reset_api import clear_event_data, safe_dataset_paths
 from .manual_jobs_api import apply_local_reassignment, target_team
 from .models import (
@@ -66,6 +67,7 @@ from .native_media_pool import (
 from .native_names import (
     dataset_name,
     labeling_job_name,
+    source_parts_label,
     legacy_dataset_name,
     legacy_project_name,
     owned_project_event_id,
@@ -435,9 +437,19 @@ def publish_job(db: Session, job: LabelingJob, api, config: SuperviselyConfig) -
     # Automatic jobs reference subsets of the shared preloaded dataset.
     # Manual jobs reference their own copied frames in a separate dataset.
     # Only jobs with this deterministic Nightjar title belong to this job.
+    parts_by_id = {a.id: (a.video_group, a.frame_index) for a in db.scalars(
+        select(MediaAsset).where(
+            MediaAsset.event_id == job.event_id,
+            MediaAsset.dataset_id == job.dataset_id,
+            MediaAsset.id.in_(job.media_ids),
+        )
+    )}
+    source_parts = [parts_by_id[mid] for mid in job.media_ids if mid in parts_by_id
+                    and parts_by_id[mid][0]]
     expected_title = labeling_job_name(
         job, team, job_video_group(db, job),
         people[0].name if job.assignee_person_id else "Team pair",
+        source_parts=source_parts or None,
     )
     current = api.labeling_job.get_list(
         config.team_id, dataset_id=remote_ds_id, show_disabled=True,
@@ -515,6 +527,7 @@ def publish_job(db: Session, job: LabelingJob, api, config: SuperviselyConfig) -
 
 def queue_automatic_incomplete_return(
     db: Session, job: LabelingJob, finished: int, total: int,
+    *, pending_media_ids: list[str] | None = None,
 ) -> str:
     """Automatically return unfinished native submissions without review.
 
@@ -530,21 +543,29 @@ def queue_automatic_incomplete_return(
         NativeOperation.kind == "restart_job",
         NativeOperation.target_id == job.id,
     ).with_for_update())
+    unresolved = pending_media_ids if pending_media_ids is not None else list(job.media_ids)
     if operation is None:
         db.add(NativeOperation(
             event_id=job.event_id, kind="restart_job",
             target_id=job.id, status="pending",
+            payload={"pending_media_ids": unresolved, "source_round": job.correction_round - 1},
         ))
     elif operation.status in {"done", "attention", "blocked"}:
         operation.status = "pending"
         operation.error_code = None
         operation.claimed_at = None
+        operation.payload = {
+            "pending_media_ids": unresolved,
+            "source_round": job.correction_round - 1,
+        }
     else:
         raise NativeWorkerError("existing_correction_operation_pending")
     db.add(AuditEvent(
         event_id=job.event_id, action="native.job.incomplete_auto_return",
         target_type="labeling_job", target_id=job.id,
         details={"finished_images": finished, "expected_images": total,
+                 "accepted_images": total - len(unresolved),
+                 "pending_images": len(unresolved),
                  "correction_round": job.correction_round},
     ))
     db.commit()
@@ -583,8 +604,15 @@ def sync_one(db: Session, api, job: LabelingJob) -> str:
         binding.last_synced_at = epoch()
         statuses.append(native)
     if any(info.status == "stopped" for info in statuses):
-        job.status = "needs_correction"
-        job.review_status = "returned"
+        # Preserve deliberate administrative stops. A stopped native job with
+        # confirmed frames is still eligible for per-frame validation, but one
+        # without submission evidence is not silently republished.
+        if (job.assignee_person_id is not None
+                and any(info.finished_images_count > 0 for info in statuses)):
+            job.status = "on_review"
+        else:
+            job.status = "needs_correction"
+            job.review_status = "returned"
     elif all(
         info.status in {"on_review", "completed", "review_completed"}
         and (job.assignee_person_id is not None or (
@@ -600,23 +628,11 @@ def sync_one(db: Session, api, job: LabelingJob) -> str:
             and job.frame_count == 30
         )
         if shared or official_manual:
-            # A 30-frame native job is not reviewable until all thirty images
-            # are finished. This applies to automatic and manual distribution.
-            native = statuses[0]
-            if (native.images_count != job.frame_count
-                    or native.finished_images_count != job.frame_count):
-                return queue_automatic_incomplete_return(
-                    db, job, native.finished_images_count, job.frame_count,
-                )
-            if shared:
-                from .models import WorkPacket
-
-                packet = db.get(WorkPacket, job.id)
-                if packet is None or packet.person_id != job.assignee_person_id:
-                    raise NativeWorkerError("shared_packet_missing")
-                packet.submitted_at = packet.submitted_at or epoch()
-            if job.review_status == "incomplete_submission":
-                job.review_status = "unreviewed"
+            # Submission makes the job eligible for job-scoped JSON capture.
+            # Completeness is determined independently for each image AFTER
+            # capture, not by Supervisely's job-level finished-image count.
+            # WorkPacket remains occupied until every source frame is valid.
+            pass
         job.status = "on_review"
         job.submitted_at = job.submitted_at or epoch()
     db.commit()
@@ -632,6 +648,19 @@ def capture_job_annotations(db: Session, api, job: LabelingJob) -> bool:
     """
     if job.status not in {"on_review", "completed"}:
         return False
+    official = job.assignee_person_id is not None and (
+        job.release_mode in {"shared_primary", "shared_repeat"}
+        or (job.release_mode in {"manual_hold", "manual_released"}
+            and job.frame_count == 30)
+    )
+    if official:
+        result = capture_frame_submission(db, api, job)
+        if result["pending"]:
+            queue_automatic_incomplete_return(
+                db, job, len(job.media_ids) - len(result["pending"]),
+                job.frame_count, pending_media_ids=result["pending"],
+            )
+        return True
     dataset = db.get(MediaDataset, job.dataset_id)
     if dataset is None or dataset.status != "ready":
         raise NativeWorkerError("annotation_source_dataset_missing")
