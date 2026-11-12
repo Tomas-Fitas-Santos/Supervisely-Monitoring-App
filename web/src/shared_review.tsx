@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type React from "react";
 import {
   CheckCircle2, ChevronRight, ClipboardCheck, PauseCircle, PlayCircle,
@@ -44,11 +44,14 @@ const reasons:{value:Reason;label:string}[]=[
   {value:"sabotage",label:"Sabotage / no serious placement attempt"},
 ];
 const fmt=(n:number)=>new Intl.NumberFormat().format(n);
+const isLeaseConflict=(error:unknown)=>/claim expired|not owned by this claim|already completed/i
+  .test((error as Error).message||"");
 
 export function SharedReviewScreen({auth}:{auth:Auth}){
   const organiser=auth.staff.roles.includes("organiser");
   const [tab,setTab]=useState<"review"|"rankings"|"scoring">("review");
   const [claim,setClaim]=useState<ReviewClaim|null>(null);
+  const activeClaimRef=useRef<ReviewClaim|null>(null);
   const [status,setStatus]=useState<QueueStatus|null>(null);
   const [rankings,setRankings]=useState<Ranking[]>([]);
   const [rubric,setRubric]=useState<Rubric|null>(null);
@@ -124,12 +127,22 @@ export function SharedReviewScreen({auth}:{auth:Auth}){
         "POST",{claim_token:token},auth.csrf_token).then(result=>{
         setClaim(current=>current?.review_id===reviewId?
           {...current,expires_at:result.expires_at}:current);
-      }).catch(e=>setError("Review lease: "+(e as Error).message));
+      }).catch(e=>{
+        if(activeClaimRef.current?.review_id!==reviewId)return;
+        if(isLeaseConflict(e)){
+          setActiveReview(null);
+          setError("This frame lease has expired or was reassigned. Your unsaved grades were not submitted; request the next available frame.");
+          void refreshStatus().catch(()=>undefined);
+        }else{
+          setError("Review lease: "+(e as Error).message);
+        }
+      });
     },45000);
     return()=>window.clearInterval(interval);
   },[claim?.review_id,claim?.claim_token,auth.csrf_token]);
 
   function setActiveReview(next:ReviewClaim|null){
+    activeClaimRef.current=next;
     setClaim(next);setVerdicts({});setMissingClasses([]);setZoom(1);setSelectedObject(null);
   }
 
@@ -156,7 +169,13 @@ export function SharedReviewScreen({auth}:{auth:Auth}){
       setActiveReview(null);setPaused(true);
       setNotice("Frame returned to the shared queue without a review.");
       await refreshStatus();
-    }catch(e){setError((e as Error).message);}
+    }catch(e){
+      if(isLeaseConflict(e)){
+        setActiveReview(null);
+        setError("This frame is no longer assigned to you. Your unsaved grades were not submitted. You can request another frame.");
+        void refreshStatus().catch(()=>undefined);
+      }else setError((e as Error).message);
+    }
     finally{setBusy(false);}
   }
 
@@ -192,7 +211,13 @@ export function SharedReviewScreen({auth}:{auth:Auth}){
         "Frame saved. Reviewing paused until you choose Next frame.":
         response.review?"Review saved. Next frame claimed.":"Review saved. Queue currently empty.");
       await refreshStatus();
-    }catch(e){setError((e as Error).message);}
+    }catch(e){
+      if(isLeaseConflict(e)){
+        setActiveReview(null);
+        setError("Review lease expired or was reassigned before your verdicts could be saved. Request a new frame.");
+        void refreshStatus().catch(()=>undefined);
+      }else setError((e as Error).message);
+    }
     finally{setBusy(false);}
   }
 
@@ -204,7 +229,7 @@ export function SharedReviewScreen({auth}:{auth:Auth}){
       const result=await api<Rubric>("/scoring/rubric","PUT",weights,auth.csrf_token);
       setRubric(result);setWeights(result.weights);
       setNotice("Scoring rubric saved as version "+result.version+
-        ". Existing completed reviews retain their original rubric.");
+        ". Historical verdicts remain unchanged; leaderboard weighted scores are recalculated consistently with this version.");
     }catch(e){setError((e as Error).message);}
     finally{setBusy(false);}
   }
