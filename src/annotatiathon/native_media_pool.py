@@ -18,6 +18,7 @@ from .models import (
     NativeOperation,
     NativeSourceMedia,
     SuperviselyConfig,
+    epoch,
 )
 from .native_names import legacy_project_name, project_name
 
@@ -59,12 +60,23 @@ def mirror_status(db: Session, ds: MediaDataset) -> dict:
     ))
     state = (operation.status if operation is not None else
              "not_started" if ds.status == "ready" else "waiting_for_local_import")
+    queued_seconds = (
+        max(0, epoch() - operation.created_at) if operation is not None
+        and state == "pending" else None
+    )
     return {
         "state": state, "uploaded_frames": uploaded, "total_frames": total,
         "ready_for_automatic_jobs": (
             ds.native_dataset_id is not None and state == "done"
             and total > 0 and uploaded == total
         ), "error_code": operation.error_code if operation else None,
+        "attempts": operation.attempts if operation else 0,
+        "pending_seconds": queued_seconds,
+        "started_seconds_ago": (
+            max(0, epoch() - operation.claimed_at)
+            if operation is not None and operation.claimed_at is not None
+            and state == "running" else None
+        ),
     }
 
 
