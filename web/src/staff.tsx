@@ -4,7 +4,17 @@ import { api, type Auth } from "./api";
 
 type Approved = {
   email:string; role:"admin"|"organiser"; enabled:boolean;
-  registered:boolean; active:boolean;
+  registered:boolean; active:boolean; login_ready:boolean;
+  login_issue:"access_disabled"|"not_registered"|"account_disabled"|
+    "role_mismatch"|"temporarily_locked"|null;
+  last_login_at:number|null;
+};
+const REASONS:Record<Exclude<Approved["login_issue"],null>,string>={
+  access_disabled:"Access disabled",
+  not_registered:"Not registered yet",
+  account_disabled:"Account disabled",
+  role_mismatch:"Account role needs reconciliation",
+  temporarily_locked:"Temporarily locked after failed attempts",
 };
 
 export function StaffScreen({auth}:{auth:Auth}) {
@@ -18,15 +28,23 @@ export function StaffScreen({auth}:{auth:Auth}) {
   },[]);
   useEffect(()=>{void refresh();},[refresh]);
   if(!auth.staff.roles.includes("admin"))return null;
+
+  const eligible=people.filter(p=>p.enabled);
+  const ready=eligible.filter(p=>p.login_ready).length;
+  const confirmed=eligible.filter(p=>p.login_ready&&p.last_login_at!==null).length;
   return <section className="panel">
     <div className="panel-heading"><div>
-      <span className="eyebrow">ADMIN ACCESS</span>
+      <span className="eyebrow">ADMIN ACCESS · SIGN-IN VERIFICATION</span>
       <h3>Approved Nightjar accounts</h3>
-      <p className="muted">App access is controlled by the approved email records
-        in PostgreSQL. Event Monitor and Participant roles are independent.</p>
+      <p className="muted">Live PostgreSQL account status and successful login history.
+        Event Monitor and Participant roles are separate from staff permissions.</p>
     </div><button className="btn secondary" onClick={()=>void refresh()}>
-      <RefreshCw size={15}/> Refresh</button></div>
-    {error&&<div className="alert danger">{error}</div>}
+      <RefreshCw size={15}/> Refresh login status</button></div>
+    {error&&<div role="alert" className="alert danger">{error}</div>}
+    <div className="settings-row"><span>Registered, enabled and not locked</span>
+      <strong>{ready} / {eligible.length}</strong></div>
+    <div className="settings-row"><span>Ready accounts with a recorded successful sign-in</span>
+      <strong>{confirmed} / {eligible.length}</strong></div>
     <div className="staff-list">
       {people.map(person=><div className="staff-record" key={person.email}>
         <div className="staff-person"><div className="mini-avatar">
@@ -35,17 +53,24 @@ export function StaffScreen({auth}:{auth:Auth}) {
           <span>{person.role==="admin"?"Admin":"Organiser"}</span>
         </div></div>
         <div className="staff-duty-editor">
-          <strong>{!person.enabled?"Access disabled":
-            !person.registered?"Not registered yet":person.active?"Active":"Inactive"}</strong>
-          <span>{person.enabled&&!person.registered?
-            "This person can create their own Nightjar account.":""}</span>
+          <strong>{person.login_issue?REASONS[person.login_issue]:
+            person.last_login_at!==null?"Login verified":"Ready to sign in"}</strong>
+          <span>{person.login_issue==="not_registered"&&person.enabled?
+            "Approved: use Create account on the Nightjar login page.":""}</span>
+          {person.login_ready&&<span>{person.last_login_at!==null?
+            "Last successful sign-in: "+new Date(person.last_login_at*1000).toLocaleString():
+            "No successful sign-in recorded yet. Ask this person to sign in."}</span>}
         </div>
       </div>)}
     </div>
     <div className="settings-note" style={{marginTop:19}}>
       <ShieldCheck size={19}/>
-      <p>Approved people register using their own email and a password they choose.
-        No registration codes, SMTP, or Supervisely account linkage is required.</p>
+      <p>Approved people use their own Nightjar passwords; they do not need
+        Supervisely for app login. A recorded sign-in confirms that the
+        Nightjar password and role check succeeded at that time, but is not
+        proof of email ownership or that a future login cannot fail.
+        To check each person, ask them to sign in, then refresh this page.
+        No passwords should be shared with the organiser.</p>
     </div>
   </section>;
 }
