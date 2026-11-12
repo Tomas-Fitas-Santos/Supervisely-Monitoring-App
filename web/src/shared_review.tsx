@@ -219,7 +219,7 @@ export function SharedReviewScreen({auth}:{auth:Auth}){
     {error&&<div className="alert danger" role="alert">{error}</div>}
     {notice&&<div className="alert success" role="status">{notice}</div>}
 
-    {tab==="review"&&<>
+    {tab==="review"&&<div className={"shared-review-session"+(claim?" has-frame":"")}>
       <div className="stat-grid compact shared-review-stat-grid">
         <div className="stat-card"><span className="muted small">Ready frames</span><strong>{fmt(status?.pending??0)}</strong></div>
         <div className="stat-card"><span className="muted small">Being reviewed</span><strong>{fmt(status?.active??0)}</strong></div>
@@ -236,7 +236,8 @@ export function SharedReviewScreen({auth}:{auth:Auth}){
           </button>
           <p className="muted small">The worker queues every frame from complete submitted jobs. Random pool selection lets teams with more submitted frames receive more reviews without any equal-team quota.</p>
         </section>:
-        <>
+        <div className="shared-review-split">
+          <div className="shared-review-image-column">
           <section className="shared-review-frame-heading">
             <div><span className="eyebrow">CURRENT FRAME</span>
               <h3>{claim.source_filename}</h3>
@@ -265,6 +266,7 @@ export function SharedReviewScreen({auth}:{auth:Auth}){
               Drag the enlarged image to inspect details. Zoom and panning stay inside the viewer.
             </p>}
           </section>
+          </div>
 
           <section className="panel shared-review-grade-panel">
             <div className="shared-review-grade-heading">
@@ -346,8 +348,8 @@ export function SharedReviewScreen({auth}:{auth:Auth}){
               </div>
             </div>
           </section>
-        </>}
-    </>}
+        </div>}
+    </div>}
 
     {tab==="rankings"&&<section className="panel shared-review-rankings">
       <div className="shared-review-grade-heading"><div>
