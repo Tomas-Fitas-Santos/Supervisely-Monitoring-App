@@ -500,6 +500,44 @@ def publish_job(db: Session, job: LabelingJob, api, config: SuperviselyConfig) -
             "native_media": len(native_media)}
 
 
+def queue_automatic_incomplete_return(
+    db: Session, job: LabelingJob, finished: int, total: int,
+) -> str:
+    """Automatically return unfinished native submissions without review.
+
+    Do not release WorkPacket or capture annotations for this round. Recovery
+    uses the existing durable restart_job operation, not a second queue.
+    """
+    if job.assignee_person_id is None:
+        raise NativeWorkerError("automatic_return_requires_single_assignee")
+    job.status = "needs_correction"
+    job.review_status = "returned_incomplete"
+    job.correction_round += 1
+    operation = db.scalar(select(NativeOperation).where(
+        NativeOperation.kind == "restart_job",
+        NativeOperation.target_id == job.id,
+    ).with_for_update())
+    if operation is None:
+        db.add(NativeOperation(
+            event_id=job.event_id, kind="restart_job",
+            target_id=job.id, status="pending",
+        ))
+    elif operation.status in {"done", "attention", "blocked"}:
+        operation.status = "pending"
+        operation.error_code = None
+        operation.claimed_at = None
+    else:
+        raise NativeWorkerError("existing_correction_operation_pending")
+    db.add(AuditEvent(
+        event_id=job.event_id, action="native.job.incomplete_auto_return",
+        target_type="labeling_job", target_id=job.id,
+        details={"finished_images": finished, "expected_images": total,
+                 "correction_round": job.correction_round},
+    ))
+    db.commit()
+    return job.status
+
+
 def sync_one(db: Session, api, job: LabelingJob) -> str:
     # Serialize worker polling against simultaneous monitor decisions.
     # Refresh any ORM-cached state after acquiring the PostgreSQL row lock.
@@ -551,10 +589,11 @@ def sync_one(db: Session, api, job: LabelingJob) -> str:
             native = statuses[0]
             # The native count is a completion gate, not a list of which frames
             # can safely be restarted. Preserve ownership on any ambiguity.
-            if native.images_count != job.frame_count or native.finished_images_count != job.frame_count:
-                job.review_status = "incomplete_submission"
-                db.commit()
-                return job.status
+            if (native.images_count != job.frame_count
+                    or native.finished_images_count != job.frame_count):
+                return queue_automatic_incomplete_return(
+                    db, job, native.finished_images_count, job.frame_count,
+                )
             packet.submitted_at = packet.submitted_at or epoch()
             if job.review_status == "incomplete_submission":
                 job.review_status = "unreviewed"

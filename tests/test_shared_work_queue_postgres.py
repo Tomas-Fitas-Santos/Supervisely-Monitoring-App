@@ -86,8 +86,22 @@ def test_distinct_claims_and_duplicate_person_requests():
         db.commit()
         assert sync_all(db, api, m.SuperviselyConfig())["pending_operations"] == 0
         assert db.get(m.WorkPacket, job_id).submitted_at is None
-        assert db.get(m.LabelingJob, job_id).review_status == "incomplete_submission"
+        incomplete = db.get(m.LabelingJob, job_id)
+        assert incomplete.review_status == "returned_incomplete"
+        assert incomplete.status == "needs_correction"
+        assert incomplete.correction_round == 1
+        restart = db.scalar(select(m.NativeOperation).where(
+            m.NativeOperation.kind == "restart_job",
+            m.NativeOperation.target_id == job_id,
+        ))
+        assert restart.status == "pending"
+        # Incomplete frames cannot be claimed for quality review or release
+        # another job. Simulate the durable restart worker succeeding before
+        # submitting the corrected full 30-frame native job.
         other.membership_status = "joined"
+        incomplete.status = "in_progress"
+        incomplete.review_status = "unreviewed"
+        restart.status = "done"
         db.commit()
         native.finished_images_count = 30
         assert sync_all(db, api, m.SuperviselyConfig())["pending_operations"] == 1
