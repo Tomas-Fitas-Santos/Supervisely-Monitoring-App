@@ -1319,7 +1319,7 @@ def test_partial_submission_accepts_frames_once_and_reissues_only_missing(config
             ReviewSample.job_id == job_id
         )))
         assert len(accepted) == 2
-        assert set(a.media_id for a in accepted) == set(source_ids)
+        assert {a.media_id for a in accepted} == set(source_ids)
         assert all(a.validated_complete for a in accepted)
         assert {a.correction_round for a in accepted} == {0, 1}
         assert len(list(db.scalars(select(LabelingJob).where(
