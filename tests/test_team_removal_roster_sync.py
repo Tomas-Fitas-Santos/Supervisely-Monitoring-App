@@ -1,10 +1,17 @@
 """Teams and people must show the same membership and verified Supervisely IDs."""
 import pytest
-from sqlalchemy import select
-from test_monitor_assignments import ctx as base_ctx, mutate
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+from test_monitor_assignments import mutate
 
+from annotatiathon.app import app
+from annotatiathon.db import get_db
 from annotatiathon.models import (
     DEFAULT_EVENT_ID,
+    Base,
+    Event,
     AuditEvent,
     CompetitionTeam,
     LabelingJob,
@@ -15,9 +22,46 @@ from annotatiathon.models import (
     StaffAccount,
     epoch,
 )
-@pytest.fixture(name="ctx")
-def team_context(base_ctx):
-    return base_ctx
+from annotatiathon.security import password_hash
+
+
+@pytest.fixture
+def ctx(monkeypatch):
+    engine = create_engine(
+        "sqlite+pysqlite://",
+        connect_args={"check_same_thread": False}, poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    maker = sessionmaker(bind=engine, expire_on_commit=False)
+    with maker.begin() as db:
+        db.add(Event(id=DEFAULT_EVENT_ID, name="Initial Event"))
+        db.add(StaffAccount(
+            email="owner@example.org", name="Owner", roles=["organiser"],
+            password_hash=password_hash("StrongOrganiserPassword!"),
+        ))
+        db.add(StaffAccount(
+            email="monitor@example.org", name="Monitor", roles=["monitor"],
+            password_hash=password_hash("StrongMonitorPassword!"),
+        ))
+
+    def override():
+        with maker() as db:
+            yield db
+
+    app.dependency_overrides[get_db] = override
+    monkeypatch.setattr(
+        "annotatiathon.auth.get_settings",
+        lambda: type("Settings", (), {"app_env": "local"})(),
+    )
+    with TestClient(app) as client:
+        logged_in = client.post("/api/v1/auth/login", json={
+            "email": "owner@example.org",
+            "password": "StrongOrganiserPassword!",
+        })
+        assert logged_in.status_code == 200
+        yield client, maker, logged_in.json()["csrf_token"]
+    app.dependency_overrides.clear()
+    engine.dispose()
 
 
 def test_participant_team_removal_keeps_people_and_records(ctx):
