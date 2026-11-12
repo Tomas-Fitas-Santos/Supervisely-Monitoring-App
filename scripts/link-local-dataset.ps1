@@ -97,6 +97,8 @@ try {
   # Never call 'down', '--volumes', or recreate the Postgres container.
   & docker compose @compose up -d --no-deps --force-recreate api
   Check-Exit "Recreating API with new read-only source mount"
+  & docker compose @compose up -d --no-deps --force-recreate indexer
+  Check-Exit "Starting mounted-folder indexer"
   & docker compose @compose up -d --no-deps --force-recreate web
   Check-Exit "Refreshing web proxy"
   if ($wasRunning -or $StartWorker) {
@@ -115,7 +117,7 @@ try {
   Write-Host "In Nightjar: Data -> Source folders & upload -> Refresh."
   Write-Host "Select '$($info.Name)' and click 'Link folder & start Supervisely upload'."
   if (-not ($wasRunning -or $StartWorker)) {
-    Write-Warning "The upload worker is stopped. Start it after verifying the Supervisely Team/Workspace:"
+    Write-Warning "Local folder indexing will run automatically, but Supervisely UPLOAD still requires the native worker. Start it after verifying Team/Workspace:"
     Write-Host "docker compose --env-file .env.live -f compose.live.yaml --profile native up -d --no-deps worker"
   }
 }
