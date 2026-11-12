@@ -143,9 +143,9 @@ is no extra username/password pop-up or Cloudflare email challenge.
 
 - **Existing organiser or staff account:** enter your Nightjar email
   and password. Supervisely credentials are not used for Nightjar login.
-- **Approved new monitor:** click **Create monitor account**, enter the
-  email already approved in the active event SQL roster, and choose/confirm
-  a Nightjar-only password. No email verification or SMTP is required.
+- **Approved new monitor:** obtain your one-time private code from an
+  organiser, click **Create monitor account**, enter the approved email and
+  code, and choose/confirm a Nightjar-only password. No email verification or SMTP is required.
 - **Unlisted or ineligible person:** cannot self-register. Participants
   cannot create monitor accounts. Unverified native records require
   organiser approval; verified joined native managers/admins on the active
@@ -168,8 +168,9 @@ Inside the **HTTPS tunnel**:
 3. Paste the organiser's admin/manager API token in Settings and verify it.
    The backend encrypts the shared token; monitors only see read-only IDs.
 4. Import the official monitor/participant registration roster as CSV.
-5. Have one approved monitor choose **Create monitor account** and set a
-   Nightjar-only password. An active monitor **already verified as a joined
+5. In **Staff Access**, generate a one-time code for the approved monitor's email
+   and send it privately. Have that monitor choose **Create monitor account**
+   and enter the code and their Nightjar-only password. An active monitor **already verified as a joined
    Supervisely manager/admin in the SQL roster** can register directly without
    another manual approval, unless the organiser explicitly denied registration.
 6. The monitor logs into Nightjar independently and can optionally verify
@@ -190,11 +191,13 @@ A signed-in organiser account alone does not prove Supervisely permissions.
    Verified joined Supervisely team managers/admins auto-imported into the
    current event's SQL monitor roster are also eligible unless explicitly
    denied by the organiser. Other auto-discovered records need manual approval.
-3. Send the current HTTPS link to a trusted monitor. They choose
-   **Create monitor account**, enter their listed email and their own
-   12+-character app password twice, then click **Create account and sign in**.
-4. A single `POST /api/v1/auth/register` checks eligibility in SQL and
-   creates a Nightjar staff login with the Monitor role. It does **not**
+3. As organiser, generate the person's code in **Staff Access** and send it
+   privately to that monitor. The monitor opens the HTTPS link and selects
+   **Create monitor account**, entering their listed email, private one-time
+   code, and their own 12+-character password twice.
+4. A single `POST /api/v1/auth/register` checks SQL roster approval and
+   atomically consumes the organiser-issued, single-use registration code before
+   creating the Nightjar Monitor login. Codes expire after seven days. It does **not**
    create or join a Supervisely account and does not request any token.
 5. On successful registration, Nightjar signs them into the application.
    In **Settings → My Supervisely connection** they can later paste their
@@ -203,15 +206,14 @@ A signed-in organiser account alone does not prove Supervisely permissions.
 6. Accounts are unique: if an account has already been claimed for that email,
    registration stops with an existing-account message. Only the organiser
    can approve/deactivate monitor eligibility in the roster.
-7. No SMTP variables, verification email, mail sender, email challenge or
-   Supervisely account are required to register and enter Nightjar.
+7. No SMTP or personal Supervisely token is required to register. The organiser
+   must issue a private one-time code from Staff Access; the code is stored only
+   as a digest, shown once and expires after seven days.
 
-**Security trade-off:** Email *matching* is not email *ownership verification*.
-This simplified flow has a first-claim impersonation risk. An outsider who
-knows an approved but unclaimed monitor address could register first and gain
-Nightjar monitor access. Restrict the Quick Tunnel to short trusted tests,
-avoid sensitive participant data, and do not use this as final event
-authentication until a secure inviter-issued code or identity proof is added.
+**Security trade-off:** The organiser-issued registration code prevents
+first-claim registration using a known roster email alone. Codes are **not**
+email-ownership proof: send them privately and never post the codes in a public
+channel. Existing Nightjar credentials remain independent of Supervisely.
 
 If registration is rejected, check whether the email is an active approved
 monitor in the active event, not a participant, not auto-discovered without
