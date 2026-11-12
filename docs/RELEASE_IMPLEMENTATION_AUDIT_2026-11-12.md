@@ -17,7 +17,7 @@
 - Do not drop or recreate database volumes; the migration is additive and must run before the updated API/worker.
 - There are two **different queues**: outbound labeling jobs and inbound frame-review claims. They have independent lifecycle states and do not require monitor-to-team assignment.
 - The inbound review queue uses team-first fairness and random frame selection. It guarantees *exclusive active claims* under PostgreSQL row locking, but a backlog may contain far more frames than monitors can review during the event.
-- The leaderboard shows **correctly reviewed original keypoints + boxes**, not all unreviewed submitted objects. Only round zero is currently included in primary rankings; correction policy requires an explicit decision.
+- The leaderboard shows **correctly reviewed original keypoints + boxes**, not unreviewed submissions. Only round zero currently enters primary rankings; correction policy requires an explicit decision. The `weighted_score` tie-breaker is recalculated from immutable verdicts using the **latest organiser-published rubric for every team**, even if a review was completed under a previous rubric. The historical completion-time rubric and decision are preserved for audit.
 - The automatic default **`shared_30_v1`** creates up to 30-image jobs. Older **`legacy`** mode creates whole-video jobs. The organiser must decide which policy applies to the official event; preserve both until then.
 - Manual jobs and repeats maintain independent annotation snapshots. Do not fetch image bytes with submissions when the local original is retained.
 - Role edits in Nightjar are separate from the actual Supervisely team role; linked native team IDs must be confirmed before assigning jobs.
