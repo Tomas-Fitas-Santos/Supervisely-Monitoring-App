@@ -253,3 +253,57 @@ def test_monitor_cannot_manage_events(user):
         "mode": "fresh", "areas": []
     }).status_code == 403
     assert http.get("/api/v1/events/" + DEFAULT_EVENT_ID + "/snapshots").status_code == 403
+
+
+def test_event_schedule_rejects_outside_activities_and_role_escalation(user):
+    http, dbmaker, csrf = user
+    start = 1_800_000_000
+    end = start + 7200
+    schedule_url = "/events/" + DEFAULT_EVENT_ID + "/schedule"
+    assert mutation(http, csrf, schedule_url, {
+        "start_at": start, "end_at": start,
+    }, "PUT").status_code == 422
+    set_result = mutation(http, csrf, schedule_url, {
+        "start_at": start, "end_at": end, "timezone": "Europe/Lisbon",
+    }, "PUT")
+    assert set_result.status_code == 200, set_result.text
+    assert set_result.json()["timezone"] == "Europe/Lisbon"
+    assert set_result.json()["start_at"] == start
+    with dbmaker() as db:
+        saved = db.get(Event, DEFAULT_EVENT_ID)
+        assert (saved.start_at, saved.end_at) == (start, end)
+
+    inside = mutation(http, csrf, "/activities", {
+        "name": "Keypoint competition", "start_at": start + 60, "end_at": end - 60,
+    })
+    assert inside.status_code == 201, inside.text
+    for bad in [
+        {"name": "Before event", "start_at": start - 1, "end_at": start + 60},
+        {"name": "After event", "start_at": end - 60, "end_at": end + 1},
+        {"name": "Missing times"},
+    ]:
+        assert mutation(http, csrf, "/activities", bad).status_code == 422
+    aid = inside.json()["id"]
+    assert mutation(http, csrf, "/activities/" + aid, {
+        "end_at": end + 1,
+    }, "PATCH").status_code == 422
+    assert mutation(http, csrf, "/activities/" + aid, {
+        "start_at": start + 120,
+    }, "PATCH").status_code == 200
+    assert mutation(http, csrf, schedule_url, {
+        "start_at": start + 180, "end_at": end,
+    }, "PUT").status_code == 409
+
+    monitor = http.post("/api/v1/auth/login", json={
+        "email": "monitor@example.org", "password": "StrongMonitorPassword!",
+    })
+    assert monitor.status_code == 200
+    assert mutation(http, monitor.json()["csrf_token"], schedule_url, {
+        "start_at": start + 1, "end_at": end,
+    }, "PUT").status_code == 403
+    assert mutation(http, csrf, "/events/" + DEFAULT_EVENT_ID + "/archive", {
+        "confirmation": "Initial Event",
+    }).status_code == 200
+    assert mutation(http, csrf, schedule_url, {
+        "start_at": start, "end_at": end,
+    }, "PUT").status_code == 409

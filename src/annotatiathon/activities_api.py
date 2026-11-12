@@ -105,6 +105,22 @@ def get_activity(db: Session, event_id: str, activity_id: str,
     return activity
 
 
+def validate_event_activity_window(event, start_at: int | None,
+                                   end_at: int | None) -> None:
+    if event.start_at is None or event.end_at is None:
+        return
+    if start_at is None or end_at is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Both activity start and end must be set inside the event window.",
+        )
+    if start_at < event.start_at or end_at > event.end_at or end_at <= start_at:
+        raise HTTPException(
+            status_code=422,
+            detail="Activity must start and end inside the configured event window.",
+        )
+
+
 def ensure_editable(activity: Activity):
     if activity.awards_finalised_at is not None:
         raise HTTPException(
@@ -134,6 +150,7 @@ def create_activity(
     db: Session = Depends(get_db),
 ):
     event = current_event(db, ctx, writable=True)
+    validate_event_activity_window(event, payload.start_at, payload.end_at)
     item = Activity(
         event_id=event.id, name=payload.name.strip(),
         description=payload.description.strip(), location=payload.location.strip(),
@@ -183,6 +200,7 @@ def edit_activity(
     if (activity.start_at is not None and activity.end_at is not None
             and activity.end_at <= activity.start_at):
         raise HTTPException(status_code=422, detail="End must follow start.")
+    validate_event_activity_window(event, activity.start_at, activity.end_at)
     db.add(AuditEvent(
         staff_id=ctx.staff.id, event_id=event.id, action="activity.update",
         target_type="activity", target_id=activity.id,

@@ -60,6 +60,8 @@ def event_view(event: Event) -> dict:
         "id": event.id, "name": event.name, "status": event.status,
         "created_at": event.created_at, "archived_at": event.archived_at,
         "reset_from_id": event.reset_from_id,
+        "start_at": event.start_at, "end_at": event.end_at,
+        "timezone": "Europe/Lisbon",
     }
 
 
@@ -121,6 +123,53 @@ def create_event(
     seed_categories(db, event.id)
     append_audit(db, ctx.staff.id, event.id, "event.create")
     ctx.session.event_id = event.id
+    db.commit()
+    return event_view(event)
+
+
+class EventSchedule(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    start_at: int = Field(gt=0, lt=2_147_483_647)
+    end_at: int = Field(gt=0, lt=2_147_483_647)
+    timezone: Literal["Europe/Lisbon"] = "Europe/Lisbon"
+
+
+@router.put("/{event_id}/schedule")
+def save_event_schedule(
+    event_id: str,
+    payload: EventSchedule,
+    ctx: AuthContext = Depends(requires("organiser", mutation=True)),
+    db: Session = Depends(get_db),
+):
+    # Store unambiguous UTC instants. Browser forms explicitly convert from
+    # Europe/Lisbon before reaching the API, including DST-gap validation.
+    if payload.end_at <= payload.start_at:
+        raise HTTPException(status_code=422, detail="Event end must follow its start.")
+    event = db.scalar(select(Event).where(Event.id == event_id).with_for_update())
+    if event is None:
+        raise HTTPException(status_code=404, detail="Event not found.")
+    if event.status != "active":
+        raise HTTPException(status_code=409, detail="Archived events are read-only.")
+    from .models import Activity
+    scheduled = db.scalars(select(Activity).where(
+        Activity.event_id == event.id, Activity.active.is_(True),
+    )).all()
+    conflicts = [activity.name for activity in scheduled if (
+        activity.start_at is not None and activity.start_at < payload.start_at
+    ) or (
+        activity.end_at is not None and activity.end_at > payload.end_at
+    )]
+    if conflicts:
+        raise HTTPException(
+            status_code=409,
+            detail="Existing activities fall outside this window: " + ", ".join(conflicts[:3]),
+        )
+    previous = {"start_at": event.start_at, "end_at": event.end_at}
+    event.start_at = payload.start_at
+    event.end_at = payload.end_at
+    append_audit(db, ctx.staff.id, event.id, "event.schedule.update",
+                 details={**previous, "new_start_at": payload.start_at,
+                          "new_end_at": payload.end_at, "timezone": payload.timezone})
     db.commit()
     return event_view(event)
 

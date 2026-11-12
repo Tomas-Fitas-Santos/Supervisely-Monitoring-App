@@ -35,11 +35,18 @@ DEFAULT_EVENT_ID = "00000000-0000-4000-8000-000000000010"
 
 class Event(Base):
     __tablename__ = "events"
+    __table_args__ = (CheckConstraint(
+        "(start_at IS NULL AND end_at IS NULL) OR "
+        "(start_at IS NOT NULL AND end_at IS NOT NULL AND end_at > start_at)",
+        name="ck_event_schedule_valid",
+    ),)
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=identifier)
     name: Mapped[str] = mapped_column(String(200), unique=True)
     status: Mapped[str] = mapped_column(String(20), default="active")
     created_at: Mapped[int] = mapped_column(Integer, default=epoch)
     archived_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    start_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    end_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
     reset_from_id: Mapped[str | None] = mapped_column(
         ForeignKey("events.id"), nullable=True
     )
