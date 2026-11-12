@@ -683,6 +683,11 @@ class NativeOperation(Base):
     created_at: Mapped[int] = mapped_column(Integer, default=epoch)
     claimed_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
     completed_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Validation/read tasks use renewable, fenced leases and bounded retries.
+    # Publication has uncertain remote-write outcomes and is NEVER auto-replayed.
+    lease_owner: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    lease_until: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    next_attempt_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class MonitorPairMember(Base):
