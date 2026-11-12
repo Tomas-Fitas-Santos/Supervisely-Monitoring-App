@@ -239,42 +239,62 @@ def create_plan(
     )))
     reserved = {mid for job in prior_jobs for mid in job.media_ids}
     if payload.mode == "shared_30_v1":
-        from .work_queue import split_video
-
         if reserved or payload.video_limit is not None:
             raise HTTPException(status_code=409, detail="Use an unassigned dataset without a video limit for the shared queue.")
         videos = {video.id: video for video in db.scalars(select(MediaVideo).where(
             MediaVideo.event_id == event.id, MediaVideo.dataset_id == dataset.id,
         ))}
-        by_video = defaultdict(list)
+        by_video: dict[str, list[MediaAsset]] = defaultdict(list)
         for asset in assets:
             video = videos.get(asset.video_id)
             if (not video or video.density not in {"full", "declared_full"}
                     or video.identity_status != "complete" or asset.frame_index is None):
-                raise HTTPException(status_code=422, detail="Shared queue requires complete source-frame identity and full-density footage.")
-            by_video[video.id].append(asset.id)
+                raise HTTPException(
+                    status_code=422,
+                    detail="Shared queue requires complete source-frame identity and full-density footage.",
+                )
+            by_video[video.id].append(asset)
+
+        # Official automatic distribution is one ordered stream: finish Video A,
+        # carry its remainder into Video B, and keep slicing at exactly 30 frames.
+        # Each frame retains its own immutable MediaAsset.video_id and ordinal.
+        # Only the final dataset-wide block may contain fewer than 30 frames.
+        stream: list[tuple[str, str]] = []
+        for video_id in sorted(by_video, key=lambda vid: (videos[vid].video_group, vid)):
+            source_frames = sorted(by_video[video_id], key=lambda asset: asset.frame_index)
+            first_index = source_frames[0].frame_index
+            if (len(source_frames) != videos[video_id].frame_count
+                    or any(asset.frame_index != first_index + index
+                           for index, asset in enumerate(source_frames))):
+                raise HTTPException(
+                    status_code=422,
+                    detail="Shared queue requires a gap-free, fully imported source video.",
+                )
+            stream.extend((video_id, asset.id) for asset in source_frames)
+
         plan = LabelingPlan(event_id=event.id, dataset_id=dataset.id, jobs_per_team=0,
                             redundancy=1, created_by=ctx.staff.id, queue_seed=identifier())
         db.add(plan)
         db.flush()
         blocks = []
-        for video_id, media_ids in by_video.items():
-            if len(media_ids) < 30 or len(media_ids) % 30:
-                raise HTTPException(
-                    status_code=422,
-                    detail="Each video must contain a whole multiple of 30 frames. "
-                           "No source frames may be discarded, duplicated or mixed "
-                           "across videos without an explicit organiser decision.",
-                )
-            for ordinal, block in enumerate(split_video(media_ids), start=1):
-                blocks.append(WorkBlock(
-                    event_id=event.id, plan_id=plan.id, video_id=video_id, ordinal=ordinal,
-                    frame_count=len(block), media_ids=block,
-                    repeat_media_ids=list(block),
-                ))
+        mixed_video_blocks = 0
+        for offset in range(0, len(stream), 30):
+            chunk = stream[offset:offset + 30]
+            media_ids = [media_id for _video_id, media_id in chunk]
+            mixed_video_blocks += len({video_id for video_id, _mid in chunk}) > 1
+            blocks.append(WorkBlock(
+                event_id=event.id, plan_id=plan.id,
+                # Anchor for the existing FK; media_ids are authoritative for
+                # all video identities within a mixed-video job.
+                video_id=chunk[0][0], ordinal=offset // 30 + 1,
+                frame_count=len(media_ids), media_ids=media_ids,
+                repeat_media_ids=list(media_ids) if len(media_ids) == 30 else [],
+            ))
         db.add_all(blocks)
-        summary = {"primary_blocks": len(blocks), "unique_frames": len(assets),
+        summary = {"primary_blocks": len(blocks), "unique_frames": len(stream),
+                   "mixed_video_blocks": mixed_video_blocks,
                    "short_tails": sum(block.frame_count < 30 for block in blocks),
+                   "short_final_frames": blocks[-1].frame_count if blocks[-1].frame_count < 30 else 0,
                    "repeat_frames": sum(len(block.repeat_media_ids) for block in blocks)}
         db.add(AuditEvent(staff_id=ctx.staff.id, event_id=event.id, action="labeling.plan.create",
                           target_type="labeling_plan", target_id=plan.id,
