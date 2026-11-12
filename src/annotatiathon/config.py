@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     nightjar_encryption_key: SecretStr | None = None
     supervisely_allowed_hosts: str = "app.supervisely.com"
     local_data_dir: str = ".nightjar-data"
+    nightjar_dataset_source_dir: str = "/source-datasets"
     nightjar_admin_emails: str = ""
     nightjar_organiser_emails: str = ""
     max_dataset_bytes: int = 140_000_000_000
