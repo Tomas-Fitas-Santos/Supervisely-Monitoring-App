@@ -7,7 +7,6 @@ Publisher/correction writes are deliberately NOT lease-retried.
 """
 import logging
 import threading
-import time
 from uuid import uuid4
 
 from sqlalchemy import or_, select, update
@@ -270,7 +269,7 @@ def process_validation_once(db: Session, api, config) -> dict | None:
                 if claimed is not None:
                     return {"operation_id": task_id, "status": "done",
                             "next_assignment_queued": True}
-            except Exception:  # noqa: BLE001 - scheduler will retry
+            except Exception:  # scheduler will retry
                 db.rollback()
                 logger.exception("Next-job allocation deferred for job %s", job.id)
     return {"operation_id": task_id, "status": "done"}
