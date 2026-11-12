@@ -107,7 +107,7 @@ def test_monitors_can_read_shared_event_jobs_with_global_limit(populated):
     client.cookies.set("annotatiathon_session", "monitor")
     for path in ("/api/v1/review/assigned-jobs", "/api/v1/labeling/jobs"):
         with sql_count(engine) as statements:
-            response = client.get(path)
+            response = client.get(path + "?limit=250")
         assert response.status_code == 200
         assert [job["id"] for job in response.json()["items"]] == [
             f"foreign-{i}" for i in range(250)
