@@ -648,15 +648,18 @@ def sync_one(db: Session, api, job: LabelingJob, *,
             pass
         job.status = "on_review"
         job.submitted_at = job.submitted_at or epoch()
+    validation_enqueued = False
     if queue_validation and job.status == "on_review":
         # Save submission status AND its durable validation task atomically.
         # A crash after status detection cannot strand frames indefinitely.
         from .validation_tasks import enqueue_validation
-        enqueue_validation(db, job)
+        validation_enqueued = enqueue_validation(db, job)
     db.commit()
     if job.status == "on_review" and previous_status != "on_review":
         milestone("submission_detected", job_id=job.id,
                   frame_count=job.frame_count)
+    if validation_enqueued:
+        milestone("validation_queued", job_id=job.id)
     return job.status
 
 
