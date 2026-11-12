@@ -17,7 +17,9 @@ type Binding={person_id:string;person_name:string;native_job_id:number;
   native_status:string;last_synced_at:number|null};
 type Job={id:string;plan_id:string;team_id:string;team_name:string;
   sequence:number;frame_count:number;video_count:number;status:string;
-  review_status:string;morphology_counts:Record<string,number>;
+  review_status:string;correction_round:number;
+  annotation_snapshot_round:number|null;annotation_snapshot_frames:number|null;
+  morphology_counts:Record<string,number>;
   assignee_person_id:string|null;assignee_name:string|null;release_mode:string;
   native_submissions:Binding[]};
 type Media={id:string;relative_path:string;morphology:string;video_group:string|null};
@@ -249,7 +251,12 @@ export function CompetitionScreen({auth,view="progress"}:{
   const selectedJob=jobs.find(job=>job.id===chosen);
   const awaiting=jobs.filter(j=>j.status==="on_review").length;
   const active=jobs.filter(j=>["queued","publishing","in_progress"].includes(j.status)).length;
-  const complete=jobs.filter(j=>j.status==="completed").length;
+  const complete=jobs.filter(j=>j.status==="completed"||(
+    j.assignee_person_id!==null&&
+    ["shared_primary","shared_repeat","manual_released","manual_hold"].includes(j.release_mode)&&
+    j.status==="on_review"&&j.annotation_snapshot_round===j.correction_round&&
+    j.annotation_snapshot_frames===j.frame_count
+  )).length;
 
   return <div className="page-body">
     <div className="page-heading"><div>
@@ -272,8 +279,8 @@ export function CompetitionScreen({auth,view="progress"}:{
     </nav>
     {section==="overview"&&<div className="stat-grid compact">
       <div className="stat-card"><Layers3 size={19}/><span className="muted small">In queue / labeling</span><strong>{active}</strong></div>
-      <div className="stat-card"><ClipboardCheck size={19}/><span className="muted small">Awaiting review</span><strong>{awaiting}</strong></div>
-      <div className="stat-card"><CheckCircle2 size={19}/><span className="muted small">Accepted</span><strong>{complete}</strong></div>
+      <div className="stat-card"><ClipboardCheck size={19}/><span className="muted small">Submitted / checking</span><strong>{awaiting}</strong></div>
+      <div className="stat-card"><CheckCircle2 size={19}/><span className="muted small">Complete submissions</span><strong>{complete}</strong></div>
     </div>}
 
     {admin&&view==="setup"&&section==="manual"&&<section className="panel manual-job-panel">
