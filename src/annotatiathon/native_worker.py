@@ -27,7 +27,6 @@ from pathlib import Path, PurePosixPath
 from threading import local
 
 from fastapi import HTTPException
-
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
