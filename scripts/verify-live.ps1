@@ -35,35 +35,17 @@ try {
   Write-Host ""
   Write-Host "Live dataset/source health (read-only):"
   $audit = @'
-import os
+from sqlalchemy import func, select, text
 
-from sqlalchemy import create_engine, func, select, text
-from sqlalchemy.engine import URL
-from sqlalchemy.orm import Session
-
+from annotatiathon.db import session_factory
 from annotatiathon.models import MediaAsset, MediaDataset, MediaVideo
 from annotatiathon.native_media_pool import mirror_status
 
-# The live Compose stack provides POSTGRES_* via .env.live, but some
-# installations do not define DATABASE_URL in the API container. Build a
-# private connection from the same settings as the database service.
-# URL.create safely escapes special characters in passwords.
-database_url = os.environ.get("DATABASE_URL")
-if not database_url:
-    values = {key: os.environ.get(key) for key in (
-        "POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB"
-    )}
-    if not all(values.values()):
-        raise SystemExit("Database audit configuration missing. Expected DATABASE_URL "
-                         "or POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB.")
-    database_url = URL.create(
-        "postgresql+psycopg", username=values["POSTGRES_USER"],
-        password=values["POSTGRES_PASSWORD"], host="db",
-        database=values["POSTGRES_DB"],
-    )
-audit_engine = create_engine(database_url, pool_pre_ping=True)
-with Session(audit_engine) as db:
-    # The audit must never modify event data, even if extended later.
+# The Docker entrypoint constructs DATABASE_URL from the POSTGRES_* settings.
+# The standalone "docker compose exec" process does not inherit that export,
+# so the audit must launch through the same entrypoint as the API service.
+with session_factory()() as db:
+    # Enforce a genuinely read-only database transaction.
     db.execute(text("SET TRANSACTION READ ONLY"))
     datasets = db.scalars(select(MediaDataset).order_by(MediaDataset.created_at)).all()
     for ds in datasets:
@@ -89,7 +71,7 @@ with Session(audit_engine) as db:
             print("  WARNING: mirror completion does NOT make this dataset eligible "
                   "for shared 30-frame jobs. Use Automatic distribution > Check source frames.")
 '@
-  $audit | & docker compose @compose exec -T api python -
+  $audit | & docker compose @compose exec -T api /usr/local/bin/nightjar-entrypoint python -
   if ($LASTEXITCODE -ne 0) { throw "Read-only Nightjar source audit failed." }
   Write-Host "Live preflight completed. No records or files modified."
 }
