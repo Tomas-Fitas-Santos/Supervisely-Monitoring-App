@@ -42,7 +42,9 @@ def database(directory):
     return engine, sessionmaker(bind=engine, expire_on_commit=False)
 
 
-def seed(directory):
+def seed(directory, *, annotators=260, monitors=10):
+    if annotators < 2 or annotators % 2 or monitors < 1:
+        raise ValueError("Benchmark requires an even annotator count and positive monitors")
     from PIL import Image
     from annotatiathon import models as m
     from annotatiathon.security import token_digest
@@ -51,14 +53,14 @@ def seed(directory):
     m.Base.metadata.create_all(engine)
     media = directory / "media"
     media.mkdir()
-    # Ten shared source frames, independently annotated in each of 260 jobs.
+    # Ten shared source frames, independently annotated in each initial job.
     image = Image.frombytes("RGB", (1600, 1200), os.urandom(1600 * 1200 * 3))
     for index in range(10):
         image.save(media / f"frame-{index}.jpg", quality=95)
     with maker.begin() as db:
         db.add(m.Event(id="event", name="Synthetic benchmark"))
         db.flush()
-        for index in range(10):
+        for index in range(monitors):
             db.add(m.StaffAccount(id=f"staff-{index}", email=f"monitor{index}@example.test",
                                   name=f"Monitor {index}", roles=["monitor"],
                                   password_hash="disabled-synthetic-account"))
@@ -66,7 +68,7 @@ def seed(directory):
                             email=f"monitor{index}@example.test", name=f"Monitor {index}",
                             kind="monitor"))
         db.flush()
-        for index in range(10):
+        for index in range(monitors):
             db.add(m.StaffSession(id=token_digest(f"synthetic-token-{index}"),
                                   staff_id=f"staff-{index}", event_id="event",
                                   csrf_token="synthetic-csrf", expires_at=m.epoch() + 3600))
@@ -82,21 +84,21 @@ def seed(directory):
                                 relative_path=f"frame-{frame}.jpg", morphology="bird",
                                 kind="image", size_bytes=(media / f"frame-{frame}.jpg").stat().st_size,
                                 sha256="a" * 64))
-        for team in range(130):
+        for team in range(annotators // 2):
             db.add(m.CompetitionTeam(id=f"team-{team}", event_id="event", name=f"Team {team}"))
         db.flush()
-        for team in range(130):
+        for team in range(annotators // 2):
             db.add(m.MonitorAssignment(event_id="event", team_id=f"team-{team}",
-                                       monitor_person_id=f"monitor-{team % 10}",
+                                       monitor_person_id=f"monitor-{team % monitors}",
                                        assigned_by="staff-0"))
-        for index in range(260):
+        for index in range(annotators):
             db.add(m.Person(id=f"person-{index}", event_id="event", name=f"Annotator {index}",
                             email=f"annotator{index}@example.test", kind="participant",
                             team_id=f"team-{index // 2}", supervisely_user_id=1000 + index,
                             membership_status="joined", supervisely_role="annotator",
                             native_verified_at=m.epoch()))
         db.flush()
-        for index in range(260):
+        for index in range(annotators):
             db.add(m.LabelingJob(id=f"job-{index}", event_id="event", plan_id="plan",
                                  dataset_id="dataset", team_id=f"team-{index // 2}",
                                  assignee_person_id=f"person-{index}", sequence=index % 2 + 1,
@@ -104,7 +106,7 @@ def seed(directory):
                                  frame_count=10, video_count=1, morphology_counts={"bird": 10},
                                  status="in_progress", native_dataset_id=2000 + index))
         db.flush()
-        for index in range(260):
+        for index in range(annotators):
             db.add(m.NativeJobBinding(event_id="event", job_id=f"job-{index}",
                                       person_id=f"person-{index}", native_job_id=3000 + index,
                                       native_status="in_progress"))
