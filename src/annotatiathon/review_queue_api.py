@@ -27,6 +27,7 @@ from .models import (
     epoch,
     identifier,
 )
+from .review_eligibility import eligible_frame_review
 from .scoring_api import (
     PRIZE_RELEASE_MODES,
     Weights,
@@ -42,7 +43,9 @@ read_access = requires("organiser", "monitor")
 write_access = requires("organiser", "monitor", mutation=True)
 
 
-def ingest_sample(db: Session, job: LabelingJob, root: Path) -> None:
+def ingest_sample(db: Session, job: LabelingJob, root: Path, *,
+                  media_ids: list[str] | None = None,
+                  validated: bool = False) -> None:
     """Make all completed per-frame snapshots available to event monitors.
 
     Existing completed decisions and claims are never mutated.  A job's
@@ -56,11 +59,13 @@ def ingest_sample(db: Session, job: LabelingJob, root: Path) -> None:
         raise ValueError("Duplicate source frames in submitted job")
     existing = set(db.scalars(select(ReviewSample.media_id).where(
         ReviewSample.job_id == job.id,
+    ))) if validated else set(db.scalars(select(ReviewSample.media_id).where(
+        ReviewSample.job_id == job.id,
         ReviewSample.correction_round == job.correction_round,
     )))
     # Do not use job arrival time or the frame's video position to choose
     # reviews. Every eligible submitted frame joins one event-wide random pool.
-    for media_id in job.media_ids:
+    for media_id in (media_ids if media_ids is not None else job.media_ids):
         if media_id in existing:
             continue
         raw = (root / f"{media_id}.json").read_bytes()
@@ -74,7 +79,7 @@ def ingest_sample(db: Session, job: LabelingJob, root: Path) -> None:
         db.add(ReviewSample(
             event_id=job.event_id, job_id=job.id, team_id=job.team_id,
             media_id=media_id, correction_round=job.correction_round,
-            snapshot=snapshot,
+            validated_complete=validated, snapshot=snapshot,
         ))
 
 
@@ -123,10 +128,7 @@ def claim(db, event_id, reviewer_id):
     now = epoch()
     rows = ReviewSample
     scope = rows.event_id == event_id
-    current_submission = (
-        rows.correction_round == LabelingJob.correction_round,
-        LabelingJob.status.in_(("on_review", "completed")),
-    )
+    current_submission = (eligible_frame_review(),)
     active = (rows.completed_at.is_(None), rows.expires_at > now)
     existing = db.scalar(select(rows).join(
         LabelingJob, LabelingJob.id == rows.job_id,
@@ -181,8 +183,11 @@ def owned(db, event_id, review_id, reviewer_id, token=None, *, allow_expired=Fal
     if sample is None or sample.event_id != event_id:
         raise HTTPException(404, "Review sample not found.")
     job = db.get(LabelingJob, sample.job_id)
-    if (job is None or sample.correction_round != job.correction_round
-            or job.status not in {"on_review", "completed"}):
+    if (job is None or (
+        not sample.validated_complete
+        and (sample.correction_round != job.correction_round
+             or job.status not in {"on_review", "completed"})
+    )):
         raise HTTPException(409, "This frame belongs to an incomplete or superseded submission.")
     if sample.reviewer_id != reviewer_id or (token is not None and sample.claim_token != str(token)):
         raise HTTPException(409, "Review is not owned by this claim.")
@@ -304,8 +309,7 @@ def status(ctx: AuthContext = Depends(read_access), db: Session = Depends(get_db
         .join(CompetitionTeam, CompetitionTeam.id == ReviewSample.team_id)
         .join(LabelingJob, LabelingJob.id == ReviewSample.job_id)
         .where(ReviewSample.event_id == event.id,
-               ReviewSample.correction_round == LabelingJob.correction_round,
-               LabelingJob.status.in_(("on_review", "completed")))
+               eligible_frame_review())
         .group_by(ReviewSample.team_id, CompetitionTeam.name, state)
     ):
         counts[key] += count
