@@ -12,7 +12,8 @@ type PlanMode="legacy"|"shared_30_v1";
 type Plan={id:string;dataset_id:string;status:string;jobs_per_team:number;mode:PlanMode;
   redundancy:number;video_limit:number|null};
 type Created={job_count:number;assets:number;min_frames_per_team:number;max_frames_per_team:number}
-  |{primary_blocks:number;unique_frames:number;short_tails:number;repeat_frames:number};
+  |{primary_blocks:number;unique_frames:number;short_tails:number;repeat_frames:number;
+    mixed_video_blocks:number;short_final_frames:number};
 type Binding={person_id:string;person_name:string;native_job_id:number;
   native_status:string;last_synced_at:number|null};
 type Job={id:string;plan_id:string;team_id:string;team_name:string;
@@ -443,8 +444,9 @@ export function CompetitionScreen({auth,view="progress"}:{
     </div>
 
     {selectedJob&&media&&<section className="panel" style={{marginTop:20}}>
-      <div className="panel-heading"><div><span className="eyebrow">ASSIGNED SOURCE VIDEO</span>
-        <h3>{media.items[0]?.video_group||"Standalone images"}</h3>
+      <div className="panel-heading"><div><span className="eyebrow">
+        {selectedJob.video_count>1?"ASSIGNED SOURCE VIDEOS":"ASSIGNED SOURCE VIDEO"}</span>
+        <h3>{[...new Set(media.items.map(item=>item.video_group).filter(Boolean))].join(" → ")||"Standalone images"}</h3>
         <p>{media.total} frames. Automatic frames were preloaded before the event. Manual duplicates use a separate Supervisely dataset.</p>
       </div></div>
       <div className="table-scroll"><table className="data-table"><thead><tr>
@@ -475,7 +477,7 @@ export function CompetitionScreen({auth,view="progress"}:{
         </select></label>
       </div>
       <p className="muted small">{planMode==="shared_30_v1"?
-        "Split each video into blocks of up to 30 images. The worker assigns the next eligible job after a complete submission.":
+        "Allocate 30 consecutive frames per job across the ordered videos. A video's leftover frames are followed by the next video's opening frames. Only the final dataset job may have fewer than 30 frames. The next job releases after a complete submission.":
         "Assign whole videos to eligible teams. Each video goes to one annotator across the event."}</p>
       {planMode==="legacy"&&<div className="form-grid triple">
         <label>Maximum jobs per team<input type="number" min={1} max={100}
@@ -489,7 +491,7 @@ export function CompetitionScreen({auth,view="progress"}:{
         onClick={()=>void generate()}><UsersRound size={15}/>{planMode==="shared_30_v1"?"Create shared queue draft":"Generate draft plan"}</button>
       {created&&<div className="job-plan-summary">{"primary_blocks" in created?<>
         <strong>{created.primary_blocks} primary blocks planned</strong>
-        <p>{created.unique_frames} source frames · {created.short_tails} short blocks · {created.repeat_frames} repeat frames</p>
+        <p>{created.unique_frames} unique source frames · {created.mixed_video_blocks} mixed-video jobs · {created.short_tails?created.short_final_frames+" frames in final short job":"all jobs contain 30 frames"} · {created.repeat_frames} repeat-eligible frames</p>
       </>:<>
         <strong>{created.job_count} jobs created in a draft</strong>
         <p>{created.assets} source frames · {created.min_frames_per_team}–{created.max_frames_per_team} frames per team</p>
@@ -499,7 +501,7 @@ export function CompetitionScreen({auth,view="progress"}:{
           <div><strong>{plan.mode==="shared_30_v1"?"Shared 30-image queue":
             plan.jobs_per_team===0?"Manual assignments":"Whole-video plan"} · {plan.status}</strong>
             <span>{datasets.find(item=>item.id===plan.dataset_id)?.name||plan.dataset_id}</span>
-            <span>{plan.mode==="shared_30_v1"?"Up to 30 images per assignment":plan.jobs_per_team===0?"Jobs added as needed":
+            <span>{plan.mode==="shared_30_v1"?"30 frames per job; crosses video boundaries when necessary":plan.jobs_per_team===0?"Jobs added as needed":
               plan.jobs_per_team+" maximum jobs/team · "+(plan.redundancy===1?"No overlap":"Legacy overlap plan")}</span></div>
           {plan.status==="planned"&&<button className="btn secondary" disabled={busy}
             onClick={()=>void approve(plan)}><ClipboardCheck size={15}/> Approve</button>}
