@@ -6,7 +6,7 @@ from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .config import get_settings
@@ -25,6 +25,17 @@ def normalized_email(email: str) -> str:
     if len(value) > 320 or "@" not in value or value.startswith("@") or value.endswith("@"):
         raise ValueError("A valid email address is required.")
     return value
+
+
+def accounts_for_email(db: Session, email: str) -> list[StaffAccount]:
+    """Identify an existing account independent of legacy email capitalization.
+
+    Do not accept a login if two old rows differ only by letter case.
+    Registration callers must likewise reject either row.
+    """
+    return list(db.scalars(select(StaffAccount).where(
+        func.lower(StaffAccount.email) == normalized_email(email),
+    ).limit(2)))
 
 
 class Credentials(BaseModel):
@@ -108,7 +119,8 @@ def requires(*roles: str, mutation: bool = False):
 @router.post("/login", response_model=AuthView)
 def login(payload: Credentials, request: Request, response: Response, db: Session = Depends(get_db)):
     same_origin(request)
-    staff = db.scalar(select(StaffAccount).where(StaffAccount.email == payload.email))
+    matches = accounts_for_email(db, payload.email)
+    staff = matches[0] if len(matches) == 1 else None
     now = int(time.time())
     if staff is None:
         password_matches(DUMMY_HASH, payload.password)
