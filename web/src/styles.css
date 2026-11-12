@@ -524,3 +524,222 @@ input,select{border:1px solid #dfe5ed;border-radius:9px;background:white;padding
 .event-schedule-section .form-grid label{min-width:0}
 .event-schedule-section .form-grid input{width:100%}
 .event-schedule-section .settings-note{margin-top:14px}
+
+
+/* Full-screen monitor review: image first, grading second. The app chrome,
+   toolbar and all five normal object verdicts fit inside one desktop viewport. */
+@media(min-width:1000px) and (min-height:670px){
+  .main-area:has(.shared-review-workspace)>.page-footer{padding:9px 22px 11px}
+  .shared-review-workspace:has(.shared-review-session.has-frame){
+    height:calc(100dvh - 72px - 34px);
+    flex:0 0 auto;
+    min-height:0;
+    max-width:none;
+    overflow:hidden;
+    padding:12px clamp(10px,1.2vw,22px) 8px;
+    display:flex;
+    flex-direction:column;
+    gap:6px;
+  }
+  .shared-review-workspace:has(.shared-review-session.has-frame)>.page-heading{
+    margin:0;
+    align-items:center;
+    flex:none;
+    gap:8px;
+  }
+  .shared-review-workspace:has(.shared-review-session.has-frame)>.page-heading h2{
+    font-size:18px;
+    margin:0;
+  }
+  .shared-review-workspace:has(.shared-review-session.has-frame)>.page-heading .eyebrow{
+    font-size:9px;margin:0 0 3px;
+  }
+  .shared-review-workspace:has(.shared-review-session.has-frame)>.page-heading p{display:none}
+  .shared-review-workspace:has(.shared-review-session.has-frame)>.workspace-subtabs{
+    margin:0;
+    flex:none;
+  }
+  .shared-review-workspace:has(.shared-review-session.has-frame)>.alert{
+    margin:0;
+    padding:7px 10px;
+    flex:none;
+    line-height:1.25;
+  }
+  .shared-review-session.has-frame{
+    display:flex;
+    flex-direction:column;
+    min-height:0;
+    flex:1;
+    gap:7px;
+  }
+  .shared-review-session.has-frame>.shared-review-stat-grid{
+    display:flex;
+    gap:8px;
+    margin:0;
+    flex:none;
+  }
+  .shared-review-session.has-frame>.shared-review-stat-grid>.stat-card{
+    display:flex;
+    flex-direction:row;
+    align-items:center;
+    gap:9px;
+    width:auto;
+    min-height:0;
+    padding:6px 11px;
+    border-radius:9px;
+  }
+  .shared-review-session.has-frame>.shared-review-stat-grid .stat-card strong{
+    font-size:16px;
+    margin:0;
+  }
+  .shared-review-split{
+    display:grid;
+    grid-template-columns:minmax(0,2.3fr) minmax(320px,1fr);
+    gap:12px;
+    align-items:stretch;
+    flex:1;
+    min-height:0;
+    min-width:0;
+  }
+  .shared-review-image-column{
+    min-height:0;
+    min-width:0;
+    display:flex;
+    flex-direction:column;
+    gap:6px;
+  }
+  .shared-review-image-column .shared-review-frame-heading{
+    margin:0;
+    gap:9px;
+    flex:none;
+  }
+  .shared-review-image-column .shared-review-frame-heading .eyebrow{margin-bottom:2px}
+  .shared-review-image-column .shared-review-frame-heading h3{
+    font-size:16px;
+    margin:0;
+  }
+  .shared-review-image-column .shared-review-frame-heading p{font-size:11px}
+  .shared-review-image-column .shared-review-zoom-controls .btn{
+    padding:5px 8px;
+    min-height:30px;
+  }
+  .shared-review-image-column .shared-review-canvas-panel{
+    flex:1;
+    display:flex;
+    flex-direction:column;
+    min-height:0;
+    padding:7px;
+    overflow:hidden;
+  }
+  .shared-review-image-column .shared-review-zoom-viewport{
+    flex:1;
+    display:flex;
+    min-height:0;
+    overflow:hidden;
+  }
+  .shared-review-image-column .review-annotation-visual{
+    height:100%;
+    min-height:0;
+    width:100%;
+    display:flex;
+    flex-direction:column;
+  }
+  .shared-review-image-column .annotation-view-toolbar{
+    flex:none;
+    padding:4px 7px;
+  }
+  .shared-review-image-column .annotation-image-stage.is-zoomable{
+    flex:1;
+    min-height:0;
+    height:auto;
+  }
+  .shared-review-image-column .annotation-legend{
+    flex:none;
+    padding:5px 7px;
+    gap:4px;
+  }
+  .shared-review-image-column .annotation-legend-toggle{
+    padding:3px 5px;
+    font-size:10px;
+  }
+  .shared-review-image-column .shared-review-zoom-hint{
+    margin:3px 0 0;
+    font-size:10px;
+  }
+  .shared-review-split>.shared-review-grade-panel{
+    margin:0;
+    min-width:0;
+    min-height:0;
+    display:flex;
+    flex-direction:column;
+    padding:11px;
+    overflow:hidden;
+  }
+  .shared-review-split .shared-review-grade-heading{
+    margin:0 0 8px;
+    gap:8px;
+    flex:none;
+  }
+  .shared-review-split .shared-review-grade-heading h3{
+    font-size:15px;margin:2px 0;
+  }
+  .shared-review-split .shared-review-grade-heading .eyebrow{margin:0}
+  .shared-review-split .shared-review-grade-heading p{
+    font-size:10px;line-height:1.3;margin:0;
+  }
+  .shared-review-split .shared-review-grade-heading>strong{font-size:12px}
+  .shared-review-split .shared-review-object-list{
+    flex:1;
+    min-height:0;
+    overflow-y:auto;
+    gap:5px;
+  }
+  .shared-review-split .shared-review-object-row{
+    padding:6px 7px;
+    gap:5px;
+    border-radius:8px;
+  }
+  .shared-review-split .shared-review-object-label{
+    min-width:0;
+    gap:5px;
+  }
+  .shared-review-split .shared-review-object-label strong{font-size:11px}
+  .shared-review-split .shared-review-object-label .soft-pill{
+    padding:3px 5px;font-size:9px;
+  }
+  .shared-review-split .shared-review-verdict-buttons{
+    gap:4px;
+  }
+  .shared-review-split .shared-review-verdict-buttons .btn{
+    padding:5px 7px;min-height:28px;font-size:10px;gap:4px;
+  }
+  .shared-review-split .shared-review-reason{
+    padding-top:5px;
+    gap:5px;
+  }
+  .shared-review-split .shared-review-reason label{min-width:0;font-size:10px;gap:3px}
+  .shared-review-split .shared-review-reason select{padding:5px;font-size:11px}
+  .shared-review-split .shared-review-missing{
+    margin-top:6px;
+    padding:6px 8px;
+    flex:none;
+  }
+  .shared-review-split .shared-review-completion{
+    flex:none;
+    margin-top:7px;
+    padding-top:7px;
+    gap:5px;
+  }
+  .shared-review-split .shared-review-completion .btn{
+    min-height:30px;
+    padding:6px 7px;
+    font-size:10px;
+    gap:4px;
+  }
+  .shared-review-split .shared-review-completion-actions{gap:5px}
+}
+/* Smaller screens retain accessible normal flow rather than clipping actions. */
+@media(max-width:999px), (max-height:669px){
+  .shared-review-split{display:flex;flex-direction:column;gap:12px;min-width:0}
+  .shared-review-image-column{min-width:0}
+}
