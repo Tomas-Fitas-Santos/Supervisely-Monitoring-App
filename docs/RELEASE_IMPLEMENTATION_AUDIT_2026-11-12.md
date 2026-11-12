@@ -32,7 +32,7 @@
 | Authentication | Expired/locked Nightjar password or wrong event selected | Sign in all staff and verify event-specific permissions and lockout recovery |
 | Dataset | Imported video has gaps/unknown frame density; huge full-density dataset exhausts media storage | Check provenance, exact frame count, source IDs, manifest, free disk and backups |
 | Queue | Manual priority starves automatic work; worker restart duplicates remote operations | Trial high/normal/held jobs, restart worker mid-operation, verify idempotent remote ID reconciliation |
-| Publication | Job issued to wrong native user or source video mixed unexpectedly | Verify native job owner IDs, source videos and repeat-batch rules with two distinct users |
+| Publication | Job issued to wrong native user or mixed-video sequence misattributed | Verify native job owner IDs, original per-frame video identity, frame order, and that repeat blocks are not auto-issued |
 | Submission | Supervisely job status transitions to review but frame JSON unavailable or out of order | Check all source-media IDs have matching job-scoped annotation JSON; retry without duplicate snapshots |
 | Review | Two monitors claim same frame, lease expires, tab crashes, release fails | Run real PostgreSQL concurrent tests and browser claim/pause/crash/recovery scenarios |
 | Fairness | Some teams submit much more; more correctly annotated objects should earn more points | Use independent random sampling from the full eligible frame pool, expose coverage per team, and apply the same current published rubric to every completed review |
@@ -56,7 +56,7 @@
 
 **Historical compatibility:** pre-existing whole-video labeling jobs and old review records remain readable. The new equal-coverage closeout gate applies when the event contains official new single-assignee shared/manual frame-review jobs. The older accepted-job review workflow remains compatible with historical events.
 
-**Remaining competition policy question:** the optional independent-repeat scheduling feature can assign a second copy of a complete 30-frame block (including a mixed-video block) to a different team. The final short block is not repeated. Confirm whether these repeat copies should be enabled; all primary source frames remain exclusive.
+**Official distribution safety default:** the worker does not automatically schedule repeat copies of 30-frame blocks. All primary frames are allocated once. The optional repeat-specific functions remain in the source code for future explicit use, but normal event operation does not invoke them; the short final block is not repeated.
 
 ## Deployment and validation sequence
 
