@@ -53,6 +53,20 @@ jobs:
       - name: Compile frontend
         working-directory: web
         run: npm run build
+      - name: Validate Windows deployment scripts syntax
+        shell: pwsh
+        run: |
+          foreach ($path in @('scripts/deploy-live.ps1', 'scripts/init-live-test.ps1')) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $path), [ref]$tokens, [ref]$errors
+            ) | Out-Null
+            if ($errors.Count -gt 0) {
+              $errors | Out-String | Write-Host
+              throw "PowerShell syntax validation failed for $path"
+            }
+          }
 
       - name: Prepare disposable live-test container credentials
         run: |
