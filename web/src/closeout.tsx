@@ -5,9 +5,9 @@ import { api, type Auth } from "./api";
 
 type NativeExport={operation_id:string|null;status:string;error_code:string|null;
   attempts:number;ready_to_download:boolean;size_bytes:number|null};
-type TeamRank={team_id:string;team_name:string;rank:number;correct_keypoints:number;
+type TeamRank={team_id:string;team_name:string;rank:number|null;correct_keypoints:number;
   correct_visible_keypoints:number;correct_occluded_keypoints:number;
-  correct_boxes:number;correct_objects:number;weighted_score:number;
+  correct_boxes:number;correct_objects:number;estimated_points:number|null;
   reviewed_frames:number;available_frames:number;missing_objects:number;
   errors:Record<string,number>};
 type ReviewQueueCounts={pending:number;active:number;completed:number};
@@ -90,7 +90,7 @@ export function CloseoutScreen({auth}:{auth:Auth}) {
   return <div className="page-body">
     <div className="page-heading"><div><span className="eyebrow">EVENT OPERATIONS · TEAM RESULTS</span>
       <h2>Results & Rankings</h2>
-      <p className="muted">The winner is the team with the highest weighted annotation score, including configured penalties. Organisers can export records and close the event.</p>
+      <p className="muted">Teams rank by estimated annotation points from the proportional review queue. Organisers can export records and close the event.</p>
       </div><button className="btn secondary" onClick={()=>void refresh()}>
         <RefreshCw size={15}/> Refresh</button></div>
     {error&&<div role="alert" className="alert danger">{error}</div>}
@@ -127,23 +127,21 @@ export function CloseoutScreen({auth}:{auth:Auth}) {
         </table></div>
         <p className="muted small">{report.review_fairness.total_reviewed_frames.toLocaleString()} reviewed out of
           {" "+report.review_fairness.total_available_frames.toLocaleString()} available submitted frames.
-          Teams are ranked by the weighted points of verified correct annotations minus penalties, not by equal review counts.</p>
+          The review queue adjusts to each team’s share of eligible submissions.</p>
       </section>
       <section className="panel event-ranking-panel">
         <div className="review-analytics-header">
-          <div><span className="eyebrow">OFFICIAL WEIGHTED ANNOTATION LEADERBOARD</span>
+          <div><span className="eyebrow">PROPORTIONAL REVIEW LEADERBOARD</span>
             <h3>Team rankings</h3>
-            <p className="muted">Primary ranking: visible keypoints, occluded keypoints, and correct bounding boxes
-              earn distinct point values; incorrect annotations incur configurable penalties.
-              Frames without completed reviews earn no verified points.</p>
+            <p className="muted">Estimated points = eligible submitted frames × average review score (0–5).</p>
           </div><BarChart3 size={27}/></div>
         <div className="table-scroll"><table className="data-table">
           <thead><tr><th>Rank</th><th>Team</th><th>Visible points</th><th>Occluded points</th>
             <th>Correct boxes</th><th>Total correct annotations</th>
             <th>Reviewed / available frames</th>
-            <th>Class / placement / sabotage errors</th><th>Competition score</th></tr></thead>
+            <th>Class / placement / sabotage errors</th><th>Estimated points</th></tr></thead>
           <tbody>{rankings.map(team=><tr key={team.team_id}>
-            <td><strong>#{team.rank}</strong></td>
+            <td><strong>{team.rank===null?"—":"#"+team.rank}</strong></td>
             <td><strong>{team.team_name}</strong></td>
             <td>{team.correct_visible_keypoints.toLocaleString()}</td>
             <td>{team.correct_occluded_keypoints.toLocaleString()}</td>
@@ -151,11 +149,11 @@ export function CloseoutScreen({auth}:{auth:Auth}) {
             <td><strong>{team.correct_objects.toLocaleString()}</strong></td>
             <td>{team.reviewed_frames} / {team.available_frames}</td>
             <td>{team.errors?.wrong_class||0} / {team.errors?.wrong_placement||0} / {team.errors?.sabotage||0}</td>
-            <td><strong>{team.weighted_score.toLocaleString()}</strong></td>
+            <td><strong>{team.estimated_points?.toLocaleString(undefined,{maximumFractionDigits:2})??"Awaiting review"}</strong></td>
           </tr>)}</tbody>
         </table>{!rankings.length&&<div className="empty-table">Rankings will appear after reviewed frames are available.</div>}</div>
-        <p className="muted small">Rankings include completed reviews of submitted frame annotations; submitted but unreviewed frames do not contribute points.
-          Every team's review count is shown so differences in review coverage are visible.</p>
+        <p className="muted small">Completed reviews determine each team’s average score.
+          The submitted frame count includes eligible frames still awaiting review.</p>
       </section>
       <div className="content-grid closeout-layout">
         <section className="panel">

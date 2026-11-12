@@ -3,15 +3,33 @@ from collections import Counter
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from sqlalchemy import select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from .auth import AuthContext, requires
 from .db import get_db
 from .events_api import current_event
-from .models import AuditEvent, CompetitionTeam, LabelingJob, ReviewRubric, ReviewSample
+from .models import AuditEvent, CompetitionTeam, LabelingJob, ReviewRubric, ReviewSample, epoch
 
 router = APIRouter(prefix="/api/v1", tags=["review scoring"])
+
+
+PRIZE_RELEASE_MODES = ("automatic", "shared_primary")
+PRIZE_CLASSES = frozenset({"bird", "left_eye", "right_eye", "beak", "crown"})
+
+
+def frame_points(decision: dict, snapshot: dict) -> int:
+    """One point per anatomical item, including its occluded variant."""
+    annotation = snapshot.get("annotation") or {}
+    objects = annotation.get("objects", annotation.get("labels", []))
+    correct = set()
+    for verdict in decision.get("verdicts", []):
+        index = verdict.get("object_index")
+        if verdict.get("correct") and type(index) is int and 0 <= index < len(objects):
+            title = str(objects[index].get("classTitle", "")).removesuffix("_occ")
+            if title in PRIZE_CLASSES:
+                correct.add(title)
+    return len(correct)
 
 
 class Weights(BaseModel):
@@ -134,20 +152,36 @@ def rankings(ctx: AuthContext = Depends(requires("organiser", "monitor")),
         team_id: {"team_id": team_id, "team_name": name, "correct_keypoints": 0,
                   "correct_visible_keypoints": 0, "correct_occluded_keypoints": 0,
                   "correct_boxes": 0, "weighted_score": 0, "reviewed_frames": 0,
-                  "available_frames": 0, "missing_objects": 0, "errors": Counter()}
+                  "available_frames": 0, "active_reviews": 0, "audited_points": 0,
+                  "missing_objects": 0, "errors": Counter()}
         for team_id, name in db.execute(select(CompetitionTeam.id, CompetitionTeam.name)
                                         .where(CompetitionTeam.event_id == event.id))
     }
-    for team_id, decision, snapshot in db.execute(select(
+    now = epoch()
+    eligible = (
+        ReviewSample.event_id == event.id,
+        ReviewSample.correction_round == LabelingJob.correction_round,
+        LabelingJob.status.in_(("on_review", "completed")),
+        LabelingJob.release_mode.in_(PRIZE_RELEASE_MODES),
+    )
+    counts = select(
+        ReviewSample.team_id, func.count(),
+        func.sum(case((ReviewSample.completed_at.is_(None) & (ReviewSample.expires_at > now), 1), else_=0)),
+    ).join(LabelingJob, LabelingJob.id == ReviewSample.job_id).where(*eligible).group_by(ReviewSample.team_id)
+    for team_id, submitted, active in db.execute(counts):
+        teams[team_id]["available_frames"] = submitted
+        teams[team_id]["active_reviews"] = active
+
+    reviewed_samples = select(
         ReviewSample.team_id, ReviewSample.decision, ReviewSample.snapshot,
-    ).join(LabelingJob, LabelingJob.id == ReviewSample.job_id)
-     .where(ReviewSample.event_id == event.id,
-            ReviewSample.correction_round == LabelingJob.correction_round,
-            LabelingJob.status.in_(("on_review", "completed")))):
-        row = teams[team_id]
-        row["available_frames"] += 1
+    ).join(LabelingJob, LabelingJob.id == ReviewSample.job_id).where(
+        *eligible, ReviewSample.completed_at.is_not(None),
+    )
+    for team_id, decision, snapshot in db.execute(reviewed_samples):
         if decision is not None:
+            row = teams[team_id]
             row["reviewed_frames"] += 1
+            row["audited_points"] += frame_points(decision, snapshot)
             for key in ("correct_keypoints", "correct_boxes"):
                 row[key] += decision[key]
             row["errors"].update(decision["errors"])
@@ -158,16 +192,32 @@ def rankings(ctx: AuthContext = Depends(requires("organiser", "monitor")),
             # Apply the latest published rubric uniformly to every team.
             # Historical decisions and their original rubric IDs are immutable.
             row["weighted_score"] += score_verdict(decision, snapshot, current_weights)
+    total_frames = sum(row["available_frames"] for row in teams.values())
+    total_allocated = sum(row["reviewed_frames"] + row["active_reviews"] for row in teams.values())
     for row in teams.values():
+        submitted = row["available_frames"]
+        reviewed = row["reviewed_frames"]
+        allocated = reviewed + row["active_reviews"]
+        row["coverage_pct"] = 100 * reviewed / submitted if submitted else 0
+        row["submission_share_pct"] = 100 * submitted / total_frames if total_frames else 0
+        row["review_share_pct"] = 100 * allocated / total_allocated if total_allocated else 0
+        row["average_frame_points"] = row["audited_points"] / reviewed if reviewed else None
+        row["estimated_points"] = submitted * row["average_frame_points"] if reviewed else None
         row["correct_objects"] = row["correct_keypoints"] + row["correct_boxes"]
     items = sorted(teams.values(), key=lambda row: (
-        -row["weighted_score"], -row["correct_objects"], row["team_id"],
+        row["estimated_points"] is None, -(row["estimated_points"] or 0), row["team_id"],
     ))
+    rank = 0
+    previous_score = None
     for position, row in enumerate(items, start=1):
-        row["rank"] = position
+        score = row["estimated_points"]
+        if score is not None and score != previous_score:
+            rank = position
+        row["rank"] = rank if score is not None else None
+        previous_score = score
     return {
         "items": items,
         "rubric_version": current_rubric.version if current_rubric else 0,
-        "weighted_scoring_policy": "Primary competition rank is total weighted correct annotation points minus configured incorrect-annotation penalties; the current rubric applies uniformly to all completed verdicts",
-        "submission_policy": "Only the latest submitted correction round per job counts after review",
+        "scoring_policy": "Eligible submitted frames multiplied by average reviewed points (0–5).",
+        "submission_policy": "Only current automatic primary submissions count towards the prize.",
     }

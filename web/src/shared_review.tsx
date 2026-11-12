@@ -26,10 +26,12 @@ type Weights={
   wrong_class:number;wrong_placement:number;sabotage:number;
 };
 type Rubric={version:number;weights:Weights};
-type Ranking={rank:number;team_id:string;team_name:string;
+type Ranking={rank:number|null;team_id:string;team_name:string;
   correct_keypoints:number;correct_visible_keypoints:number;
   correct_occluded_keypoints:number;correct_boxes:number;correct_objects:number;
-  reviewed_frames:number;available_frames:number;weighted_score:number;
+  reviewed_frames:number;available_frames:number;
+  estimated_points:number|null;average_frame_points:number|null;coverage_pct:number;
+  submission_share_pct:number;review_share_pct:number;
   missing_objects:number;errors:Record<string,number>};
 const emptyWeights:Weights={
   visible_keypoint:1,occluded_keypoint:3,box:1,
@@ -48,7 +50,7 @@ const reasons:{value:Reason;label:string}[]=[
   {value:"wrong_placement",label:"Wrong keypoint placement"},
   {value:"sabotage",label:"Sabotage / no serious placement attempt"},
 ];
-const fmt=(n:number)=>new Intl.NumberFormat().format(n);
+const fmt=(n:number)=>new Intl.NumberFormat(undefined,{maximumFractionDigits:2}).format(n);
 const isLeaseConflict=(error:unknown)=>/claim expired|not owned by this claim|already completed/i
   .test((error as Error).message||"");
 
@@ -234,7 +236,7 @@ export function SharedReviewScreen({auth}:{auth:Auth}){
       const result=await api<Rubric>("/scoring/rubric","PUT",weights,auth.csrf_token);
       setRubric(result);setWeights(result.weights);
       setNotice("Scoring rubric saved as version "+result.version+
-        ". Historical verdicts remain unchanged; leaderboard weighted scores are recalculated consistently with this version.");
+        ". The weighted quality metric is recalculated with this version.");
     }catch(e){setError((e as Error).message);}
     finally{setBusy(false);}
   }
@@ -404,36 +406,39 @@ export function SharedReviewScreen({auth}:{auth:Auth}){
       <div className="shared-review-grade-heading"><div>
         <span className="eyebrow">EVENT RESULTS · WEIGHTED ANNOTATION POINTS</span>
         <h3>Team leaderboard</h3>
-        <p className="muted">Teams rank by their total verified annotation points: visible and occluded
-          keypoints and correct bounding boxes earn different weights; incorrect annotations
-          incur the organiser-configured penalties. More submitted frames can mean more points.</p>
+        <p className="muted">Estimated points = eligible submitted frames × average review score (0–5).
+          Compare submission share with review share to check balance. Review share includes active claims.</p>
       </div><button className="btn secondary" onClick={()=>void refreshRankings()}>
         <RefreshCw size={15}/> Update</button></div>
       <div className="table-scroll"><table className="data-table">
         <thead><tr><th>Rank</th><th>Team</th><th>Visible points</th>
           <th>Occluded points</th><th>Correct boxes</th><th>Correct annotations</th>
-          <th>Reviewed / Available</th><th>Errors (class / placement / sabotage)</th>
-          <th>Competition score</th></tr></thead>
+          <th>Reviewed / Submitted</th><th>Coverage</th><th>Submission share</th><th>Review share</th>
+          <th>Average / 5</th><th>Errors (class / placement / sabotage)</th>
+          <th>Estimated points</th></tr></thead>
         <tbody>{rankings.map(team=><tr key={team.team_id}>
-          <td><strong>#{team.rank}</strong></td><td><strong>{team.team_name}</strong></td>
+          <td><strong>{team.rank===null?"—":"#"+team.rank}</strong></td><td><strong>{team.team_name}</strong></td>
           <td>{fmt(team.correct_visible_keypoints)}</td>
           <td>{fmt(team.correct_occluded_keypoints)}</td>
           <td>{fmt(team.correct_boxes)}</td>
           <td>{fmt(team.correct_objects)}</td>
           <td>{fmt(team.reviewed_frames)} / {fmt(team.available_frames)}</td>
+          <td>{fmt(team.coverage_pct)}%</td><td>{fmt(team.submission_share_pct)}%</td>
+          <td>{fmt(team.review_share_pct)}%</td>
+          <td>{team.average_frame_points===null?"—":fmt(team.average_frame_points)}</td>
           <td>{fmt(team.errors?.wrong_class||0)} / {fmt(team.errors?.wrong_placement||0)} / {fmt(team.errors?.sabotage||0)}</td>
-          <td><strong>{fmt(team.weighted_score)}</strong></td>
+          <td><strong>{team.estimated_points===null?"Awaiting review":fmt(team.estimated_points)}</strong></td>
         </tr>)}</tbody>
       </table>{!rankings.length&&<div className="empty-table">
         No competition results available yet.</div>}</div>
-      <p className="muted small">Only completed frame reviews contribute verified object counts. Pending submitted frames are excluded until reviewed.
-        Ranking calculations and historic reviews are kept on the server.</p>
+      <p className="muted small">A team’s coverage is its completed reviews divided by its eligible submissions.
+        The estimated score becomes available after the first review.</p>
     </section>}
 
     {tab==="scoring"&&<section className="panel shared-review-scoring">
       <div className="shared-review-grade-heading"><div>
         <span className="eyebrow">SCORING · VERSIONED RUBRIC</span>
-        <h3>Annotation scoring</h3>
+        <h3>Weighted quality settings</h3>
         <p className="muted">Only event organisers (admins) can change scoring weights here.
           All monitors can view them. Saved rubric versions apply uniformly to every
           reviewed submission, including earlier completed reviews.</p>
@@ -447,11 +452,8 @@ export function SharedReviewScreen({auth}:{auth:Auth}){
               onChange={e=>setWeights(old=>({...old,[key]:Number(e.target.value)}))}/>
           </label>)}
         </div>
-        <p className="muted small">Competition score = correct visible keypoints × visible weight
-          + correct occluded keypoints × occluded weight + correct bounding boxes × box weight
-          − wrong-class, wrong-placement and sabotage penalties. Defaults: +1 visible,
-          +3 occluded, +1 box; penalties −1/−2/−3 respectively (configurable).
-          Highest total weighted score wins, not the highest percentage of correct images.</p>
+        <p className="muted small">These weights apply to the separate quality metric.
+          The prize score uses one point each for the box and four landmarks.</p>
         {organiser&&<button type="submit" className="btn primary" disabled={busy}>
           Save scoring configuration</button>}
       </form>

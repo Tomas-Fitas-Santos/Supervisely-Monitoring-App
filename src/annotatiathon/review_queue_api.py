@@ -27,7 +27,14 @@ from .models import (
     epoch,
     identifier,
 )
-from .scoring_api import Weights, latest_rubric, resolved_weights, score_verdict
+from .scoring_api import (
+    PRIZE_RELEASE_MODES,
+    Weights,
+    frame_points,
+    latest_rubric,
+    resolved_weights,
+    score_verdict,
+)
 
 router = APIRouter(prefix="/api/v1/review-queue", tags=["frame review"])
 LEASE_SECONDS = 180
@@ -127,16 +134,28 @@ def claim(db, event_id, reviewer_id):
     if existing:
         return claim_view(db, existing)
     available = rows.completed_at.is_(None) & or_(rows.expires_at.is_(None), rows.expires_at <= now)
-    # No per-team equalization or quota. A team contributing more complete
-    # submitted frames has more entries in this pool and consequently more
-    # opportunities to earn correctly reviewed keypoint/box points.
-    # Random-key pivot avoids sorting the entire large backlog by RANDOM().
-    # PostgreSQL SKIP LOCKED ensures simultaneous monitors never claim the
-    # same frame; the event lock also serializes completion/claim transactions.
-    pivot = identifier()
     query = select(rows).join(
         LabelingJob, LabelingJob.id == rows.job_id,
     ).where(scope, *current_submission, available)
+    # Count leases as allocated reviews. The event lock serializes allocation
+    # so simultaneous monitors see each other's claims before choosing a team.
+    allocated = or_(rows.completed_at.is_not(None), rows.expires_at > now)
+    submitted = func.count()
+    reviewed = func.sum(case((allocated, 1), else_=0))
+    teams = db.execute(select(rows.team_id, submitted, reviewed).join(
+        LabelingJob, LabelingJob.id == rows.job_id,
+    ).where(scope, *current_submission, LabelingJob.release_mode.in_(PRIZE_RELEASE_MODES))
+        .group_by(rows.team_id)).all()
+    total_submitted = sum(count for _, count, _ in teams)
+    next_slot = sum(count for _, _, count in teams) + 1
+    eligible = [(team_id, count, assigned) for team_id, count, assigned in teams if count > assigned]
+    if eligible:
+        # Compare deficits using integers to avoid floating point ties.
+        team_id, _, _ = max(eligible, key=lambda team: (
+            next_slot * team[1] - total_submitted * team[2], team[0],
+        ))
+        query = query.where(rows.team_id == team_id, LabelingJob.release_mode.in_(PRIZE_RELEASE_MODES))
+    pivot = identifier()
     sample = db.scalar(
         query.where(rows.random_key >= pivot).order_by(rows.random_key).limit(1)
         .with_for_update(skip_locked=True, of=rows)
@@ -259,6 +278,7 @@ def complete(review_id: str, payload: Completion,
         "correct_boxes": correct["rectangle"],
         "errors": dict(errors),
     }
+    decision["frame_points"] = frame_points(decision, sample.snapshot)
     decision["weighted_score"] = score_verdict(decision, sample.snapshot, weights)
     sample.decision = decision
     sample.completed_at = epoch()

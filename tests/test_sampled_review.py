@@ -77,6 +77,8 @@ def test_sample_claim_scoring_and_retry(dataset_ctx, tmp_path):
         assert top["correct_objects"] == top["correct_boxes"] == 1
         assert top["weighted_score"] == 19  # +20 box, -1 wrong-class penalty
         assert top["reviewed_frames"] == 1
+        assert top["average_frame_points"] == 1
+        assert top["estimated_points"] == frames
         assert top["errors"] == {"wrong_class": 1}
         # Changing the scoring policy during the event does not rewrite
         # decisions, but recalculates every team's weighted tie breaker.
@@ -86,6 +88,7 @@ def test_sample_claim_scoring_and_retry(dataset_ctx, tmp_path):
         rescored = http.get("/api/v1/rankings/teams").json()
         assert rescored["rubric_version"] == 2
         assert rescored["items"][0]["weighted_score"] == 2
+        assert rescored["items"][0]["estimated_points"] == frames
         state = http.get("/api/v1/review-queue/status").json()
         assert state["pending"] == frames - 1
         assert state["completed"] == 1

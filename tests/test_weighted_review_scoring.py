@@ -152,7 +152,7 @@ def test_visible_occluded_box_and_wrong_reason_points_and_admin_gate(dataset_ctx
     assert rejected.status_code == 403
 
 
-def test_weighted_primary_ranking_preserves_raw_correct_annotation_counts(dataset_ctx):
+def test_prize_ranking_uses_equal_points_and_preserves_weighted_metric(dataset_ctx):
     client, maker, csrf = dataset_ctx
     teams(client, csrf)
     with maker.begin() as db:
@@ -232,9 +232,28 @@ def test_weighted_primary_ranking_preserves_raw_correct_annotation_counts(datase
     response = client.get("/api/v1/rankings/teams")
     assert response.status_code == 200, response.text
     rows = response.json()["items"]
-    assert rows[0]["team_id"] == higher_score_team
-    assert rows[0]["weighted_score"] == 4
-    assert rows[0]["correct_objects"] == 2
+    assert rows[0]["team_id"] == lower_count_team
+    assert rows[0]["estimated_points"] == 3
+    weighted_leader = next(row for row in rows if row["team_id"] == higher_score_team)
+    assert weighted_leader["estimated_points"] == 2
+    assert weighted_leader["weighted_score"] == 4
+    assert weighted_leader["correct_objects"] == 2
+    assert weighted_leader["coverage_pct"] == 100
+    assert weighted_leader["submission_share_pct"] == 50
+    assert weighted_leader["review_share_pct"] == 50
     count_leader = next(row for row in rows if row["team_id"] == lower_count_team)
     assert count_leader["correct_objects"] == 3
     assert count_leader["weighted_score"] == 3
+
+
+
+def test_prize_points_count_each_anatomical_item_at_most_once():
+    from annotatiathon.scoring_api import frame_points
+
+    classes = ["bird", "bird", "left_eye", "left_eye_occ", "right_eye", "beak", "crown"]
+    snapshot = {"annotation": {"objects": [{"classTitle": title} for title in classes]}}
+    verdicts = [{"object_index": index, "correct": True} for index in range(len(classes))]
+    assert frame_points({"verdicts": verdicts}, snapshot) == 5
+    verdicts[-1]["correct"] = False
+    assert frame_points({"verdicts": verdicts}, snapshot) == 4
+    assert frame_points({"verdicts": []}, snapshot) == 0

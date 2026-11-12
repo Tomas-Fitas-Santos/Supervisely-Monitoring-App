@@ -13,11 +13,12 @@ from annotatiathon.review_queue_api import claim_next
 
 
 @pytest.mark.skipif(not os.getenv("NIGHTJAR_QUEUE_TEST_URL"), reason="requires disposable PostgreSQL")
-def test_two_monitors_claim_distinct_samples_from_global_random_pool():
+@pytest.mark.parametrize("second_team_size", [2, 4])
+def test_concurrent_claims_follow_submission_share(second_team_size):
     engine = create_engine(os.environ["NIGHTJAR_QUEUE_TEST_URL"])
     event_id = m.identifier()
     with Session(engine) as db, db.begin():
-        event = m.Event(id=event_id, name="Concurrent review")
+        event = m.Event(id=event_id, name=f"Concurrent review {event_id}")
         monitors = [
             m.StaffAccount(email=f"{event_id}-{i}@example.test", name=f"Monitor {i}",
                            password_hash="disabled", roles=["monitor"])
@@ -47,7 +48,7 @@ def test_two_monitors_claim_distinct_samples_from_global_random_pool():
                                  size_bytes=1, sha256="0" * 64)
             db.add(asset)
             db.flush()
-            for sequence in range(1, 3):
+            for sequence in range(1, (2 if i == 0 else second_team_size) + 1):
                 job = m.LabelingJob(event_id=event_id, team_id=team.id, plan_id=plan.id,
                                     dataset_id=dataset.id, sequence=sequence,
                                     assignee_person_id=person.id, media_ids=[asset.id],
@@ -75,11 +76,12 @@ def test_two_monitors_claim_distinct_samples_from_global_random_pool():
 
     first = simultaneous(monitor_ids[:2])
     assert len({review["review_id"] for review in first}) == 2
-    assert {review["team_name"] for review in first} <= {"Team 0", "Team 1"}
-    # A global random pool permits both claims to come from the same team.
+    assert {review["team_name"] for review in first} == {"Team 0", "Team 1"}
     repeated = simultaneous([monitor_ids[2], monitor_ids[2]])
     assert repeated[0]["review_id"] == repeated[1]["review_id"]
     assert repeated[0]["claim_token"] == repeated[1]["claim_token"]
+    if second_team_size == 4:
+        assert repeated[0]["team_name"] == "Team 1"
     with Session(engine) as db:
         active = db.scalars(select(m.ReviewSample).where(
             m.ReviewSample.event_id == event_id, m.ReviewSample.reviewer_id.is_not(None),
