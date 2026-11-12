@@ -29,6 +29,7 @@ function Login({ onLogin }: { onLogin: (auth: Auth) => void }) {
   const [email,setEmail] = useState("");
   const [password,setPassword] = useState("");
   const [confirmation,setConfirmation] = useState("");
+  const [registrationCode,setRegistrationCode] = useState("");
   const [error,setError] = useState("");
   const [notice,setNotice] = useState("");
   const [working,setWorking] = useState(false);
@@ -42,7 +43,7 @@ function Login({ onLogin }: { onLogin: (auth: Auth) => void }) {
         if(password!==confirmation)
           throw new Error("The two passwords do not match.");
         const result=await api<{registered:boolean;message:string}>(
-          "/auth/register","POST",{email:accountEmail,password});
+          "/auth/register","POST",{email:accountEmail,password,registration_code:registrationCode.trim()});
         try {
           // Registration and the independent Supervisely link are separate.
           onLogin(await api<Auth>("/auth/login","POST",{email:accountEmail,password}));
@@ -61,7 +62,7 @@ function Login({ onLogin }: { onLogin: (auth: Auth) => void }) {
   }
   function switchMode(){
     setMode(v=>v==="login"?"register":"login");
-    setError("");setNotice("");setPassword("");setConfirmation("");
+    setError("");setNotice("");setPassword("");setConfirmation("");setRegistrationCode("");
   }
 
   return <main className="login-shell">
@@ -92,6 +93,11 @@ function Login({ onLogin }: { onLogin: (auth: Auth) => void }) {
               required minLength={mode==="register"?12:undefined}
               value={password} onChange={e=>setPassword(e.target.value)}
               placeholder="Enter password"/></label>
+          {mode==="register"&&<label>One-time registration code from your organiser
+            <input type="text" autoComplete="one-time-code" required
+              value={registrationCode} onChange={e=>setRegistrationCode(e.target.value)}
+              placeholder="Paste your private registration code"/>
+          </label>}
           {mode==="register"&&<label>Confirm Nightjar password
             <input type="password" autoComplete="new-password" minLength={12}
               required value={confirmation} onChange={e=>setConfirmation(e.target.value)}
@@ -109,7 +115,7 @@ function Login({ onLogin }: { onLogin: (auth: Auth) => void }) {
           </button>
         </div>
         <p className="login-hint"><CircleHelp size={15}/>
-          Only approved monitors in the current SQL event roster can register.
+          Only approved monitors with a private organiser-issued code can register.
           If your email is not listed, ask the organiser to add or approve you.</p>
       </div>
       <div className="login-bottom">TÉCNICO · Bird Annotatiathon</div>

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { RefreshCw, Save, ShieldCheck } from "lucide-react";
+import { Copy, KeyRound, RefreshCw, Save, ShieldCheck } from "lucide-react";
 import { api, type Auth, type Role, type Staff } from "./api";
 
 const ROLE_OPTIONS:{role:Role;label:string;purpose:string}[]=[
@@ -28,6 +28,8 @@ export function StaffScreen({auth}:{auth:Auth}) {
   const [drafts,setDrafts]=useState<Record<string,Role[]>>({});
   const [working,setWorking]=useState<string|null>(null);
   const [query,setQuery]=useState("");
+  const [inviteEmail,setInviteEmail]=useState("");
+  const [issuedCode,setIssuedCode]=useState<{email:string;registration_code:string;expires_at:number}|null>(null);
   const refresh=useCallback(async()=>{
     try {
       const result=await api<{items:StaffRecord[]}>("/staff");
@@ -57,6 +59,18 @@ export function StaffScreen({auth}:{auth:Auth}) {
       await refresh();
     }catch(e){setError((e as Error).message);}finally{setWorking(null);}
   }
+  async function issueCode(){
+    if(!inviteEmail.trim()||working!==null)return;
+    setWorking("invite-code");setError("");setNotice("");setIssuedCode(null);
+    try{
+      const result=await api<{email:string;registration_code:string;expires_at:number}>(
+        "/staff/registration-code","POST",{email:inviteEmail.trim()},auth.csrf_token
+      );
+      setIssuedCode(result);
+      setNotice("Code created. Deliver it privately to the intended monitor. It will be shown only once.");
+    }catch(e){setError((e as Error).message);}
+    finally{setWorking(null);}
+  }
   const filtered=people.filter(person=>(person.name+" "+person.email).toLowerCase().includes(query.toLowerCase()));
   return <section className="panel">
     <div className="panel-heading"><div><span className="eyebrow">STAFF ACCESS</span>
@@ -65,6 +79,39 @@ export function StaffScreen({auth}:{auth:Auth}) {
       </div><button className="btn secondary" onClick={()=>void refresh()}><RefreshCw size={15}/> Refresh</button></div>
     {error&&<div className="alert danger" role="alert">{error}</div>}
     {notice&&<div className="alert success" role="status">{notice}</div>}
+    {organiser&&<section className="staff-registration-codes">
+      <div className="panel-heading"><div>
+        <span className="eyebrow">SECURE MONITOR REGISTRATION</span>
+        <h3>Generate one-time registration codes</h3>
+        <p className="muted">Enter an approved monitor's roster email. Each code works once,
+          expires after seven days and must be shared with the correct monitor privately.</p>
+      </div><KeyRound size={23}/></div>
+      <div className="form-grid">
+        <label>Approved monitor email
+          <input type="email" value={inviteEmail} onChange={e=>setInviteEmail(e.target.value)}
+            placeholder="monitor@institution.pt"/>
+        </label>
+        <div className="actions-right">
+          <button type="button" className="btn primary" disabled={working!==null||!inviteEmail.trim()}
+            onClick={()=>void issueCode()}>Generate private code</button>
+        </div>
+      </div>
+      {issuedCode&&<div className="settings-note">
+        <div className="form-stack" style={{width:"100%"}}>
+          <label>Registration code for {issuedCode.email}
+            <input readOnly value={issuedCode.registration_code}
+              onFocus={e=>e.target.select()}/>
+          </label>
+          <p className="muted small">Expires {new Date(issuedCode.expires_at*1000).toLocaleString()}.
+            Generating a new code for this email invalidates the previous one.</p>
+          <button type="button" className="btn secondary"
+            onClick={()=>void navigator.clipboard.writeText(
+              issuedCode.email+"\n"+issuedCode.registration_code)}>
+            <Copy size={15}/> Copy email and code
+          </button>
+        </div>
+      </div>}
+    </section>}
     <label className="staff-search">Find monitor or staff account
       <input value={query} placeholder="Search by name or email…" onChange={e=>setQuery(e.target.value)}/>
     </label>
