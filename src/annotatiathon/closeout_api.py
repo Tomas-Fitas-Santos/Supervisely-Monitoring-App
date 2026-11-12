@@ -68,6 +68,47 @@ def frame_review_fairness(db: Session, event_id: str) -> dict:
     }
 
 
+def closeout_readiness(db: Session, event_id: str, fairness: dict) -> dict:
+    """The API and organiser UI use one definitive pre-closeout gate."""
+    jobs = list(db.scalars(select(LabelingJob).where(
+        LabelingJob.event_id == event_id, LabelingJob.status != "cancelled",
+    )))
+    frame_counts = dict(db.execute(
+        select(ReviewSample.job_id, func.count(ReviewSample.id))
+        .join(LabelingJob, LabelingJob.id == ReviewSample.job_id)
+        .where(
+            ReviewSample.event_id == event_id,
+            ReviewSample.correction_round == LabelingJob.correction_round,
+        ).group_by(ReviewSample.job_id)
+    ))
+    blocking = []
+    for job in jobs:
+        if job.assignee_person_id is not None and job.release_mode in {
+            "shared_primary", "shared_repeat", "manual_released", "manual_hold",
+        }:
+            complete_submission = (
+                job.status in {"on_review", "completed"}
+                and job.annotation_snapshot_round == job.correction_round
+                and frame_counts.get(job.id, 0) == job.frame_count
+            )
+            if not complete_submission:
+                blocking.append(job.id)
+        elif job.status != "completed" or job.review_status != "accepted":
+            blocking.append(job.id)
+    return {
+        "ready": not blocking and (not jobs or fairness["ready_for_winner"]),
+        "blocking_jobs": len(blocking),
+        "equal_review_coverage": fairness["ready_for_winner"],
+        "message": (
+            f"{len(blocking)} jobs have incomplete submissions or unsynced frames."
+            if blocking else
+            "Reviewed-frame counts differ between active teams or are still zero."
+            if jobs and not fairness["ready_for_winner"] else
+            "All required submissions are captured and team review coverage is equal."
+        ),
+    }
+
+
 def event_report(db: Session, event_id: str) -> dict:
     event = db.get(Event, event_id)
     people = db.scalars(select(Person).where(
@@ -136,6 +177,7 @@ def event_report(db: Session, event_id: str) -> dict:
             ),
         },
         "review_fairness": fairness,
+        "closeout_readiness": closeout_readiness(db, event_id, fairness),
         "ticket_totals": dict(ledger_totals),
         "generated_at": epoch(),
     }
@@ -170,45 +212,9 @@ def finalize_event(
     if existing:
         raise HTTPException(status_code=409, detail="This event is already closed.")
     report_data = event_report(db, event.id)
-    # The new event mode has independent frame reviews, not a manual
-    # whole-job "accept" button. A complete native submission can therefore
-    # be on_review while its review frames are processed asynchronously.
-    jobs = list(db.scalars(select(LabelingJob).where(
-        LabelingJob.event_id == event.id, LabelingJob.status != "cancelled",
-    )))
-    frame_counts = dict(db.execute(
-        select(ReviewSample.job_id, func.count(ReviewSample.id))
-        .join(LabelingJob, LabelingJob.id == ReviewSample.job_id)
-        .where(
-            ReviewSample.event_id == event.id,
-            ReviewSample.correction_round == LabelingJob.correction_round,
-        ).group_by(ReviewSample.job_id)
-    ))
-    blocking = []
-    for job in jobs:
-        if job.assignee_person_id is not None and job.release_mode in {
-            "shared_primary", "shared_repeat", "manual_released", "manual_hold",
-        }:
-            complete_submission = (
-                job.status in {"on_review", "completed"}
-                and job.annotation_snapshot_round == job.correction_round
-                and frame_counts.get(job.id, 0) == job.frame_count
-            )
-            if not complete_submission:
-                blocking.append(job.id)
-        elif job.status != "completed" or job.review_status != "accepted":
-            blocking.append(job.id)
-    if blocking:
-        raise HTTPException(
-            status_code=409,
-            detail=f"{len(blocking)} jobs remain unfinished or have incomplete annotation JSON.",
-        )
-    if jobs and not report_data["review_fairness"]["ready_for_winner"]:
-        raise HTTPException(
-            status_code=409,
-            detail="Cannot declare a winner until each active team has "
-                   "the same positive number of completed frame reviews.",
-        )
+    readiness = report_data["closeout_readiness"]
+    if not readiness["ready"]:
+        raise HTTPException(status_code=409, detail=readiness["message"])
     item = EventCloseout(
         event_id=event.id, snapshot_json=report_data, closed_by=ctx.staff.id,
     )

@@ -20,6 +20,11 @@ type Report={
     jobs_accepted:number;jobs_needing_action:number};
   reviews:{frames_reviewed:number;good:number;bad:number;incomplete:number;
     keypoint_score:number;temporal_consistency_issues:number};
+  review_fairness:{
+    ready_for_winner:boolean;equal:boolean;reviewed_frames_per_team:number|null;
+    frames_to_equalize:{team_id:string;team_name:string;reviewed_frames:number;additional_reviews_needed:number}[];
+  };
+  closeout_readiness:{ready:boolean;blocking_jobs:number;equal_review_coverage:boolean;message:string};
   ticket_totals:Record<string,number>;generated_at:number;
 };
 export function CloseoutScreen({auth}:{auth:Auth}) {
@@ -96,6 +101,28 @@ export function CloseoutScreen({auth}:{auth:Auth}) {
         <div className="stat-card"><Archive size={19}/><span className="muted small">Shared-queue reviews completed</span>
           <strong>{reviewCounts?.completed??"—"}</strong></div>
       </div>
+      <section className="panel event-fairness-panel">
+        <div className="review-analytics-header"><div>
+          <span className="eyebrow">OFFICIAL WINNER ELIGIBILITY</span>
+          <h3>Equal review coverage</h3>
+          <p className="muted">All active teams must finish with the same number of
+            individually reviewed frames. The latest submitted version counts,
+            once its annotations have been reviewed.</p>
+        </div>{report.review_fairness.ready_for_winner?
+          <CheckCircle2 size={26}/>:<ShieldAlert size={26}/>}</div>
+        <div className="table-scroll"><table className="data-table">
+          <thead><tr><th>Team</th><th>Reviewed frames</th>
+            <th>Additional reviews to match the current leader</th></tr></thead>
+          <tbody>{report.review_fairness.frames_to_equalize.map(team=><tr key={team.team_id}>
+            <td>{team.team_name}</td>
+            <td>{team.reviewed_frames.toLocaleString()}</td>
+            <td>{team.additional_reviews_needed.toLocaleString()}</td>
+          </tr>)}</tbody>
+        </table></div>
+        <p className="muted small">{report.review_fairness.ready_for_winner?
+          "Equal positive review coverage has been achieved across all teams.":
+          "Rankings are provisional until every active team has equal reviewed-frame coverage."}</p>
+      </section>
       <section className="panel event-ranking-panel">
         <div className="review-analytics-header">
           <div><span className="eyebrow">OFFICIAL OBJECT-COUNT LEADERBOARD</span>
@@ -187,15 +214,16 @@ export function CloseoutScreen({auth}:{auth:Auth}) {
       {auth.staff.roles.includes("organiser")&&<section className="panel closeout-confirm" style={{marginTop:20}}>
         <span className="eyebrow">ARCHIVE CURRENT EVENT</span><h3>Finalize & close event</h3>
         <p className="muted">Archiving preserves all existing people, job, ticket, dataset and activity records. Create a new event for another competition.</p>
-        {report.labeling.jobs_needing_action>0?<div className="advisory"><ShieldAlert size={18}/>
-          {report.labeling.jobs_needing_action} job(s) are not accepted. Finish the remaining reviews before finalisation.</div>:
+        {!report.closeout_readiness.ready?<div className="advisory"><ShieldAlert size={18}/>
+          {report.closeout_readiness.message}</div>:
           <div className="settings-note"><CheckCircle2 size={17}/>
-            <p>All recorded jobs are accepted or cancelled. You may proceed with finalisation.</p></div>}
+            <p>All required job submissions are complete and the teams have equal reviewed-frame counts.
+              Finalisation is now allowed.</p></div>}
         <label>Type <strong>{phrase}</strong> to confirm
           <input value={confirmation} onChange={e=>setConfirmation(e.target.value)}
             placeholder={phrase} autoComplete="off" spellCheck={false}/></label>
         <button className="btn danger-outline" disabled={busy||
-          report.event_status==="archived"||report.labeling.jobs_needing_action>0||
+          report.event_status==="archived"||!report.closeout_readiness.ready||
           confirmation!==phrase} onClick={()=>void finalize()}>
           <Archive size={16}/> Archive & finalize event</button>
       </section>}
