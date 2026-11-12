@@ -95,9 +95,17 @@ def main() -> None:
             if not any("admin" in roles for roles in approved.values()):
                 parser.error("At least one enabled Admin is required in the approved database.")
             accounts = db.scalars(select(StaffAccount).with_for_update()).all()
-            by_email = {a.email: a for a in accounts}
+            by_email = {}
+            for staff in accounts:
+                by_email.setdefault(staff.email.strip().lower(), []).append(staff)
+            duplicates = [address for address in approved
+                          if len(by_email.get(address, [])) > 1]
+            if duplicates:
+                parser.error("Ambiguous staff accounts with duplicate email casing: "
+                             + ", ".join(duplicates) + ". Reconcile safely before syncing.")
             for address, roles in approved.items():
-                staff = by_email.get(address)
+                matches = by_email.get(address, [])
+                staff = matches[0] if matches else None
                 if staff is None:
                     missing.append(address)
                     continue
@@ -115,7 +123,7 @@ def main() -> None:
                     updated.append(address)
             if is_restricted_mode():
                 for staff in accounts:
-                    if staff.email not in approved and staff.active:
+                    if staff.email.strip().lower() not in approved and staff.active:
                         staff.active = False
                         db.execute(delete(StaffSession).where(StaffSession.staff_id == staff.id))
                         db.add(AuditEvent(
