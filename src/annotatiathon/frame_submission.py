@@ -42,7 +42,8 @@ def pending_ids(db: Session, job: LabelingJob) -> list[str]:
     return [media_id for media_id in job.media_ids if media_id not in accepted]
 
 
-def capture_frame_submission(db: Session, api, job: LabelingJob) -> dict:
+def capture_frame_submission(db: Session, api, job: LabelingJob, *,
+                             source_round: int | None = None) -> dict:
     """Stage a job-scoped JSON snapshot, then add *only complete* frames to review.
 
     The round manifest allows a crash between writing files and committing SQL
@@ -68,7 +69,8 @@ def capture_frame_submission(db: Session, api, job: LabelingJob) -> dict:
     if set(source) != set(job.media_ids) or set(mapping) != set(job.media_ids):
         raise FrameSubmissionError("native_source_mapping_incomplete")
     native_job_id = bindings[0].native_job_id
-    round_dir = Path(dataset.root_path) / "annotations" / job.id / f"round-{job.correction_round}"
+    round_number = job.correction_round if source_round is None else source_round
+    round_dir = Path(dataset.root_path) / "annotations" / job.id / f"round-{round_number}"
     manifest = round_dir / "manifest.json"
     if not manifest.is_file():
         remaining = pending_ids(db, job)
@@ -119,7 +121,7 @@ def capture_frame_submission(db: Session, api, job: LabelingJob) -> dict:
                 json.dump({
                     "schema": "nightjar-validated-frames-v1",
                     "event_id": job.event_id, "job_id": job.id,
-                    "correction_round": job.correction_round,
+                    "correction_round": round_number,
                     "native_job_id": native_job_id,
                     "media": rows, "incomplete": rejected,
                     "submitted_ids": remaining,
@@ -134,7 +136,7 @@ def capture_frame_submission(db: Session, api, job: LabelingJob) -> dict:
     if (details.get("schema") != "nightjar-validated-frames-v1"
             or details.get("job_id") != job.id
             or details.get("event_id") != job.event_id
-            or details.get("correction_round") != job.correction_round
+            or details.get("correction_round") != round_number
             or details.get("native_job_id") != native_job_id):
         raise FrameSubmissionError("snapshot_manifest_identity_conflict")
     previously_accepted = accepted_ids(db, job)
@@ -154,13 +156,13 @@ def capture_frame_submission(db: Session, api, job: LabelingJob) -> dict:
         snapshot["selection_reason"] = "structurally_complete_submitted_frame"
         db.add(ReviewSample(
             event_id=job.event_id, job_id=job.id, team_id=job.team_id,
-            media_id=media_id, correction_round=job.correction_round,
+            media_id=media_id, correction_round=round_number,
             validated_complete=True, snapshot=snapshot,
         ))
         accepted.append(media_id)
     db.flush()
     pending = pending_ids(db, job)
-    job.annotation_snapshot_round = job.correction_round
+    job.annotation_snapshot_round = round_number
     job.annotation_snapshot_frames = job.frame_count - len(pending)
     job.annotation_snapshot_annotated_frames = job.annotation_snapshot_frames
     if not pending:
