@@ -9,7 +9,7 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
 
 from annotatiathon import models as m
-from annotatiathon.native_worker import sync_all
+from annotatiathon.native_worker import queue_automatic_incomplete_return, sync_all
 from annotatiathon.work_queue import claim_primary_block, reserve_repeats
 
 
@@ -99,8 +99,15 @@ def test_distinct_claims_and_duplicate_person_requests():
         assert sync_all(db, api, m.SuperviselyConfig())["pending_operations"] == 0
         assert db.get(m.WorkPacket, job_id).submitted_at is None
         incomplete = db.get(m.LabelingJob, job_id)
+        assert incomplete.status == "on_review"
+        assert incomplete.correction_round == 0
+        # Native status is not the completeness verdict. Simulate the
+        # independent JSON validator finding fifteen unresolved frames.
+        assert queue_automatic_incomplete_return(
+            db, incomplete, 15, 30,
+            pending_media_ids=incomplete.media_ids[15:],
+        ) == "needs_correction"
         assert incomplete.review_status == "returned_incomplete"
-        assert incomplete.status == "needs_correction"
         assert incomplete.correction_round == 1
         restart = db.scalar(select(m.NativeOperation).where(
             m.NativeOperation.kind == "restart_job",
@@ -116,9 +123,14 @@ def test_distinct_claims_and_duplicate_person_requests():
         restart.status = "done"
         db.commit()
         native.finished_images_count = 30
-        assert sync_all(db, api, m.SuperviselyConfig())["pending_operations"] == 1
+        assert sync_all(db, api, m.SuperviselyConfig())["pending_operations"] == 0
         assert db.get(m.LabelingJob, job_id).status == "on_review"
-        assert db.get(m.WorkPacket, job_id).submitted_at is not None
+        assert db.get(m.WorkPacket, job_id).submitted_at is None
+        # A follow-up job is released only after the JSON validator has
+        # accepted all outstanding frames, not on native status alone.
+        db.get(m.WorkPacket, job_id).submitted_at = m.epoch()
+        db.commit()
+        assert sync_all(db, api, m.SuperviselyConfig())["pending_operations"] == 1
         successor = db.scalar(select(m.LabelingJob).where(
             m.LabelingJob.plan_id == plan, m.LabelingJob.assignee_person_id == person,
             m.LabelingJob.id != job_id,
