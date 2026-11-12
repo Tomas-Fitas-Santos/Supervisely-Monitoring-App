@@ -199,7 +199,7 @@ export function DatasetScreen({auth}:{auth:Auth}) {
     <div className="content-grid datasets-layout">
       {admin&&<section className="panel">
         <span className="eyebrow">PRE-EVENT MEDIA LIBRARY</span><h3>Import and preload videos</h3>
-        <p className="muted small">Choose a local folder in your browser without running commands. Files are transferred securely to Nightjar, then uploaded to Supervisely by its separate worker. If the dataset is already under Nightjar\u0027s linked host source root, use <strong>Link host folder (optional)</strong> instead for a faster no-copy import. For 30-frame automatic labeling jobs, keep <strong>Every source frame</strong> selected and upload consecutive frames from each source video. Uploading only sampled frames cannot establish full-density job coverage. Upload a folder or ZIP with <code>dataset-name/bird-species/video.mp4</code> or <code>dataset-name/bird-species/video-title/frame.jpg</code>. Multiple species and videos are supported. <strong>No frames.json or other metadata file is required in either upload format.</strong> Source videos are decoded according to the selected extraction mode. For existing frame folders, Nightjar recognizes filenames such as <code>ColumbaPalumbus_f000013.jpg</code>, or infers a consistent natural filename order. If supplied frames have missing source ordinals, import still succeeds but marks them as incomplete for full-density automatic jobs.</p>
+        <p className="muted small">Choose a local folder in your browser without running commands. Files are transferred securely to Nightjar, then uploaded to Supervisely by its separate worker. If the dataset is already under Nightjar\u0027s linked host source root, use <strong>Link host folder (optional)</strong> instead for a faster no-copy import. Automatic labeling accepts both full and sampled source videos. When importing an existing frame folder, Nightjar orders the <strong>uploaded frames</strong> by their original frame numbers (or natural filename order), even when source-video frame numbers have gaps. For raw videos, <strong>Every source frame</strong> extracts the entire video; sampled extraction is also supported. Upload a folder or ZIP with <code>dataset-name/bird-species/video.mp4</code> or <code>dataset-name/bird-species/video-title/frame.jpg</code>. Multiple species and videos are supported. <strong>No frames.json or other metadata file is required in either upload format.</strong> Source videos are decoded according to the selected extraction mode. For existing frame folders, Nightjar recognizes filenames such as <code>ColumbaPalumbus_f000013.jpg</code>, or infers a consistent natural filename order. Missing original-video frames are expected in sampled datasets and do not block automatic distribution.</p>
         <form className="form-stack" onSubmit={e=>void ingest(e)}>
           <label>Dataset name<input maxLength={200} value={name} placeholder="BirdGaze 2026"
             onChange={e=>setName(e.target.value)}/></label>
@@ -296,7 +296,7 @@ export function DatasetScreen({auth}:{auth:Auth}) {
                 Allow additional storage for original videos, staging, annotations, exports and backups.</p></div>
           </div>}
           {dataset.status==="ready"&&videosLoaded&&!videos.length&&<p className="advisory">
-            This collection predates source-frame provenance. Reimport its retained videos to establish full density.</p>}
+            This collection predates source-frame provenance. For ordered jobs, each frame still needs a source-video grouping and an ordering key; sampled footage is supported.</p>}
           {videos.map(video=><div key={video.id} className="settings-note">
             <p><strong>{video.video_group}</strong> · {video.frame_count} frames · {formatBytes(video.extracted_bytes)} frame files
               <br/>{video.extraction_policy} · Density {video.density} · Frame identity {video.identity_status}
@@ -332,7 +332,7 @@ export function DatasetScreen({auth}:{auth:Auth}) {
         .map(([m,count])=><tr key={m}><td><strong>{m}</strong></td>
           <td>{count.frames}</td></tr>)}</tbody></table></div>
       <p className="muted small">Planning balances assignment counts by morphology and
-        uses frame count to track dataset coverage. Automatic jobs use consecutive 30-frame blocks and can carry a video's remaining frames into the next video.</p>
+        uses frame count to track dataset coverage. Automatic jobs use blocks of up to 30 frames in uploaded dataset order (original source frame numbers may have gaps), and can carry a video's remaining frames into the next video.</p>
     </section>}
   </div>;
 }
