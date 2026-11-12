@@ -136,3 +136,84 @@ def test_separate_validator_completes_one_task_and_does_not_requeue(monkeypatch)
             assert task.lease_owner is None
     finally:
         engine.dispose()
+
+
+def test_postgres_multiple_validators_claim_only_one_round():
+    """SKIP LOCKED fences concurrent readers of the exact same job/round."""
+    import os
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    import pytest
+
+    connection = os.getenv("NIGHTJAR_QUEUE_TEST_URL")
+    if not connection:
+        pytest.skip("Requires migrated disposable PostgreSQL")
+    engine = create_engine(connection)
+    suffix = m.identifier()[:8]
+    event = f"validate-event-{suffix}"
+    staff = f"validate-staff-{suffix}"
+    team = f"validate-team-{suffix}"
+    person = f"validate-person-{suffix}"
+    dataset = f"validate-dataset-{suffix}"
+    plan = f"validate-plan-{suffix}"
+    jobid = f"validate-job-{suffix}"
+    with Session(engine) as db:
+        db.add(m.Event(id=event, name="Validation concurrency"))
+        db.add(m.StaffAccount(
+            id=staff, name="Validation owner", email=f"{staff}@example.test",
+            password_hash="disabled", roles=["organiser"],
+        ))
+        db.flush()
+        db.add(m.MediaDataset(
+            id=dataset, event_id=event, name="Fixture", root_path="/unused",
+            status="ready", upload_kind="folder", created_by=staff,
+        ))
+        db.add(m.CompetitionTeam(id=team, event_id=event, name="Pair"))
+        db.add(m.Person(
+            id=person, event_id=event, team_id=team, name="Tester",
+            email=f"{person}@example.test", kind="participant",
+        ))
+        db.flush()
+        db.add(m.LabelingPlan(
+            id=plan, event_id=event, dataset_id=dataset, status="running",
+            jobs_per_team=0, redundancy=1, created_by=staff,
+        ))
+        db.flush()
+        job = m.LabelingJob(
+            id=jobid, event_id=event, dataset_id=dataset, plan_id=plan,
+            team_id=team, assignee_person_id=person,
+            sequence=1, release_mode="shared_primary",
+            media_ids=["sample"], frame_count=1, video_count=1,
+            morphology_counts={}, status="on_review",
+        )
+        db.add(job)
+        db.add(m.NativeJobBinding(
+            event_id=event, job_id=jobid,
+            person_id=person, native_job_id=900000 + int(suffix[:4], 16),
+        ))
+        db.flush()
+        assert enqueue_validation(db, job)
+        db.commit()
+
+    barrier = Barrier(4)
+
+    def claim(_index):
+        with Session(engine) as db:
+            barrier.wait(timeout=10)
+            return claim_validation(db)
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        claims = list(pool.map(claim, range(4)))
+    owners = [claim for claim in claims if claim is not None]
+    assert len(owners) == 1
+    assert owners[0][1] == jobid
+    with Session(engine) as db:
+        assert finish_validation(db, owners[0][0], owners[0][2])
+        operation = db.scalar(select(m.NativeOperation).where(
+            m.NativeOperation.kind == "validate_submission",
+            m.NativeOperation.target_id == jobid,
+        ))
+        assert operation.status == "done"
+        assert operation.attempts == 1
+    engine.dispose()
