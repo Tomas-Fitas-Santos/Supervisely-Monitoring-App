@@ -1,6 +1,6 @@
 """Production account access is independent of event membership or native roles."""
-from types import SimpleNamespace
 import sys
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -11,9 +11,7 @@ from sqlalchemy.pool import StaticPool
 from annotatiathon import manage, organiser_access, organiser_setup_api
 from annotatiathon.app import app
 from annotatiathon.db import get_db
-from annotatiathon.models import (
-    AuditEvent, Base, Event, Person, StaffAccount, DEFAULT_EVENT_ID
-)
+from annotatiathon.models import DEFAULT_EVENT_ID, AuditEvent, Base, Event, Person, StaffAccount
 from annotatiathon.people_api import align_staff_access
 from annotatiathon.security import password_hash, password_matches
 
