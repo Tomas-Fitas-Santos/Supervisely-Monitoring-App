@@ -1,4 +1,6 @@
 """Official automatic queue carries video tails into the next source video."""
+from types import SimpleNamespace
+
 from sqlalchemy import select
 
 from test_dataset_workflows import act, teams
@@ -11,12 +13,14 @@ from annotatiathon.models import (
     MediaAsset,
     MediaDataset,
     MediaVideo,
+    NativeJobBinding,
+    NativeOperation,
     Person,
     StaffAccount,
     WorkBlock,
     WorkPacket,
 )
-from annotatiathon.native_worker import job_video_group
+from annotatiathon.native_worker import job_video_group, sync_one
 from annotatiathon.work_queue import claim_primary_block
 
 dataset_ctx = __import__("test_dataset_workflows").ctx
@@ -125,6 +129,42 @@ def test_automatic_30_frame_stream_crosses_video_boundary_and_keeps_final_tail(d
         assert media.status_code == 200, media.text
         assert [(item["morphology"], item["frame_index"]) for item in
                 media.json()["items"]] == actual[2]
+
+    # The legitimate six-frame final job must follow the same automatic
+    # incomplete-return protocol, using six rather than a hard-coded thirty.
+    final_id = jobs[-1]
+    with maker.begin() as db:
+        last = db.get(LabelingJob, final_id)
+        last.status = "in_progress"
+        last.native_dataset_id = 90
+        db.get(WorkPacket, final_id).submitted_at = None
+        db.add(NativeJobBinding(
+            event_id=DEFAULT_EVENT_ID, job_id=final_id, person_id=person_id,
+            native_job_id=12345,
+        ))
+    native = SimpleNamespace(
+        id=12345, dataset_id=90, status="on_review",
+        images_count=6, finished_images_count=5,
+    )
+    api = SimpleNamespace(labeling_job=SimpleNamespace(
+        get_info_by_id=lambda _native_id: native,
+    ))
+    with maker() as db:
+        assert sync_one(db, api, db.get(LabelingJob, final_id)) == "needs_correction"
+        assert db.get(LabelingJob, final_id).correction_round == 1
+        assert db.get(WorkPacket, final_id).submitted_at is None
+        restart = db.scalar(select(NativeOperation).where(
+            NativeOperation.kind == "restart_job",
+            NativeOperation.target_id == final_id,
+        ))
+        assert restart.status == "pending"
+    with maker.begin() as db:
+        db.get(LabelingJob, final_id).status = "in_progress"
+        db.get(NativeOperation, restart.id).status = "done"
+    native.finished_images_count = 6
+    with maker() as db:
+        assert sync_one(db, api, db.get(LabelingJob, final_id)) == "on_review"
+        assert db.get(WorkPacket, final_id).submitted_at is not None
 
 
 def test_exact_multiple_of_30_has_no_short_final_block(dataset_ctx):
