@@ -303,10 +303,15 @@ separate native labeling job and receives a different complete video when
 automatic scheduling is used. The same team and event are reused for manual
 jobs during the live event; no separate event is needed.
 
-In Monitoring & Review, every monitor can see all teams' dashboards and
-provisional rankings. Assigned reviewers can inspect the local source frame
-with Supervisely JSON boxes/keypoints overlaid, score the submitted points,
-and Accept or Return the job for correction. The native correction history
-remains tied to the job, and only accepted work releases an annotator's
-next automatic job. A team's assigned monitor can be changed by an organiser
-without moving the underlying native annotation data.
+For current 30-frame jobs, a native Supervisely submission triggers
+**per-frame structural completeness checks**: one bird rectangle plus one
+left-eye, right-eye, beak and crown point, each eye/head point either visible
+or occluded. Accepted frames immediately join the shared monitor review pool.
+Only incomplete images return to the original annotator, named with
+`(Incomplete #N)`, and all corrections remain attached to the same Nightjar
+job and source-frame IDs. No image bytes are downloaded for review.
+Monitoring & Review shows submitted-frame coverage and the provisional
+five-anatomical-point estimated prize leaderboard. The original team's
+WorkPacket is released only once every image is structurally complete;
+monitors subsequently judge position and accuracy independently. Historical
+pair jobs retain their older monitor-accept/return workflow.
