@@ -51,7 +51,8 @@ def test_two_monitors_claim_distinct_samples_and_balance_teams():
                 job = m.LabelingJob(event_id=event_id, team_id=team.id, plan_id=plan.id,
                                     dataset_id=dataset.id, sequence=sequence,
                                     assignee_person_id=person.id, media_ids=[asset.id],
-                                    frame_count=1, video_count=1, morphology_counts={"bird": 1})
+                                    frame_count=1, video_count=1, morphology_counts={"bird": 1},
+                                    status="on_review")
                 db.add(job)
                 db.flush()
                 db.add(m.ReviewSample(event_id=event_id, team_id=team.id, job_id=job.id,

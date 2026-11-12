@@ -28,6 +28,7 @@ def test_sample_claim_scoring_and_retry(dataset_ctx, tmp_path):
         )).all()
         job = next(j for j in jobs if len(j.media_ids) >= 2)
         job.release_mode = "shared_primary"
+        job.status = "on_review"
         job.assignee_person_id = db.scalar(select(Person.id).where(
             Person.team_id == job.team_id,
         ).limit(1))
