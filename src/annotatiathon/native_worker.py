@@ -862,12 +862,14 @@ def sync_all(db: Session, api, config: SuperviselyConfig, *,
         event = db.get(Event, plan.event_id)
         if event is None or event.status != "active":
             continue
-        # Do not load historical completed jobs just to poll live status.
-        # Completed jobs with missing snapshots are checked separately below.
+        # Poll only native jobs that a participant can actively submit.
+        # Already-submitted jobs are handled by durable validation tasks;
+        # needs_correction jobs are managed by correction operations.
+        # This avoids repeatedly polling on_review jobs in a 300-job burst.
         jobs = list(db.scalars(select(LabelingJob).where(
             LabelingJob.plan_id == plan.id,
             LabelingJob.event_id == plan.event_id,
-            LabelingJob.status.in_(["in_progress", "on_review", "needs_correction"]),
+            LabelingJob.status == "in_progress",
         )))
         ready_for_next = []
         for job in jobs:
