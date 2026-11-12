@@ -25,6 +25,7 @@ def summarize(records: list[dict]) -> tuple[dict, dict]:
     endpoints: dict[str, list[float]] = defaultdict(list)
     outcomes: dict[str, int] = defaultdict(int)
     stages: dict[str, dict[str, int]] = defaultdict(dict)
+    next_job_relations: dict[str, str] = {}
     for row in records:
         if row.get("kind") == "http":
             duration = row.get("duration_ms")
@@ -44,6 +45,8 @@ def summarize(records: list[dict]) -> tuple[dict, dict]:
             if (isinstance(job, str) and isinstance(stamp, int)
                     and isinstance(stage, str)):
                 stages[job][stage] = stamp
+                if stage == "next_job_queued" and isinstance(row.get("operation_id"), str):
+                    next_job_relations[job] = row["operation_id"]
 
     def stat(values: list[float]) -> dict:
         return {"count": len(values), "p50_ms": percentile(values, .5),
@@ -55,6 +58,12 @@ def summarize(records: list[dict]) -> tuple[dict, dict]:
     for job in stages.values():
         for key, first, last in [
             ("detected_to_validation", "submission_detected", "validation_started"),
+            ("detected_to_validation_queue", "submission_detected", "validation_queued"),
+            ("validation_queue_wait", "validation_queued", "validation_started"),
+            ("detected_to_validation_complete", "submission_detected", "validation_completed"),
+            ("correction_full_turnaround", "submission_detected", "correction_publish_confirmed"),
+            ("correction_queue_wait", "correction_queued", "correction_publish_started"),
+            ("correction_queued_to_confirmed", "correction_queued", "correction_publish_confirmed"),
             ("validation_duration", "validation_started", "validation_completed"),
             ("publish_queue_wait", "publish_queued", "publish_started"),
             ("detected_to_correction_queued", "submission_detected", "correction_queued"),
@@ -65,6 +74,22 @@ def summarize(records: list[dict]) -> tuple[dict, dict]:
             if first in job and last in job and job[last] >= job[first]:
                 spans[key].append(float(job[last] - job[first]))
 
+    # Link the original completed job to the NEW job UUID. This measures
+    # participant wait time after validation, not merely the publish RPC.
+    for original, next_job_id in next_job_relations.items():
+        previous = stages.get(original, {})
+        successor = stages.get(next_job_id, {})
+        confirmed = successor.get("publish_confirmed")
+        if confirmed is None:
+            continue
+        for metric, start_stage in (
+            ("complete_validation_to_new_job", "validation_completed"),
+            ("submission_detected_to_new_job", "submission_detected"),
+        ):
+            begin = previous.get(start_stage)
+            if begin is not None and confirmed >= begin:
+                spans[metric].append(float(confirmed - begin))
+
     profile = {group: stat(values) for group, values in sorted(groups.items())}
     report = {
         "http_requests": sum(outcomes.values()),
@@ -74,6 +99,11 @@ def summarize(records: list[dict]) -> tuple[dict, dict]:
                       for endpoint, values in sorted(endpoints.items())},
         "stage_lags": {key: stat(values) for key, values in sorted(spans.items())},
         "jobs_with_stages": len(stages),
+        "next_job_relations": len(next_job_relations),
+        "next_jobs_confirmed": sum(
+            stages.get(target, {}).get("publish_confirmed") is not None
+            for target in next_job_relations.values()
+        ),
     }
     return report, profile
 
