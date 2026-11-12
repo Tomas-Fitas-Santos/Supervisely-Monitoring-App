@@ -10,10 +10,9 @@ $root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 Push-Location $root
 try {
   if (-not (Test-Path ".env.live")) {
-    & (Join-Path $PSScriptRoot "init-live-test.ps1")
-  }
-  if (-not (Test-Path ".env.live")) {
-    throw "Missing .env.live. Do not deploy without preserved configuration."
+    throw ("Missing .env.live. For a NEW installation run scripts/init-live-test.ps1. " +
+           "For an existing installation RESTORE the original .env.live; " +
+           "never generate replacement database or encryption secrets.")
   }
 
   function Check-LastExit([string]$operation) {
