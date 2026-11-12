@@ -1,7 +1,7 @@
-"""Create and disband local two-monitor competition pairs, without role changes.
+"""Event-local competition team management, without remote role changes.
 
-Teams may be disbanded only before labeling jobs are planned. Native annotations,
-historical assignments and event audit records are never deleted.
+Removal archives the local team and releases its roster assignments. Native
+annotations, jobs and historical audit records are never deleted.
 """
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -19,6 +19,7 @@ from .models import (
     MonitorPairMember,
     NativeOperation,
     Person,
+    WorkBlock,
 )
 from .pair_members import pair_members
 
@@ -192,3 +193,83 @@ def disband_monitor_pair(
     db.commit()
     return {"id": team.id, "status": "disbanded", "already_disbanded": False,
             "native_mutations": False}
+
+
+@router.post("/{team_id}/remove")
+def remove_local_team(
+    team_id: str,
+    ctx: AuthContext = Depends(requires("organiser", mutation=True)),
+    db: Session = Depends(get_db),
+):
+    """Archive a locally maintained team without removing roster people.
+
+    The original team, monitor relationships and audit history remain available
+    for historical reporting. Never hide teams with native jobs or reserved
+    work blocks from the official rankings while those assignments exist.
+    """
+    event = current_event(db, ctx, writable=True)
+    team = db.scalar(select(CompetitionTeam).where(
+        CompetitionTeam.event_id == event.id,
+        CompetitionTeam.id == team_id,
+    ).with_for_update())
+    if team is None:
+        raise HTTPException(status_code=404, detail="Competition team not found.")
+    if not team.active:
+        return {"id": team.id, "status": "removed", "already_removed": True,
+                "people_unassigned": 0, "native_mutations": False}
+    if db.scalar(select(LabelingJob.id).where(
+        LabelingJob.event_id == event.id,
+        LabelingJob.team_id == team_id,
+    ).limit(1)):
+        raise HTTPException(
+            status_code=409,
+            detail="This team already has labeling jobs. Reassign or resolve its jobs "
+                   "before removing it; annotations and competition history cannot be discarded.",
+        )
+    if db.scalar(select(WorkBlock.id).where(
+        WorkBlock.event_id == event.id,
+        WorkBlock.repeat_team_id == team_id,
+    ).limit(1)):
+        raise HTTPException(
+            status_code=409,
+            detail="This team is reserved for work blocks. Clear its outstanding "
+                   "work allocation before removing the team.",
+        )
+    people = list(db.scalars(select(Person).where(
+        Person.event_id == event.id, Person.team_id == team_id,
+    ).with_for_update()))
+    for person in people:
+        person.team_id = None
+        # Attendance and table numbers are historical data; keep them.
+    links = list(db.scalars(select(MonitorPairMember).where(
+        MonitorPairMember.event_id == event.id,
+        MonitorPairMember.team_id == team_id,
+        MonitorPairMember.active.is_(True),
+    ).with_for_update()))
+    for link in links:
+        link.active = False
+    assignments = list(db.scalars(select(MonitorAssignment).where(
+        MonitorAssignment.event_id == event.id,
+        MonitorAssignment.team_id == team_id,
+        MonitorAssignment.active.is_(True),
+    ).with_for_update()))
+    for assignment in assignments:
+        assignment.active = False
+    team.active = False
+    db.add(AuditEvent(
+        staff_id=ctx.staff.id, event_id=event.id,
+        action="team.remove", target_type="competition_team", target_id=team.id,
+        details={
+            "name": team.name, "people_unassigned": len(people),
+            "monitor_pair_members_released": len(links),
+            "monitor_assignments_disabled": len(assignments),
+            "historical_records_preserved": True,
+            "native_mutations": False,
+        },
+    ))
+    db.commit()
+    return {
+        "id": team.id, "name": team.name, "status": "removed",
+        "already_removed": False, "people_unassigned": len(people),
+        "monitor_pair_members_released": len(links), "native_mutations": False,
+    }
