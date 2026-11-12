@@ -189,6 +189,8 @@ def simulate():
     uploaded_images = {}
     uploaded_hashes = set()
     submitted_times = {}
+    created_jobs = {}
+    next_native_job_id = 1_000_000
     metadata, _ = merge_annotation_meta({"projectType": "images", "classes": [], "tags": []})
 
     def info(api_class, **values):
@@ -236,6 +238,23 @@ def simulate():
                     finishedImagesCount=FRAMES if status == "on_review" else 0,
                     rejectedImagesCount=0, acceptedImagesCount=0, progressImagesCount=0,
                     classes_to_label=[], tags_to_label=[], images_range={"start": 1, "end": FRAMES},
+                    filter_images_by_tags=[], entities=[])
+
+    def created_job(data):
+        count = data["images_count"]
+        status = "on_review" if time.monotonic() >= data["due"] else "in_progress"
+        return info(LabelingJobApi, id=data["id"], name=data["name"],
+                    teamId=125980, workspaceId=2001, workspace_name="Synthetic workspace",
+                    projectId=41, project_name="Nightjar-event-dataset",
+                    datasetId=data["dataset_id"],
+                    dataset_name=f"Nightjar-job-{data['dataset_id'] - 2000}",
+                    assigned_to_id=data["user_id"],
+                    assigned_to_login=f"annotator{(data['user_id'] - 1000) % ANNOTATORS}",
+                    status=status, disabled=False, imagesCount=count,
+                    finishedImagesCount=count if status == "on_review" else 0,
+                    rejectedImagesCount=0, acceptedImagesCount=0, progressImagesCount=0,
+                    classes_to_label=[], tags_to_label=[],
+                    images_range={"start": 1, "end": count},
                     filter_images_by_tags=[], entities=[])
 
     def page(items, body):
@@ -318,7 +337,12 @@ def simulate():
                 results.append(result)
             return results
         if method == "jobs.info":
-            return job(body["id"] - 3000)
+            identifier = body["id"]
+            if identifier in created_jobs:
+                return created_job(created_jobs[identifier])
+            if 3000 <= identifier < 3000 + ANNOTATORS:
+                return job(identifier - 3000)
+            raise HTTPException(status_code=404, detail="Synthetic job not found")
         if method == "annotations.info":
             identifier = body["imageId"]
             return {"imageId": identifier, "imageName": "synthetic.jpg",
@@ -346,15 +370,34 @@ def simulate():
         if method == "jobs.list":
             index = next((item["value"] - 2000 for item in body.get("filter", [])
                           if item["field"] == "datasetId"), None)
-            items = [job(index)] if index is not None and index in submitted_times else []
+            items = [job(index)] if index is not None and index < ANNOTATORS
+                     and index in submitted_times else []
+            items.extend(created_job(record) for record in created_jobs.values()
+                         if index is None or record["dataset_id"] == 2000 + index)
             return page(items, body)
         if method == "users.info":
             return {"teams": [{"id": 125980, "name": "Synthetic team", "role": "annotator", "roleId": 5}]}
         if method == "jobs.add":
-            index = body["datasetId"] - 2000
-            submitted_times[index] = time.monotonic() + FRAMES * 60
-            state["published"] += 1
-            return [job(index)]
+            nonlocal next_native_job_id
+            users = body.get("userIds") or body.get("usersIds") or []
+            if not users:
+                index = body["datasetId"] - 2000
+                users = [1000 + index % ANNOTATORS]
+            selected = body.get("imagesIds") or body.get("images_ids") or []
+            count = len(selected) if selected else FRAMES
+            result = []
+            for uid in users:
+                next_native_job_id += 1
+                data = {
+                    "id": next_native_job_id, "name": body.get("name", body.get("title", "")),
+                    "user_id": uid, "dataset_id": body["datasetId"],
+                    "images_count": count,
+                    "due": time.monotonic() + FRAMES * SECONDS_PER_FRAME,
+                }
+                created_jobs[data["id"]] = data
+                result.append(created_job(data))
+                state["published"] += 1
+            return result
         state["unhandled"].append({"method": method, "body": body})
         raise HTTPException(status_code=400, detail=f"Unsupported simulator method {method}")
 
