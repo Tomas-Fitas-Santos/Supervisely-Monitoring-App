@@ -746,6 +746,7 @@ class ReviewSample(Base):
     team_id: Mapped[str] = mapped_column(ForeignKey("competition_teams.id"))
     media_id: Mapped[str] = mapped_column(ForeignKey("media_assets.id"))
     correction_round: Mapped[int] = mapped_column(Integer)
+    validated_complete: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     random_key: Mapped[str] = mapped_column(String(36), default=identifier)
     snapshot: Mapped[dict] = mapped_column(JSON)
     reviewer_id: Mapped[str | None] = mapped_column(ForeignKey("staff_accounts.id"))
