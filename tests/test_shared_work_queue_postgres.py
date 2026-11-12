@@ -117,7 +117,8 @@ def test_distinct_claims_and_duplicate_person_requests():
         # Incomplete frames cannot be claimed for quality review or release
         # another job. Simulate the durable restart worker succeeding before
         # submitting the corrected full 30-frame native job.
-        other.membership_status = "joined"
+        # The unrelated teammate stays unverified so only this annotator
+        # can claim the next block once their original packet is accepted.
         incomplete.status = "in_progress"
         incomplete.review_status = "unreviewed"
         restart.status = "done"
