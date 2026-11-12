@@ -325,23 +325,28 @@ def test_sparse_full_mode_frames_import_but_are_not_full_density(dataset_ctx):
     assert "frame density" in planned.json()["detail"]
 
 
-def test_unlinked_standalone_images_get_specific_shared_queue_error(dataset_ctx):
-    client, _maker, csrf = dataset_ctx
+def test_unlinked_frame_in_existing_video_gets_specific_shared_queue_error(dataset_ctx):
+    client, maker, csrf = dataset_ctx
     output = io.BytesIO()
     Image.new("RGB", (32, 24), "green").save(output, format="JPEG")
     data = output.getvalue()
     created = act(client, csrf, "/datasets/uploads", {
-        "name": "Individual images", "upload_kind": "folder",
+        "name": "Legacy identity", "upload_kind": "folder",
         "extraction_policy": "all_frames",
     })
     dataset_id = created.json()["id"]
-    image_path = "ColumbaPalumbus/standalone.jpg"
-    assert client.put(
-        f"/api/v1/datasets/uploads/{dataset_id}/chunk",
-        params={"relative_path": image_path, "offset": 0, "total": len(data)},
-        content=data, headers={"X-CSRF-Token": csrf},
-    ).status_code == 200
+    for number in (1, 2):
+        image_path = f"ColumbaPalumbus/clip/frame_{number:06d}.jpg"
+        assert client.put(
+            f"/api/v1/datasets/uploads/{dataset_id}/chunk",
+            params={"relative_path": image_path, "offset": 0, "total": len(data)},
+            content=data, headers={"X-CSRF-Token": csrf},
+        ).status_code == 200
     assert act(client, csrf, f"/datasets/{dataset_id}/finalize").status_code == 200
+    # Emulate a legacy identity gap in an already-finalised source video.
+    with maker.begin() as db:
+        first = db.scalar(select(MediaAsset).where(MediaAsset.dataset_id == dataset_id))
+        first.video_id = None
     teams(client, csrf)
     planned = act(client, csrf, "/labeling/plans", {
         "dataset_id": dataset_id, "mode": "shared_30_v1",
