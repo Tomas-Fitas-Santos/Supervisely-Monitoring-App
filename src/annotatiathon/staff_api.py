@@ -17,8 +17,8 @@ from .models import (
     StaffAccount,
     epoch,
 )
-from .registration_api import monitor_can_register
 from .organiser_access import is_restricted_mode
+from .registration_api import monitor_can_register
 
 router = APIRouter(prefix="/api/v1/staff", tags=["staff"])
 
