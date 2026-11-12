@@ -836,26 +836,25 @@ def sync_all(db: Session, api, config: SuperviselyConfig) -> dict:
                     ready_for_next.append((job.team_id, job.assignee_person_id))
         if plan.status == "running" and plan.queue_seed:
             from .pair_members import pair_members
-            from .work_queue import claim_primary_block, reserve_repeats
+            from .work_queue import claim_primary_block
 
             teams = list(db.scalars(select(CompetitionTeam.id).where(
                 CompetitionTeam.event_id == plan.event_id, CompetitionTeam.active.is_(True),
             ).order_by(CompetitionTeam.id)))
-            eligible_teams = []
             for team_id in teams:
                 people, _ = pair_members(db, plan.event_id, team_id)
                 eligible = [person for person in people if native_identity_assignable(person)]
-                if eligible:
-                    eligible_teams.append(team_id)
                 ready_for_next.extend((team_id, person.id) for person in eligible)
-            reserve_repeats(db, plan, eligible_teams)
             db.commit()
             for team_id, person_id in dict.fromkeys(ready_for_next):
                 if person_id is None:
                     continue
                 try:
+                    # Official event: unique source-frame coverage only.
+                    # The optional repeat API remains available for explicit
+                    # future use, but worker never silently schedules duplicates.
                     claimed = claim_primary_block(
-                        db, plan.id, team_id, person_id, include_repeats=True,
+                        db, plan.id, team_id, person_id, include_repeats=False,
                     ) is not None
                     db.commit()
                     queued += int(claimed)
