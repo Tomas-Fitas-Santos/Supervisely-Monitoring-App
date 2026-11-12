@@ -35,13 +35,36 @@ try {
   Write-Host ""
   Write-Host "Live dataset/source health (read-only):"
   $audit = @'
-from sqlalchemy import func, select
+import os
 
-from annotatiathon.db import session_factory
+from sqlalchemy import create_engine, func, select, text
+from sqlalchemy.engine import URL
+from sqlalchemy.orm import Session
+
 from annotatiathon.models import MediaAsset, MediaDataset, MediaVideo
 from annotatiathon.native_media_pool import mirror_status
 
-with session_factory()() as db:
+# The live Compose stack provides POSTGRES_* via .env.live, but some
+# installations do not define DATABASE_URL in the API container. Build a
+# private connection from the same settings as the database service.
+# URL.create safely escapes special characters in passwords.
+database_url = os.environ.get("DATABASE_URL")
+if not database_url:
+    values = {key: os.environ.get(key) for key in (
+        "POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB"
+    )}
+    if not all(values.values()):
+        raise SystemExit("Database audit configuration missing. Expected DATABASE_URL "
+                         "or POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB.")
+    database_url = URL.create(
+        "postgresql+psycopg", username=values["POSTGRES_USER"],
+        password=values["POSTGRES_PASSWORD"], host="db",
+        database=values["POSTGRES_DB"],
+    )
+audit_engine = create_engine(database_url, pool_pre_ping=True)
+with Session(audit_engine) as db:
+    # The audit must never modify event data, even if extended later.
+    db.execute(text("SET TRANSACTION READ ONLY"))
     datasets = db.scalars(select(MediaDataset).order_by(MediaDataset.created_at)).all()
     for ds in datasets:
         if ds.status != "ready":
