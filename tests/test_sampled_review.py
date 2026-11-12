@@ -160,11 +160,11 @@ def test_current_round_supersedes_old_review_only_after_new_review(dataset_ctx, 
     with maker() as db:
         from annotatiathon.scoring_api import rankings
         from annotatiathon.auth import AuthContext
-        from annotatiathon.models import Event, StaffAccount, StaffSession
+        from annotatiathon.models import StaffAccount, StaffSession, DEFAULT_EVENT_ID
         staff = db.scalar(select(StaffAccount).where(
-            StaffAccount.email == "boss@example.org",
+            StaffAccount.email == "owner@example.org",
         ))
-        ctx = AuthContext(staff, StaffSession(event_id=db.scalar(select(Event.id))))
+        ctx = AuthContext(staff, StaffSession(event_id=DEFAULT_EVENT_ID))
         previous = rankings(ctx, db)["items"]
         leader = next(row for row in previous if row["correct_objects"])
         assert leader["correct_objects"] == 4
