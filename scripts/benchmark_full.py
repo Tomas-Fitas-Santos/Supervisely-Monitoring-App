@@ -29,7 +29,11 @@ DATA = Path("/data")
 RESULTS = DATA / "results"
 PASSWORD = "SyntheticBenchmarkPassword!"
 FRAMES = int(os.environ.get("BENCHMARK_FRAMES", "30"))
+ANNOTATORS = int(os.environ.get("BENCHMARK_ANNOTATORS", "300"))
+MONITORS = int(os.environ.get("BENCHMARK_MONITORS", "12"))
+SECONDS_PER_FRAME = int(os.environ.get("BENCHMARK_SECONDS_PER_FRAME", "90"))
 UPLOAD = os.environ.get("BENCHMARK_UPLOAD") == "1"
+PROFILE_PATH = os.environ.get("BENCHMARK_PROFILE_PATH", "").strip()
 
 
 def certificates():
@@ -79,7 +83,7 @@ def seed(frames):
     # Reuse the previous fixture builder against PostgreSQL. Production Alembic
     # migrations have already created this fresh, isolated database.
     benchmark_event.database = lambda directory: (engine, maker)
-    benchmark_event.seed(root)
+    benchmark_event.seed(root, annotators=ANNOTATORS, monitors=MONITORS)
     password = password_hash(PASSWORD)
     with maker.begin() as db:
         for staff in db.scalars(select(m.StaffAccount)):
@@ -104,7 +108,7 @@ def seed(frames):
             asset.sha256 = hashlib.sha256(source.read_bytes()).hexdigest()
             asset.size_bytes = source.stat().st_size
         db.execute(delete(m.NativeMediaInstance))
-        for index in range(260):
+        for index in range(ANNOTATORS):
             job = db.get(m.LabelingJob, f"job-{index}")
             job.media_ids = [f"asset-{frame}" for frame in range(frames)]
             job.frame_count = frames
@@ -114,8 +118,8 @@ def seed(frames):
                                              native_image_id=100000 + index * frames + frame)
                         for frame in range(frames)])
         db.get(m.LabelingPlan, "plan").jobs_per_team = 4
-        for index in range(260, 520):
-            person_index = index - 260
+        for index in range(ANNOTATORS, ANNOTATORS * 2):
+            person_index = index - ANNOTATORS
             db.add(m.LabelingJob(
                 id=f"job-{index}", event_id="event", plan_id="plan", dataset_id="dataset",
                 team_id=f"team-{person_index // 2}", assignee_person_id=f"person-{person_index}",
@@ -130,7 +134,8 @@ def seed(frames):
         os.chown(directory, 10001, 10001)
         for name in files:
             os.chown(Path(directory) / name, 10001, 10001)
-    print(json.dumps({"seeded": True, "active_jobs": 260, "queued_jobs": 260}), flush=True)
+    print(json.dumps({"seeded": True, "annotators": ANNOTATORS, "monitors": MONITORS,
+                      "active_jobs": ANNOTATORS, "queued_jobs": ANNOTATORS}), flush=True)
 
 
 def annotation(identifier):
@@ -168,7 +173,7 @@ def simulate():
     state = {"started": None, "latency": .05, "fail_rate": 0.0,
              "calls": Counter(), "failures": 0, "unhandled": [], "published": 0,
              "binary_upload_bytes": 0, "binary_upload_files": 0}
-    remote_datasets = set(range(260 if UPLOAD else 520))
+    remote_datasets = set(range(ANNOTATORS if UPLOAD else ANNOTATORS * 2))
     uploaded_images = {}
     uploaded_hashes = set()
     submitted_times = {}
@@ -196,7 +201,7 @@ def simulate():
                     projectId=41, itemsCount=FRAMES, imagesCount=FRAMES, size=0, customData={})
 
     def images(index):
-        if UPLOAD and index >= 260:
+        if UPLOAD and index >= ANNOTATORS:
             return uploaded_images.get(index, [])
         return [info(ImageApi, id=100000 + index * FRAMES + frame, name=f"asset-{frame}.jpg",
                      datasetId=2000 + index, width=1600, height=1200, size=2250000,
@@ -213,7 +218,8 @@ def simulate():
                     teamId=125980, workspaceId=2001, workspace_name="Synthetic workspace",
                     projectId=41, project_name="Nightjar-event-dataset",
                     datasetId=2000 + index, dataset_name=f"Nightjar-job-{index}",
-                    assigned_to_id=1000 + index % 260, assigned_to_login=f"annotator{index % 260}",
+                    assigned_to_id=1000 + index % ANNOTATORS,
+                    assigned_to_login=f"annotator{index % ANNOTATORS}",
                     status=status, disabled=False, imagesCount=FRAMES,
                     finishedImagesCount=FRAMES if status == "on_review" else 0,
                     rejectedImagesCount=0, acceptedImagesCount=0, progressImagesCount=0,
@@ -233,8 +239,8 @@ def simulate():
         state["fail_rate"] = body.get("fail_rate", 0)
         state["started"] = time.monotonic()
         state["burst"] = body.get("burst", False)
-        for index in range(260):
-            offset = 0 if state["burst"] else index * FRAMES * 60 / 260
+        for index in range(ANNOTATORS):
+            offset = 0 if state["burst"] else index * FRAMES * SECONDS_PER_FRAME / ANNOTATORS
             submitted_times[index] = state["started"] + offset
         return {"started": True}
 
@@ -397,15 +403,15 @@ def historical_fixture():
     maker = session_factory()
     with maker.begin() as db:
         existing = db.scalar(select(func.count()).select_from(m.LabelingJob))
-        count = max(0, 260 * 12 * 60 // FRAMES - existing)
+        count = max(0, ANNOTATORS * 12 * 3600 // (FRAMES * SECONDS_PER_FRAME) - existing)
         db.add(m.LabelingPlan(id="history", event_id="event", dataset_id="dataset",
-                              jobs_per_team=260 * 12 * 60 // FRAMES // 130,
+                              jobs_per_team=max(1, count // (ANNOTATORS // 2)),
                               redundancy=1, status="completed", created_by="organiser"))
     for start in range(0, count, 500):
         with maker.begin() as db:
             jobs = [{"id": f"history-{index}", "event_id": "event", "plan_id": "history",
-                     "dataset_id": "dataset", "team_id": f"team-{index % 130}",
-                     "assignee_person_id": f"person-{(index % 130) * 2 + (index // 130) % 2}",
+                     "dataset_id": "dataset", "team_id": f"team-{index % (ANNOTATORS // 2)}",
+                     "assignee_person_id": f"person-{(index % (ANNOTATORS // 2)) * 2 + (index // (ANNOTATORS // 2)) % 2}",
                      "sequence": index // 130 + 1,
                      "media_ids": [f"asset-{frame}" for frame in range(FRAMES)], "frame_count": FRAMES,
                      "video_count": 1, "morphology_counts": {"bird": FRAMES}, "status": "completed",
