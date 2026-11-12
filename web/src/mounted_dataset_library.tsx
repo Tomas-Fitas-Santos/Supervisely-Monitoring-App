@@ -14,7 +14,8 @@ type Mirror = {
   ready_for_automatic_jobs:boolean;error_code:string|null;attempts:number;
   pending_seconds:number|null;started_seconds_ago:number|null;
 };
-type Index = {state:string;error_code:string|null;attempts:number};
+type Index = {state:string;error_code:string|null;attempts:number;
+  pending_seconds:number|null;started_seconds_ago:number|null};
 type Sources = {mounted:boolean;folders:string[]};
 const readableBytes=(n:number)=>n>=1e9?(n/1e9).toFixed(2)+" GB":n>=1e6?
   (n/1e6).toFixed(1)+" MB":(n/1000).toFixed(1)+" KB";
@@ -77,7 +78,7 @@ export function MountedDatasetLibrary({auth}:{auth:Auth}){
       },auth.csrf_token);
       setSelected(created.id);
       setName("");
-      setNotice("Folder linked. The worker will index frames and upload directly to Supervisely.");
+      setNotice("Folder linked. Nightjar's local indexer will prepare frames. The Supervisely upload then needs the separate native worker.");
       await refresh();
     }catch(e){setError((e as Error).message);}
     finally{setBusy(false);}
@@ -133,7 +134,9 @@ export function MountedDatasetLibrary({auth}:{auth:Auth}){
     <div className="content-grid datasets-layout">
       <section className="panel">
         <span className="eyebrow">SOURCE DIRECTORY</span><h3>Link folder & upload directly</h3>
-        <p className="muted small">Only metadata is stored in Nightjar. Supplied frame files remain in the selected folder, mounted read-only. The worker uses the Supervisely SDK for direct uploads.</p>
+        <p className="muted small">Source files remain in the selected read-only folder.
+          Nightjar indexes automatically; raw videos are decoded into local working frames.
+          The separate Supervisely worker performs the remote SDK upload after indexing.</p>
         {sources.folders.length===0&&<div className="alert warning" role="status">
           <strong>No dataset folders visible to Nightjar.</strong>
           <p>To link a local Windows folder without uploading the files through your browser,
@@ -190,9 +193,20 @@ export function MountedDatasetLibrary({auth}:{auth:Auth}){
           <p className="muted small">{dataset.source_folder?"Source folder: "+dataset.source_folder+" · ":""}
             {dataset.video_count} videos · {dataset.frame_count} video frames · {dataset.image_count} images</p>
           {dataset.status==="indexing"&&<div className="settings-note">
-            <strong>Indexing the mounted source folder…</strong>
-            <p className="muted small">Worker state: {index?.state||"checking"}. Reading file metadata and preparing frame identities.
-              The browser can be closed.</p>
+            <strong>{index?.state==="pending"?"Waiting for local dataset indexer…":
+              index?.state==="running"?"Indexing the mounted source folder…":
+              "Checking the local indexing queue…"}</strong>
+            <p className="muted small">Local index state: {index?.state||"checking"}.
+              {index?.state==="running"?
+                " Files are being read and frames prepared. Counts appear when indexing finishes.":
+                " No remote Supervisely upload starts until indexing finishes."}
+              {" "}The browser can be closed.</p>
+            {index?.state==="pending"&&index.pending_seconds!=null&&index.pending_seconds>30&&
+              <p className="muted small">The local indexer may be stopped.
+                On the Docker host run <code>docker compose --env-file .env.live -f compose.live.yaml up -d indexer</code>
+                and check <code>docker compose --env-file .env.live -f compose.live.yaml logs --tail=80 indexer</code>.</p>}
+            {index?.state==="running"&&index.started_seconds_ago!=null&&
+              <p className="muted small">Indexing started {Math.floor(index.started_seconds_ago/60)} minutes ago.</p>}
           </div>}
           {dataset.status==="failed"&&<div className="alert danger">
             Source indexing failed. Check worker logs before retrying. Error: {index?.error_code||dataset.error_code||"unknown"}
@@ -214,7 +228,10 @@ export function MountedDatasetLibrary({auth}:{auth:Auth}){
             <progress value={mirror?.uploaded_frames||0} max={mirror?.total_frames||dataset.frame_count||1}/>
             {mirror?.error_code&&<div className="alert danger">{mirror.error_code}</div>}
             {mirror?.state==="pending"&&mirror.pending_seconds!=null&&mirror.pending_seconds>90&&
-              <p className="muted small">The worker may be stopped or busy. Check Docker logs.</p>}
+              <p className="muted small">Local indexing is complete, but Supervisely upload is queued.
+                Verify the Team/Workspace connection in Settings, then start the native worker:
+                <code> docker compose --env-file .env.live -f compose.live.yaml --profile native up -d --build worker</code>.
+                Inspect <code>docker compose --env-file .env.live -f compose.live.yaml --profile native logs --tail=80 worker</code>.</p>}
             {mirror?.state==="attention"&&<button className="btn secondary" disabled={busy}
               onClick={()=>void retryMirror()}><RotateCcw size={15}/> Retry upload</button>}
           </div>}
