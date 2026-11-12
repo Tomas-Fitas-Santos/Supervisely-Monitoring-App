@@ -64,7 +64,12 @@ try {
       Write-Host "Starting isolated benchmark: $count worker(s), $Scenario, $Seconds seconds"
       & docker @compose up -d --build --scale "worker=$count" web worker
       if ($LASTEXITCODE -ne 0) { throw "Benchmark environment failed to start." }
-      & docker @compose run -d --name $loadName load python /bench/benchmark_full.py load --seconds $Seconds --latency $FallbackLatency --fail-rate $FailureRate --profile-scale $ProfileScale --timeout-rate $TimeoutRate
+      $invariant = [System.Globalization.CultureInfo]::InvariantCulture
+      $latencyArg = $FallbackLatency.ToString($invariant)
+      $failureArg = $FailureRate.ToString($invariant)
+      $scaleArg = $ProfileScale.ToString($invariant)
+      $timeoutArg = $TimeoutRate.ToString($invariant)
+      & docker @compose run -d --name $loadName load python /bench/benchmark_full.py load --seconds $Seconds --latency $latencyArg --fail-rate $failureArg --profile-scale $scaleArg --timeout-rate $timeoutArg
       if ($LASTEXITCODE -ne 0) { throw "Benchmark load process failed to start." }
 
       $resourceFile = Join-Path $out "resources.jsonl"
@@ -97,7 +102,7 @@ try {
       & python scripts/analyze_full_benchmark.py $out
       if ($LASTEXITCODE -ne 0) { throw "Benchmark result analysis failed." }
       $report = Get-Content (Join-Path $out "summary.json") -Raw | ConvertFrom-Json
-      $errors = @($report.http_errors).Count
+      $errors = if ($null -eq $report.http_errors) { 0 } else { @($report.http_errors).Count }
       $published = [int]$report.workload.simulator.published
       $results += [PSCustomObject]@{
         Workers = $count
