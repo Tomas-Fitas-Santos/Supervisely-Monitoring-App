@@ -11,10 +11,52 @@ param(
   [ValidateRange(0, 0.25)][double]$FailureRate = 0.0,
   [ValidateRange(0, 5.0)][double]$FallbackLatency = 0.05,
   [ValidateRange(100, 20000)][int]$AssumedPublishMs = 1000,
-  [string]$Profile = "scripts/benchmark_profiles/measured.json"
+  [string]$Profile = "scripts/benchmark_profiles/measured.json",
+  [switch]$Rebuild
 )
 
 $ErrorActionPreference = "Stop"
+
+function Get-BenchmarkBuildSignature {
+  param([string]$RepoRoot)
+
+  # Only files copied into the API/native/web Docker images affect the cache.
+  # Benchmark scripts are bind-mounted into /bench and need no image rebuild.
+  $inputs = @(
+    ".dockerignore", "compose.benchmark.yaml", "pyproject.toml", "alembic.ini",
+    "deploy/Dockerfile.api", "deploy/Dockerfile.web",
+    "deploy/docker-entrypoint.sh", "deploy/nginx-live.conf"
+  )
+  foreach ($directory in @("src", "migrations", "web")) {
+    $folder = Join-Path $RepoRoot $directory
+    if (-not (Test-Path -LiteralPath $folder -PathType Container)) {
+      throw "Missing Docker build input directory: $directory"
+    }
+    $inputs += @(Get-ChildItem -LiteralPath $folder -File -Recurse | ForEach-Object {
+      $_.FullName.Substring($RepoRoot.Length + 1).Replace("\", "/")
+    } | Where-Object {
+      $_ -notmatch '(^|/)(node_modules|dist|build|__pycache__|\.pytest_cache|\.ruff_cache|\.next)(/|$)' -and
+      $_ -notmatch '\.(pyc|pyo)$'
+    })
+  }
+
+  $manifest = [System.Text.StringBuilder]::new()
+  foreach ($relative in @($inputs | Sort-Object -Unique)) {
+    $file = Join-Path $RepoRoot $relative
+    if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
+      throw "Missing Docker build input: $relative"
+    }
+    $hash = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash
+    [void]$manifest.AppendLine("$relative $hash")
+  }
+  $hasher = [System.Security.Cryptography.SHA256]::Create()
+  try {
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($manifest.ToString())
+    return [BitConverter]::ToString($hasher.ComputeHash($bytes)).Replace("-", "").ToLowerInvariant()
+  }
+  finally { $hasher.Dispose() }
+}
+
 $root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 Push-Location $root
 $original = @{}
@@ -46,6 +88,43 @@ try {
     $env:BENCHMARK_PROFILE_PATH = ""
     Write-Host "No measured profile found. Using fallback synthetic latency (not live-calibrated)."
   }
+  # Shared benchmark images survive test teardown. Rebuild once if the
+  # Docker build inputs changed, a required image is missing, or -Rebuild is set.
+  # Never build inside the publisher/validator comparison loop.
+  $cacheDir = Join-Path $root ".benchmark-data"
+  New-Item -ItemType Directory -Force -Path $cacheDir | Out-Null
+  $buildStamp = Join-Path $cacheDir "worker-sweep-build.sha256"
+  $fingerprint = Get-BenchmarkBuildSignature -RepoRoot $root
+  $cachedFingerprint = if (Test-Path -LiteralPath $buildStamp) {
+    (Get-Content -LiteralPath $buildStamp -Raw).Trim()
+  } else { "" }
+  $missingImages = @()
+  foreach ($image in @("nightjar-benchmark-api:latest",
+                        "nightjar-benchmark-runtime:latest",
+                        "nightjar-benchmark-web:latest")) {
+    & docker image inspect --format '{{.Id}}' $image 2>$null | Out-Null
+    if ($LASTEXITCODE -ne 0) { $missingImages += $image }
+  }
+  if ($Rebuild -or $fingerprint -ne $cachedFingerprint -or $missingImages.Count -gt 0) {
+    if ($Rebuild) {
+      Write-Host "Rebuilding benchmark images because -Rebuild was requested."
+    }
+    elseif ($missingImages.Count -gt 0) {
+      Write-Host "Building missing benchmark images: $($missingImages -join ', ')"
+    }
+    else {
+      Write-Host "Benchmark Docker build inputs changed; building images once."
+    }
+    & docker compose -p nightjar-bench-build -f compose.benchmark.yaml build api worker web
+    if ($LASTEXITCODE -ne 0) { throw "Benchmark image build failed; cached signature not updated." }
+    [System.IO.File]::WriteAllText(
+      $buildStamp, $fingerprint + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
+    Write-Host "Benchmark images are ready and will be reused across tests."
+  }
+  else {
+    Write-Host "Reusing unchanged benchmark images (no Docker build)."
+  }
+
   $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
   $rootOut = Join-Path $root (".benchmark-data\sweep-300-$stamp")
   New-Item -ItemType Directory -Force -Path $rootOut | Out-Null
@@ -64,7 +143,7 @@ try {
     $loadName = "$project-load"
     try {
       Write-Host "Starting isolated benchmark: $count publisher(s), $Validators validator(s), $Scenario, $Seconds seconds"
-      & docker @compose up -d --build --scale "worker=$count" --scale "validation-worker=$Validators" web worker status-worker validation-worker correction-worker recovery-worker bulk-worker
+      & docker @compose up -d --no-build --scale "worker=$count" --scale "validation-worker=$Validators" web worker status-worker validation-worker correction-worker recovery-worker bulk-worker
       if ($LASTEXITCODE -ne 0) { throw "Benchmark environment failed to start." }
       $invariant = [System.Globalization.CultureInfo]::InvariantCulture
       $latencyArg = $FallbackLatency.ToString($invariant)
