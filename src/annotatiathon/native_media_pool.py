@@ -6,6 +6,8 @@ Manual jobs use separate per-assignment copies in one manual dataset.
 """
 from pathlib import Path
 
+from fastapi import HTTPException
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
