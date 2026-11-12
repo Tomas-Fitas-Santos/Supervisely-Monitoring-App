@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { PointerEvent as ReactPointerEvent } from "react";
 import { Eye, EyeOff } from "lucide-react";
 import { api } from "./api";
 
@@ -50,13 +51,20 @@ function parseVisuals(annotation:Record<string,unknown>|null,
   }
   return shapes;
 }
-export function AnnotationFrame({src,alt,annotation,selectedIndex,onSelectObject}:{
+export function AnnotationFrame({src,alt,annotation,selectedIndex,onSelectObject,zoom}:{
   src:string;alt:string;annotation:Record<string,unknown>|null;
   selectedIndex?:number|null;onSelectObject?:(index:number)=>void;
+  zoom?:number;
 }){
   const [visible,setVisible]=useState(true);
   const [imageSize,setImageSize]=useState<{width:number;height:number}|null>(null);
   const [palette,setPalette]=useState<Record<string,string>>(DEFAULT_COLORS);
+  const [pan,setPan]=useState<Point>({x:0,y:0});
+  const [dragging,setDragging]=useState(false);
+  const stageRef=useRef<HTMLDivElement|null>(null);
+  const dragRef=useRef<{
+    pointerId:number;clientX:number;clientY:number;origin:Point;
+  }|null>(null);
   useEffect(()=>{
     let active=true;
     void api<AnnotationPalette>("/labeling/annotation-classes")
@@ -72,6 +80,70 @@ export function AnnotationFrame({src,alt,annotation,selectedIndex,onSelectObject
   const height=typeof metaHeight==="number"&&metaHeight>0?metaHeight:imageSize?.height||0;
   const objects=useMemo(()=>parseVisuals(annotation,palette),[annotation,palette]);
   const pointRadius=Math.max(3,Math.min(width,height)*0.008);
+  const magnification=zoom??1;
+
+  // Fit the original image inside the fixed-size viewport. Pan limits are
+  // calculated from its actual contained size, not the scrollable page size.
+  function clampPan(position:Point,scale:number):Point{
+    const stage=stageRef.current;
+    const frameWidth=stage?.clientWidth??0,frameHeight=stage?.clientHeight??0;
+    const sourceWidth=imageSize?.width??width,sourceHeight=imageSize?.height??height;
+    if(scale<=1||!frameWidth||!frameHeight||!sourceWidth||!sourceHeight){
+      return {x:0,y:0};
+    }
+    const ratio=sourceWidth/sourceHeight;
+    const fittedWidth=Math.min(frameWidth,frameHeight*ratio);
+    const fittedHeight=Math.min(frameHeight,frameWidth/ratio);
+    const limitX=Math.max(0,(fittedWidth*scale-frameWidth)/2);
+    const limitY=Math.max(0,(fittedHeight*scale-frameHeight)/2);
+    return {
+      x:Math.min(limitX,Math.max(-limitX,position.x)),
+      y:Math.min(limitY,Math.max(-limitY,position.y)),
+    };
+  }
+
+  useEffect(()=>{
+    setPan(value=>clampPan(value,magnification));
+  },[magnification,imageSize,width,height]);
+
+  useEffect(()=>{
+    const stage=stageRef.current;
+    if(!stage||zoom===undefined)return;
+    const observer=new ResizeObserver(()=>{
+      setPan(value=>clampPan(value,magnification));
+    });
+    observer.observe(stage);
+    return ()=>observer.disconnect();
+  },[magnification,imageSize,width,height,zoom]);
+
+  function startPan(event:ReactPointerEvent<HTMLDivElement>){
+    if(magnification<=1||event.button!==0||
+       (event.target as Element).closest(".annotation-shape"))return;
+    dragRef.current={
+      pointerId:event.pointerId,clientX:event.clientX,clientY:event.clientY,
+      origin:pan,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setDragging(true);
+    event.preventDefault();
+  }
+  function movePan(event:ReactPointerEvent<HTMLDivElement>){
+    const active=dragRef.current;
+    if(!active||active.pointerId!==event.pointerId)return;
+    setPan(clampPan({
+      x:active.origin.x+event.clientX-active.clientX,
+      y:active.origin.y+event.clientY-active.clientY,
+    },magnification));
+  }
+  function stopPan(event:ReactPointerEvent<HTMLDivElement>){
+    if(dragRef.current?.pointerId!==event.pointerId)return;
+    dragRef.current=null;
+    setDragging(false);
+    if(event.currentTarget.hasPointerCapture(event.pointerId)){
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  }
+
   return <div className="review-annotation-visual">
     <div className="annotation-view-toolbar">
       <span>{annotation?objects.length+" objects in Supervisely annotation":"Original source frame"}</span>
@@ -80,7 +152,16 @@ export function AnnotationFrame({src,alt,annotation,selectedIndex,onSelectObject
         {visible?"Hide overlay":"Show overlay"}
       </button>
     </div>
-    <div className="annotation-image-stage">
+    <div ref={stageRef}
+      className={"annotation-image-stage"+(zoom===undefined?"":" is-zoomable")+
+        (magnification>1?" is-magnified":"")+(dragging?" is-panning":"")}
+      onPointerDown={startPan} onPointerMove={movePan}
+      onPointerUp={stopPan} onPointerCancel={stopPan}
+      onLostPointerCapture={()=>{dragRef.current=null;setDragging(false);}}>
+      <div className="annotation-image-layer"
+        style={zoom===undefined?undefined:{
+          transform:`translate(${pan.x}px, ${pan.y}px) scale(${magnification})`,
+        }}>
       <img src={src} alt={alt} className="review-preview"
         onLoad={event=>setImageSize({
           width:event.currentTarget.naturalWidth,
@@ -135,6 +216,7 @@ export function AnnotationFrame({src,alt,annotation,selectedIndex,onSelectObject
             </text>
           </g>)}
         </svg>}
+      </div>
     </div>
     <div className="annotation-legend">
       {Object.entries(DEFAULT_COLORS).map(([name,color])=>
