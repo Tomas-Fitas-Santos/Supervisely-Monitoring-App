@@ -746,11 +746,14 @@ def load(seconds, latency, fail_rate, profile_scale=1.0, timeout_rate=0.0,
             jobs = [j for j in jobs if int(j.id.split("-")[-1]) < ANNOTATORS]
             if len(jobs) != ANNOTATORS:
                 raise RuntimeError(f"Expected 300 initial jobs, got {len(jobs)}")
+            job_ids = [job.id for job in jobs]
             for job in jobs:
                 queue_publish(db, job)
-        for job in jobs:
-            milestone("publish_queued", job_id=job.id)
-        phases["initial_enqueue_count"] = len(jobs)
+        # Keep only primitive IDs across session commit: ORM objects have
+        # been expired/detached by SQLAlchemy.
+        for job_id in job_ids:
+            milestone("publish_queued", job_id=job_id)
+        phases["initial_enqueue_count"] = len(job_ids)
 
     def monitor(index):
         completed = set()
