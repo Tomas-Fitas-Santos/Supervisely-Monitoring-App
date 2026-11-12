@@ -1,4 +1,5 @@
 """Protect the original frame-upload route and its full-frame defaults."""
+
 from pathlib import Path
 
 
