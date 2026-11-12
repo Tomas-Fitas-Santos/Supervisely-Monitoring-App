@@ -82,6 +82,13 @@ def closeout_readiness(db: Session, event_id: str, fairness: dict) -> dict:
         ).group_by(ReviewSample.job_id)
     ).all())
     blocking = []
+    official_frame_jobs = any(
+        job.assignee_person_id is not None
+        and job.release_mode in {
+            "shared_primary", "shared_repeat", "manual_released", "manual_hold",
+        }
+        for job in jobs
+    )
     for job in jobs:
         if job.assignee_person_id is not None and job.release_mode in {
             "shared_primary", "shared_repeat", "manual_released", "manual_hold",
@@ -96,15 +103,18 @@ def closeout_readiness(db: Session, event_id: str, fairness: dict) -> dict:
         elif job.status != "completed" or job.review_status != "accepted":
             blocking.append(job.id)
     return {
-        "ready": not blocking and (not jobs or fairness["ready_for_winner"]),
+        "ready": not blocking and (
+            not official_frame_jobs or fairness["ready_for_winner"]
+        ),
         "blocking_jobs": len(blocking),
         "equal_review_coverage": fairness["ready_for_winner"],
+        "official_frame_review_required": official_frame_jobs,
         "message": (
             f"{len(blocking)} jobs have incomplete submissions or unsynced frames."
             if blocking else
-            "Reviewed-frame counts differ between active teams or are still zero."
-            if jobs and not fairness["ready_for_winner"] else
-            "All required submissions are captured and team review coverage is equal."
+            "Cannot finalize: teams do not have the same positive number of reviewed frames."
+            if official_frame_jobs and not fairness["ready_for_winner"] else
+            "All required submissions are captured; the applicable review policy is satisfied."
         ),
     }
 
