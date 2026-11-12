@@ -274,6 +274,7 @@ def process_validation_once(db: Session, api, config) -> dict | None:
         return {"operation_id": task_id, "status": "retry_or_attention"}
     milestone("validation_completed", job_id=job_id, operation_id=task_id)
     if next_assignment_id is not None:
+        milestone("next_job_queued", job_id=job_id, operation_id=next_assignment_id)
         milestone("publish_queued", job_id=next_assignment_id)
         return {"operation_id": task_id, "status": "done",
                 "next_assignment_queued": True}
