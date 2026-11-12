@@ -86,6 +86,8 @@ def read_job_page(db: Session, ctx: AuthContext, event_id: str, *,
         "frame_count": job.frame_count, "video_count": job.video_count,
         "morphology_counts": job.morphology_counts, "status": job.status,
         "review_status": job.review_status, "correction_round": job.correction_round,
+        "annotation_snapshot_round": job.annotation_snapshot_round,
+        "annotation_snapshot_frames": job.annotation_snapshot_frames,
         "native_submissions": submissions[job.id], "assigned_monitor_id": job.assigned_monitor_id,
         "started_at": job.started_at, "submitted_at": job.submitted_at, "completed_at": job.completed_at,
     } for job, team_name, assignee_name in rows]
