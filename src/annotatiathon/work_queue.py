@@ -40,7 +40,7 @@ def sample_repeat_frames(block: list[str], *, seed: str, block_key: str) -> list
 
 
 def reserve_repeats(db: Session, plan: LabelingPlan, eligible_team_ids: list[str]) -> None:
-    """Assign both samples of each claimed block to one independent team."""
+    """Reserve complete repeat-eligible 30-frame blocks for independent teams."""
     if not eligible_team_ids:
         return
     rows = db.execute(select(WorkBlock, LabelingJob.team_id).join(
