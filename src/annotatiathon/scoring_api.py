@@ -2,7 +2,7 @@
 from collections import Counter
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -22,6 +22,14 @@ class Weights(BaseModel):
     wrong_class: int = Field(default=1, ge=0, le=100)
     wrong_placement: int = Field(default=2, ge=0, le=100)
     sabotage: int = Field(default=3, ge=0, le=100)
+
+    @model_validator(mode="before")
+    @classmethod
+    def accept_legacy_visible_keypoint_name(cls, value):
+        if isinstance(value, dict) and "keypoint" in value:
+            value = dict(value)
+            value.setdefault("visible_keypoint", value.pop("keypoint"))
+        return value
 
 
 def resolved_weights(stored: dict | None) -> dict[str, int]:
