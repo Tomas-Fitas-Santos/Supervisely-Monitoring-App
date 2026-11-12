@@ -158,9 +158,9 @@ def test_current_round_supersedes_old_review_only_after_new_review(dataset_ctx, 
         db.add(original)
         first_job = job.id
     with maker() as db:
-        from annotatiathon.scoring_api import rankings
         from annotatiathon.auth import AuthContext
-        from annotatiathon.models import StaffAccount, StaffSession, DEFAULT_EVENT_ID
+        from annotatiathon.models import DEFAULT_EVENT_ID, StaffAccount, StaffSession
+        from annotatiathon.scoring_api import rankings
         staff = db.scalar(select(StaffAccount).where(
             StaffAccount.email == "owner@example.org",
         ))
