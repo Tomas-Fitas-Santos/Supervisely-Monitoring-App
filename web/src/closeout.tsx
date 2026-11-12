@@ -21,10 +21,11 @@ type Report={
   reviews:{frames_reviewed:number;good:number;bad:number;incomplete:number;
     keypoint_score:number;temporal_consistency_issues:number};
   review_fairness:{
-    ready_for_winner:boolean;equal:boolean;reviewed_frames_per_team:number|null;
-    frames_to_equalize:{team_id:string;team_name:string;reviewed_frames:number;additional_reviews_needed:number}[];
+    ready_for_winner:boolean;total_available_frames:number;total_reviewed_frames:number;
+    policy:string;
+    teams:{team_id:string;team_name:string;reviewed_frames:number;available_frames:number}[];
   };
-  closeout_readiness:{ready:boolean;blocking_jobs:number;equal_review_coverage:boolean;message:string};
+  closeout_readiness:{ready:boolean;blocking_jobs:number;verified_reviews_available:boolean;message:string};
   ticket_totals:Record<string,number>;generated_at:number;
 };
 export function CloseoutScreen({auth}:{auth:Auth}) {
@@ -104,24 +105,27 @@ export function CloseoutScreen({auth}:{auth:Auth}) {
       <section className="panel event-fairness-panel">
         <div className="review-analytics-header"><div>
           <span className="eyebrow">OFFICIAL WINNER ELIGIBILITY</span>
-          <h3>Equal review coverage</h3>
-          <p className="muted">All active teams must finish with the same number of
-            individually reviewed frames. The latest submitted version counts,
-            once its annotations have been reviewed.</p>
+          <h3>Random review coverage</h3>
+          <p className="muted">Monitors randomly review frames from all complete submissions.
+            Teams submitting more frames may have more reviewed, and each verified
+            correct keypoint or bounding box adds to the team's competition total.
+            Equal numbers of reviews are not required.</p>
         </div>{report.review_fairness.ready_for_winner?
           <CheckCircle2 size={26}/>:<ShieldAlert size={26}/>}</div>
         <div className="table-scroll"><table className="data-table">
-          <thead><tr><th>Team</th><th>Reviewed frames</th>
-            <th>Additional reviews to match the current leader</th></tr></thead>
-          <tbody>{report.review_fairness.frames_to_equalize.map(team=><tr key={team.team_id}>
+          <thead><tr><th>Team</th><th>Frames eligible for review</th>
+            <th>Frames reviewed</th><th>Review coverage</th></tr></thead>
+          <tbody>{report.review_fairness.teams.map(team=><tr key={team.team_id}>
             <td>{team.team_name}</td>
+            <td>{team.available_frames.toLocaleString()}</td>
             <td>{team.reviewed_frames.toLocaleString()}</td>
-            <td>{team.additional_reviews_needed.toLocaleString()}</td>
+            <td>{team.available_frames?
+              (100*team.reviewed_frames/team.available_frames).toFixed(1)+"%":"—"}</td>
           </tr>)}</tbody>
         </table></div>
-        <p className="muted small">{report.review_fairness.ready_for_winner?
-          "Equal positive review coverage has been achieved across all teams.":
-          "Rankings are provisional until every active team has equal reviewed-frame coverage."}</p>
+        <p className="muted small">{report.review_fairness.total_reviewed_frames.toLocaleString()} reviewed out of
+          {" "+report.review_fairness.total_available_frames.toLocaleString()} available submitted frames.
+          Teams are ranked by their total verified correct annotations, not by equal review counts.</p>
       </section>
       <section className="panel event-ranking-panel">
         <div className="review-analytics-header">
@@ -219,8 +223,8 @@ export function CloseoutScreen({auth}:{auth:Auth}) {
         {!report.closeout_readiness.ready?<div className="advisory"><ShieldAlert size={18}/>
           {report.closeout_readiness.message}</div>:
           <div className="settings-note"><CheckCircle2 size={17}/>
-            <p>All required job submissions are complete and the teams have equal reviewed-frame counts.
-              Finalisation is now allowed.</p></div>}
+            <p>All required job submissions are captured and verified annotation reviews exist.
+              Equal reviewed-frame counts are not required for finalisation.</p></div>}
         <label>Type <strong>{phrase}</strong> to confirm
           <input value={confirmation} onChange={e=>setConfirmation(e.target.value)}
             placeholder={phrase} autoComplete="off" spellCheck={false}/></label>
