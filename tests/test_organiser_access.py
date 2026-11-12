@@ -12,7 +12,13 @@ from annotatiathon import manage, organiser_access
 from annotatiathon.app import app
 from annotatiathon.db import get_db
 from annotatiathon.models import (
-    DEFAULT_EVENT_ID, ApprovedStaffEmail, AuditEvent, Base, Event, Person, StaffAccount,
+    DEFAULT_EVENT_ID,
+    ApprovedStaffEmail,
+    AuditEvent,
+    Base,
+    Event,
+    Person,
+    StaffAccount,
 )
 from annotatiathon.people_api import align_staff_access
 from annotatiathon.security import password_hash, password_matches
@@ -138,7 +144,7 @@ def test_database_approved_account_self_signup_without_codes(setup, monkeypatch)
 
 
 def test_admin_only_approved_email_list_and_no_legacy_registration(setup, monkeypatch):
-    http, maker = setup
+    http, _maker = setup
     bootstrap(monkeypatch)
     assert http.post("/api/v1/auth/register", json={
         "email": "owner@example.org", "password": "CorrectLongPassword123",
