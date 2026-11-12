@@ -23,6 +23,49 @@
 - Organiser: save the shared Supervisely Team ID, Workspace ID, and encrypted admin/manager integration token in Settings.
 - Distinguish a verified native team member appearing in the roster from an authorised Nightjar monitor login. Only an approved organiser/CSV roster monitor can register.
 
+## Dataset imports for organisers on different computers
+
+In **Dataset → Upload folder or ZIP**, choose a dataset folder directly
+with the browser's **Choose dataset folder on this computer** control.
+This requires no PowerShell or Docker commands from organisers. It sends
+the selected files to the single Nightjar server, so uploads from a remote
+browser still use the network and should normally be completed **before**
+the event.
+
+For the fastest import on the Windows PC running Docker Desktop, use
+**Dataset → Link host folder (optional)**. Select a dataset that is already
+within the Docker host's configured **read-only source root**. No dataset
+bytes pass through the browser; local indexing and frame extraction run
+in the `indexer` service. A browser alone cannot add arbitrary Windows
+folders to a Docker bind mount; the source root is a one-time host setting.
+
+The live worker system uses three isolated services:
+
+* `indexer` performs source indexing / local FFmpeg extraction (bounded CPU)
+* `mirror-worker` uploads source frames to Supervisely (bounded CPU)
+* `worker` performs live native job publishing, completeness validation,
+  correction/reassignment, status reconciliation and export
+
+Both SDK workers must be running before and during job distribution.
+Start them together after Team/Workspace verification:
+
+```powershell
+docker compose --env-file .env.live -f compose.live.yaml --profile native up -d worker mirror-worker
+```
+
+The `deploy-live.ps1 -StartWorker` command will also start both workers
+and preserve the current PostgreSQL database and its secrets. A media
+upload may still contend for disk and internet capacity on the host:
+schedule the large import **before event opening**, and verify the 300-job
+load test before setting worker replica counts.
+
+A dataset's Supervisely mirror status of `done` **does not** establish
+full-density source video identity. Before approving the automatic
+30-frame queue, use **Job Distribution → Automatic distribution →
+Check source frames**. This preflight identifies standalone images,
+sampled videos and missing source-frame ordinals; it does not weaken the
+final authoritative queue validation.
+
 ## Link a Windows dataset folder without a browser upload
 
 When **Data → Source folders & upload** displays **No folders available**,
