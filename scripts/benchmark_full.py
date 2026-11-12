@@ -187,15 +187,9 @@ def seed(frames):
                     media_ids=[f"asset-{j}" for j in range(FRAMES)],
                     repeat_media_ids=[],
                 ))
-        for index in range(ANNOTATORS, ANNOTATORS * 2):
-            person_index = index - ANNOTATORS
-            db.add(m.LabelingJob(
-                id=f"job-{index}", event_id="event", plan_id="plan", dataset_id="dataset",
-                team_id=f"team-{person_index // 2}", assignee_person_id=f"person-{person_index}",
-                sequence=3 + person_index % 2, media_ids=[f"asset-{frame}" for frame in range(frames)],
-                frame_count=frames, video_count=1, morphology_counts={"bird": frames},
-                native_dataset_id=None if UPLOAD else 2000 + index, status="queued",
-            ))
+        # Do not precreate legacy follow-up jobs. The official 30-frame
+        # turnaround fixture allocates fresh jobs from WorkBlocks after
+        # completeness validation; the initial-release fixture stops at 300.
         db.add(m.SuperviselyConfig(id=1, server_url="https://supervisely-sim", team_id=125980,
                                    workspace_id=2001, verified=True,
                                    token_ciphertext=encrypt_token("synthetic-supervisely-key")))
@@ -205,7 +199,7 @@ def seed(frames):
             os.chown(Path(directory) / name, 10001, 10001)
     print(json.dumps({"seeded": True, "phase": PHASE, "annotators": ANNOTATORS,
                       "monitors": MONITORS, "original_jobs": ANNOTATORS,
-                      "queued_followups_fixture": ANNOTATORS}), flush=True)
+                      "queued_followups_fixture": 0}), flush=True)
 
 
 def annotation(identifier):
