@@ -53,6 +53,34 @@ could claim the account before its intended owner. This is a known risk
 for externally exposed test links. For official-event deployment, adopt an
 organiser-issued single-use invitation or a verified identity provider.
 
+## Corrected email already has an existing account
+
+If an organiser's email was entered incorrectly, `change-staff-email`
+changes the email of their existing Nightjar staff account **only if no
+account already exists at the corrected address**.
+
+If it reports `A staff account already exists under the corrected email;
+no accounts were merged`, the source account remains unchanged. To retain
+the **existing corrected account** and disable the obsolete email's access
+without losing either record, run:
+
+```powershell
+docker compose --env-file .env.live -f compose.live.yaml run --rm --no-deps api python -m annotatiathon.manage keep-existing-staff-account --obsolete-email "old@example.org" --keep-email "corrected@example.org"
+```
+
+This command requires the obsolete email to be enabled in the approval
+database and requires the corrected account to be active with the same
+Admin or Organiser role. It preserves the corrected account's password
+and user ID, creates its approved-email entry if missing, deactivates
+the obsolete account, disables its approval and revokes obsolete sessions.
+It never merges or deletes the accounts. A conflicting or disabled
+destination causes an error without changing anything. The organiser
+then uses the corrected email and **the password already associated
+with that corrected account**, not the old account's password.
+
+Because `docker compose exec api` skips the API container's startup
+entrypoint, use `docker compose run --rm --no-deps api` for the CLI.
+
 ## Updating the live-testing Docker stack
 
 From the repository root, with Docker Desktop running:
