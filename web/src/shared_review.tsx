@@ -22,21 +22,26 @@ type QueueStatus={pending:number;active:number;completed:number;
   teams:{team_id:string;team_name:string;pending:number;active:number;completed:number}[]};
 type VerdictDraft={correct:boolean;reason:Reason|null;corrected_class:string};
 type Weights={
-  keypoint:number;box:number;wrong_class:number;
-  wrong_placement:number;sabotage:number;
+  visible_keypoint:number;occluded_keypoint:number;box:number;
+  wrong_class:number;wrong_placement:number;sabotage:number;
 };
 type Rubric={version:number;weights:Weights};
 type Ranking={rank:number;team_id:string;team_name:string;
-  correct_keypoints:number;correct_boxes:number;correct_objects:number;
+  correct_keypoints:number;correct_visible_keypoints:number;
+  correct_occluded_keypoints:number;correct_boxes:number;correct_objects:number;
   reviewed_frames:number;available_frames:number;weighted_score:number;
   missing_objects:number;errors:Record<string,number>};
 const emptyWeights:Weights={
-  keypoint:1,box:1,wrong_class:0,wrong_placement:0,sabotage:0
+  visible_keypoint:1,occluded_keypoint:3,box:1,
+  wrong_class:1,wrong_placement:2,sabotage:3
 };
 const fieldLabels:Record<keyof Weights,string>={
-  keypoint:"Correct keypoint",box:"Correct bounding box",
-  wrong_class:"Wrong keypoint class penalty",
-  wrong_placement:"Wrong placement penalty",sabotage:"Sabotage penalty"
+  visible_keypoint:"Correct visible keypoint (+ points)",
+  occluded_keypoint:"Correct occluded keypoint (+ points)",
+  box:"Correct bird bounding box (+ points)",
+  wrong_class:"Wrong keypoint class (− points)",
+  wrong_placement:"Wrong keypoint placement (− points)",
+  sabotage:"Sabotage / no serious attempt (− points)"
 };
 const reasons:{value:Reason;label:string}[]=[
   {value:"wrong_class",label:"Wrong keypoint class"},
@@ -394,23 +399,27 @@ export function SharedReviewScreen({auth}:{auth:Auth}){
 
     {tab==="rankings"&&<section className="panel shared-review-rankings">
       <div className="shared-review-grade-heading"><div>
-        <span className="eyebrow">EVENT RESULTS · VERIFIED OBJECTS</span>
+        <span className="eyebrow">EVENT RESULTS · WEIGHTED ANNOTATION POINTS</span>
         <h3>Team leaderboard</h3>
-        <p className="muted">Ranked by the total correct keypoints plus correct bounding boxes,
-          not by finished frames. Unreviewed submissions do not earn verified objects.</p>
+        <p className="muted">Teams rank by their total verified annotation points: visible and occluded
+          keypoints and correct bounding boxes earn different weights; incorrect annotations
+          incur the organiser-configured penalties. More submitted frames can mean more points.</p>
       </div><button className="btn secondary" onClick={()=>void refreshRankings()}>
         <RefreshCw size={15}/> Update</button></div>
       <div className="table-scroll"><table className="data-table">
-        <thead><tr><th>Rank</th><th>Team</th><th>Correct keypoints</th>
-          <th>Correct boxes</th><th>Total correct</th><th>Reviewed / Available</th>
-          <th>Errors (class / placement / sabotage)</th><th>Weighted score</th></tr></thead>
+        <thead><tr><th>Rank</th><th>Team</th><th>Visible points</th>
+          <th>Occluded points</th><th>Correct boxes</th><th>Correct annotations</th>
+          <th>Reviewed / Available</th><th>Errors (class / placement / sabotage)</th>
+          <th>Competition score</th></tr></thead>
         <tbody>{rankings.map(team=><tr key={team.team_id}>
           <td><strong>#{team.rank}</strong></td><td><strong>{team.team_name}</strong></td>
-          <td>{fmt(team.correct_keypoints)}</td><td>{fmt(team.correct_boxes)}</td>
-          <td><strong>{fmt(team.correct_objects)}</strong></td>
+          <td>{fmt(team.correct_visible_keypoints)}</td>
+          <td>{fmt(team.correct_occluded_keypoints)}</td>
+          <td>{fmt(team.correct_boxes)}</td>
+          <td>{fmt(team.correct_objects)}</td>
           <td>{fmt(team.reviewed_frames)} / {fmt(team.available_frames)}</td>
           <td>{fmt(team.errors?.wrong_class||0)} / {fmt(team.errors?.wrong_placement||0)} / {fmt(team.errors?.sabotage||0)}</td>
-          <td>{fmt(team.weighted_score)}</td>
+          <td><strong>{fmt(team.weighted_score)}</strong></td>
         </tr>)}</tbody>
       </table>{!rankings.length&&<div className="empty-table">
         No competition results available yet.</div>}</div>
@@ -422,8 +431,9 @@ export function SharedReviewScreen({auth}:{auth:Auth}){
       <div className="shared-review-grade-heading"><div>
         <span className="eyebrow">SCORING · VERSIONED RUBRIC</span>
         <h3>Annotation scoring</h3>
-        <p className="muted">Organisers configure scoring before or during the event.
-          Monitors can inspect the active values but cannot modify them.</p>
+        <p className="muted">Only event organisers (admins) can change scoring weights here.
+          All monitors can view them. Saved rubric versions apply uniformly to every
+          reviewed submission, including earlier completed reviews.</p>
       </div><span className="soft-pill">Version {rubric?.version??"—"}</span></div>
       <form className="form-stack" onSubmit={e=>void saveRubric(e)}>
         <div className="shared-review-weights">
@@ -434,9 +444,11 @@ export function SharedReviewScreen({auth}:{auth:Auth}){
               onChange={e=>setWeights(old=>({...old,[key]:Number(e.target.value)}))}/>
           </label>)}
         </div>
-        <p className="muted small">For each reviewed frame: correct keypoints × keypoint weight
-          + correct boxes × box weight − each configured error penalty.
-          The primary ranking still uses raw correct-object counts.</p>
+        <p className="muted small">Competition score = correct visible keypoints × visible weight
+          + correct occluded keypoints × occluded weight + correct bounding boxes × box weight
+          − wrong-class, wrong-placement and sabotage penalties. Defaults: +1 visible,
+          +3 occluded, +1 box; penalties −1/−2/−3 respectively (configurable).
+          Highest total weighted score wins, not the highest percentage of correct images.</p>
         {organiser&&<button type="submit" className="btn primary" disabled={busy}>
           Save scoring configuration</button>}
       </form>
