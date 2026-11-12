@@ -430,9 +430,6 @@ def job_media(
     ))
     if not job:
         raise HTTPException(status_code=404, detail="Job not found.")
-    if "monitor" in ctx.staff.roles and "organiser" not in ctx.staff.roles:
-        from .reviews_api import verify_monitor
-        verify_monitor(db, ctx, job)
     if size < 1 or size > 200 or page < 1:
         raise HTTPException(status_code=422, detail="Pagination out of range.")
     total = len(job.media_ids)
