@@ -246,7 +246,7 @@ export function SharedReviewScreen({auth}:{auth:Auth}){
           <button className="btn primary large" disabled={busy} onClick={()=>void claimNext()}>
             <PlayCircle size={18}/>{busy?"Claiming…":paused?"Resume · Next frame":"Get next frame"}
           </button>
-          <p className="muted small">Currently, the worker supplies sampled frames from submitted annotation jobs.</p>
+          <p className="muted small">The worker queues individual frames from submitted jobs, including independent repeats. Reviews are assigned across teams fairly.</p>
         </section>:
         <>
           <section className="shared-review-frame-heading">
@@ -389,7 +389,7 @@ export function SharedReviewScreen({auth}:{auth:Auth}){
         </tr>)}</tbody>
       </table>{!rankings.length&&<div className="empty-table">
         No competition results available yet.</div>}</div>
-      <p className="muted small">Scores reflect reviewed samples, not exhaustive annotation coverage.
+      <p className="muted small">Only completed frame reviews contribute verified object counts. Pending submitted frames are excluded until reviewed.
         Ranking calculations and historic reviews are kept on the server.</p>
     </section>}
 

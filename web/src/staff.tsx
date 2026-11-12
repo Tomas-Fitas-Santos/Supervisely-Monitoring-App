@@ -4,7 +4,7 @@ import { api, type Auth, type Role, type Staff } from "./api";
 
 const ROLE_OPTIONS:{role:Role;label:string;purpose:string}[]=[
   {role:"organiser",label:"Event organiser",purpose:"Full setup and staff permissions"},
-  {role:"monitor",label:"Annotation reviewer",purpose:"Review assigned teams and inspect rankings"},
+  {role:"monitor",label:"Annotation reviewer",purpose:"Review the shared frame queue and inspect rankings"},
   {role:"reception",label:"Reception & check-in",purpose:"Check in attendees and assign tables"},
   {role:"distribution",label:"Food & drinks",purpose:"Issue and redeem tickets"},
   {role:"activity",label:"Activities & prizes",purpose:"Manage activity results and awards"},

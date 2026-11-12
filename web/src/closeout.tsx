@@ -118,7 +118,7 @@ export function CloseoutScreen({auth}:{auth:Auth}) {
             <td>{team.weighted_score.toLocaleString()}</td>
           </tr>)}</tbody>
         </table>{!rankings.length&&<div className="empty-table">Rankings will appear after reviewed frames are available.</div>}</div>
-        <p className="muted small">Currently based on sampled frame reviews from the Supervisely synchronization worker.
+        <p className="muted small">Rankings include completed reviews of submitted frame annotations; submitted but unreviewed frames do not contribute points.
           Every team's review count is shown so differences in review coverage are visible.</p>
       </section>
       <div className="content-grid closeout-layout">

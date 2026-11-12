@@ -1,4 +1,4 @@
-"""Versioned rubric and sampled review rankings."""
+"""Versioned rubric and rankings from completed submitted-frame reviews."""
 from collections import Counter
 
 from fastapi import APIRouter, Depends

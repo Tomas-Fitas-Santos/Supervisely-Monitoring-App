@@ -83,7 +83,7 @@ function Login({ onLogin }: { onLogin: (auth: Auth) => void }) {
         <h2>{mode==="login"?"Sign in to Nightjar":"Create your monitor account"}</h2>
         <p className="muted">{mode==="login"?
           "Sign in with your Nightjar account, not your Supervisely credentials.":
-          "Use the email already listed for you as an approved monitor. Create a Nightjar-only password; link Supervisely separately in Settings."}</p>
+          "Use your approved monitor email and the one-time code supplied privately by your organiser. Choose a separate Nightjar password."}</p>
         <form onSubmit={e=>void submit(e)} className="form-stack">
           <label>Email address<input type="email" autoComplete="username" autoFocus required
             value={email} onChange={e=>setEmail(e.target.value)}
