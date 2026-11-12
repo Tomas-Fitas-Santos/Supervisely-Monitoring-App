@@ -9,6 +9,7 @@ param(
   [ValidateRange(0, 0.25)][double]$TimeoutRate = 0.0,
   [ValidateRange(0, 0.25)][double]$FailureRate = 0.0,
   [ValidateRange(0, 5.0)][double]$FallbackLatency = 0.05,
+  [ValidateRange(100, 20000)][int]$AssumedPublishMs = 1000,
   [string]$Profile = "scripts/benchmark_profiles/measured.json"
 )
 
@@ -69,7 +70,7 @@ try {
       $failureArg = $FailureRate.ToString($invariant)
       $scaleArg = $ProfileScale.ToString($invariant)
       $timeoutArg = $TimeoutRate.ToString($invariant)
-      & docker @compose run -d --name $loadName load python /bench/benchmark_full.py load --seconds $Seconds --latency $latencyArg --fail-rate $failureArg --profile-scale $scaleArg --timeout-rate $timeoutArg
+      & docker @compose run -d --name $loadName load python /bench/benchmark_full.py load --seconds $Seconds --latency $latencyArg --fail-rate $failureArg --profile-scale $scaleArg --timeout-rate $timeoutArg --assumed-publish-ms $AssumedPublishMs
       if ($LASTEXITCODE -ne 0) { throw "Benchmark load process failed to start." }
 
       $resourceFile = Join-Path $out "resources.jsonl"
@@ -107,6 +108,7 @@ try {
       $results += [PSCustomObject]@{
         Workers = $count
         Scenario = $Scenario
+        AssumedPublishMs = $AssumedPublishMs
         Published = $published
         Errors = $errors
         ApiP95ms = [math]::Round([double]$report.workload.p95_ms, 1)
