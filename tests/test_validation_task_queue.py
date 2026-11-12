@@ -29,7 +29,8 @@ def setup_queue():
                               created_by="staff"))
         db.add(m.CompetitionTeam(id="team", event_id="event", name="Team"))
         db.add(m.Person(id="person", event_id="event", team_id="team",
-                        name="Annotator", email="annotator@example.test"))
+                        name="Annotator", email="annotator@example.test",
+                        kind="participant"))
         db.flush()
         db.add(m.LabelingPlan(id="plan", event_id="event", dataset_id="dataset",
                               status="running", jobs_per_team=0,
