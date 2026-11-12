@@ -4,6 +4,10 @@
 param(
   [int[]]$Workers = @(1, 2, 3),
   [ValidateRange(1, 4)][int]$Validators = 2,
+  [ValidateRange(1, 4)][int]$Correctors = 1,
+  [ValidateRange(1, 4)][int]$StatusWorkers = 1,
+  [ValidateSet("initial", "turnaround")][string]$Phase = "turnaround",
+  [ValidateRange(0.0, 1.0)][double]$IncompleteRate = 0.20,
   [ValidateRange(60, 7200)][int]$Seconds = 480,
   [ValidateSet("burst", "staggered")][string]$Scenario = "burst",
   [ValidateRange(0.1, 10.0)][double]$ProfileScale = 1.0,
@@ -62,7 +66,8 @@ Push-Location $root
 $original = @{}
 foreach ($key in @("BENCHMARK_ANNOTATORS", "BENCHMARK_MONITORS",
                     "BENCHMARK_FRAMES", "BENCHMARK_SECONDS_PER_FRAME",
-                    "BENCHMARK_BURST", "BENCHMARK_UPLOAD", "BENCHMARK_PROFILE_PATH")) {
+                    "BENCHMARK_BURST", "BENCHMARK_UPLOAD", "BENCHMARK_PROFILE_PATH",
+                    "BENCHMARK_PHASE", "BENCHMARK_INCOMPLETE_RATE")) {
   $original[$key] = [Environment]::GetEnvironmentVariable($key, "Process")
 }
 try {
@@ -74,6 +79,8 @@ try {
   $env:BENCHMARK_SECONDS_PER_FRAME = "90"
   $env:BENCHMARK_BURST = if ($Scenario -eq "burst") { "1" } else { "0" }
   $env:BENCHMARK_UPLOAD = "0"
+  $env:BENCHMARK_PHASE = $Phase
+  $env:BENCHMARK_INCOMPLETE_RATE = $IncompleteRate.ToString([System.Globalization.CultureInfo]::InvariantCulture)
   if (Test-Path $Profile) {
     $scriptsPath = (Resolve-Path (Join-Path $root "scripts")).Path
     $resolved = (Resolve-Path $Profile).Path
@@ -133,17 +140,17 @@ try {
     if ($count -lt 1 -or $count -gt 4) {
       throw "Worker counts must be between 1 and 4 on the test machine."
     }
-    $project = "nightjar-bench-300-$stamp-p$count-v$Validators"
+    $project = "nightjar-bench-300-$stamp-$Phase-p$count-v$Validators-c$Correctors-s$StatusWorkers"
     if (-not $project.StartsWith("nightjar-bench-300-")) {
       throw "Refusing to operate on a non-benchmark Docker project."
     }
     $compose = @("compose", "-p", $project, "-f", "compose.benchmark.yaml")
-    $out = Join-Path $rootOut "publishers-$count-validators-$Validators"
+    $out = Join-Path $rootOut "$Phase-publishers-$count-validators-$Validators-correctors-$Correctors-status-$StatusWorkers"
     New-Item -ItemType Directory -Force -Path $out | Out-Null
     $loadName = "$project-load"
     try {
-      Write-Host "Starting isolated benchmark: $count publisher(s), $Validators validator(s), $Scenario, $Seconds seconds"
-      & docker @compose up -d --no-build --scale "worker=$count" --scale "validation-worker=$Validators" web worker status-worker validation-worker correction-worker recovery-worker bulk-worker
+      Write-Host "Starting isolated benchmark: $Phase, $count publisher(s), $Validators validator(s), $Correctors corrector(s), $StatusWorkers status worker(s), $Scenario, $Seconds seconds"
+      & docker @compose up -d --no-build --scale "worker=$count" --scale "validation-worker=$Validators" --scale "correction-worker=$Correctors" --scale "status-worker=$StatusWorkers" web worker status-worker validation-worker correction-worker recovery-worker bulk-worker
       if ($LASTEXITCODE -ne 0) { throw "Benchmark environment failed to start." }
       $invariant = [System.Globalization.CultureInfo]::InvariantCulture
       $latencyArg = $FallbackLatency.ToString($invariant)
@@ -202,17 +209,47 @@ try {
       $published = [int]$report.workload.simulator.published
       $validated = [int]$report.workload.database.review_completed_frames +
                    [int]$report.workload.database.review_ready_frames
-      if ($published -eq 0 -or $validated -eq 0) {
-        Write-Warning "Invalid throughput measurement: $published published, $validated validated frames."
-        Write-Warning "Inspect $out\\services.log and summary.json; validation or publishing is not functioning."
-        throw "Benchmark produced no successful publishing/review throughput. Fix the worker/simulator before comparing concurrency."
+      $confirmed = [int]$report.publication_cohort.confirmed_count
+      $firstJob = $report.publication_cohort.first_confirmed_ms
+      $job150 = $report.publication_cohort.one_hundred_fiftieth_confirmed_ms
+      $job290 = $report.publication_cohort.two_hundred_ninetieth_confirmed_ms
+      $job300 = $report.publication_cohort.three_hundredth_confirmed_ms
+      $states = $report.workload.database.operation_kinds
+      $corrections = [int]$states.'restart_job:done'
+      $validations = [int]$states.'validate_submission:done'
+      if (($Phase -eq "initial" -and $confirmed -eq 0) -or
+          ($Phase -eq "turnaround" -and ($validations -eq 0 -or $validated -eq 0))) {
+        Write-Warning "No meaningful $Phase throughput: $confirmed published, $validations validations, $validated ready frames."
+        Write-Warning "Inspect $out\\services.log and summary.json."
+        throw "Benchmark stage did not progress. Fix the fixture or workers before comparing roles."
+      }
+      if ($Phase -eq "initial" -and $confirmed -lt 300) {
+        Write-Warning "Only $confirmed/300 original jobs confirmed within $Seconds seconds. Full 300-job release time is not yet measured; extend -Seconds."
       }
       $results += [PSCustomObject]@{
         Publishers = $count
+        Phase = $Phase
         Validators = $Validators
+        Correctors = $Correctors
+        StatusWorkers = $StatusWorkers
+        IncompleteRate = $IncompleteRate
         Scenario = $Scenario
         AssumedPublishMs = $AssumedPublishMs
         Published = $published
+        ConfirmedInitialJobs = if ($Phase -eq "initial") { $confirmed } else { $null }
+        InitialFirstMs = if ($Phase -eq "initial") { $firstJob } else { $null }
+        Initial150thMs = if ($Phase -eq "initial") { $job150 } else { $null }
+        Initial290thMs = if ($Phase -eq "initial") { $job290 } else { $null }
+        Initial300thMs = if ($Phase -eq "initial") { $job300 } else { $null }
+        ValidatedTasks = $validations
+        ReviewReadyFrames = $validated
+        CorrectionsPublished = $corrections
+        NextJobsConfirmed = $report.worker_timing.next_jobs_confirmed
+        SubmissionDetectionP95ms = $report.submission_detection.p95_ms
+        ValidationQueueP95ms = $report.worker_timing.stage_lags.validation_queue_wait.p95_ms
+        ValidationP95ms = $report.worker_timing.stage_lags.validation_duration.p95_ms
+        NextJobWaitP95ms = $report.worker_timing.stage_lags.complete_validation_to_new_job.p95_ms
+        CorrectionWaitP95ms = $report.worker_timing.stage_lags.correction_queued_to_confirmed.p95_ms
         Errors = $errors
         ApiP95ms = [math]::Round([double]$report.workload.p95_ms, 1)
         PeakCpuCores = [math]::Round([double]$report.resources.combined.max_sample_cpu_cores, 2)
@@ -230,7 +267,7 @@ try {
   $results | Format-Table -AutoSize
   $results | ConvertTo-Json -Depth 5 | Out-File (Join-Path $rootOut "comparison.json") -Encoding utf8
   Write-Host "Benchmark comparison saved: $rootOut\comparison.json"
-  Write-Host "Choose by tail latency, completed operations, errors and RAM headroom; not CPU alone."
+  Write-Host "Choose per-role worker counts by complete job turnaround (p95/p99), 300-job drain time, backlog and errors; not CPU alone."
 }
 finally {
   foreach ($entry in $original.GetEnumerator()) {
