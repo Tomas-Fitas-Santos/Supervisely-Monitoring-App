@@ -2,6 +2,10 @@
 name: nightjar-benchmark
 x-runtime: &runtime
   image: nightjar-benchmark-runtime
+  build:
+    context: .
+    dockerfile: deploy/Dockerfile.api
+    target: native
   environment: &environment
     APP_ENV: production
     POSTGRES_USER: benchmark
@@ -68,14 +72,57 @@ services:
       test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/ready')"]
       interval: 3s
       retries: 30
+  # Only the publisher role is scaled during the 300-person sweep.
+  # Validation/status/recovery remain independent; scaling full copies of
+  # the old worker duplicated polling and snapshot activity.
   worker:
     <<: *runtime
     environment:
       <<: *environment
-      NIGHTJAR_WORKER_TIMING_FILE: /data/results/worker-timing.jsonl
-    command: [python, -m, annotatiathon.native_worker, --loop, --poll-seconds, "12"]
-    cpus: 1.5
-    mem_limit: 2g
+      NIGHTJAR_WORKER_TIMING_FILE: /data/results/worker-publish.jsonl
+    command: [python, -m, annotatiathon.native_worker, --loop, --role, publish, --poll-seconds, "12"]
+    cpus: 0.75
+    mem_limit: 768m
+    depends_on:
+      supervisely-sim: {condition: service_started}
+      api: {condition: service_healthy}
+  status-worker:
+    <<: *runtime
+    command: [python, -m, annotatiathon.native_worker, --loop, --role, status, --poll-seconds, "3"]
+    cpus: 0.75
+    mem_limit: 768m
+    depends_on:
+      supervisely-sim: {condition: service_started}
+      api: {condition: service_healthy}
+  validation-worker:
+    <<: *runtime
+    command: [python, -m, annotatiathon.native_worker, --loop, --role, validation, --poll-seconds, "3"]
+    cpus: 0.75
+    mem_limit: 768m
+    depends_on:
+      supervisely-sim: {condition: service_started}
+      api: {condition: service_healthy}
+  correction-worker:
+    <<: *runtime
+    command: [python, -m, annotatiathon.native_worker, --loop, --role, correction, --poll-seconds, "3"]
+    cpus: 0.5
+    mem_limit: 512m
+    depends_on:
+      supervisely-sim: {condition: service_started}
+      api: {condition: service_healthy}
+  recovery-worker:
+    <<: *runtime
+    command: [python, -m, annotatiathon.native_worker, --loop, --role, recovery, --poll-seconds, "3"]
+    cpus: 0.25
+    mem_limit: 256m
+    depends_on:
+      supervisely-sim: {condition: service_started}
+      api: {condition: service_healthy}
+  bulk-worker:
+    <<: *runtime
+    command: [python, -m, annotatiathon.native_worker, --loop, --role, bulk, --poll-seconds, "12"]
+    cpus: 0.5
+    mem_limit: 512m
     depends_on:
       supervisely-sim: {condition: service_started}
       api: {condition: service_healthy}
@@ -98,6 +145,11 @@ services:
     depends_on:
       web: {condition: service_started}
       worker: {condition: service_started}
+      status-worker: {condition: service_started}
+      validation-worker: {condition: service_started}
+      correction-worker: {condition: service_started}
+      recovery-worker: {condition: service_started}
+      bulk-worker: {condition: service_started}
 
 networks:
   benchmark:
