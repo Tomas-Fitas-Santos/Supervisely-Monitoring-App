@@ -1156,8 +1156,33 @@ def process_correction_once(db: Session, api, config: SuperviselyConfig) -> dict
             # 404 even for verified members. Instead create a new native job
             # referencing ONLY the unresolved image IDs. The Nightjar job ID
             # and WorkPacket remain unchanged.
-            remaining = pending_ids(db, job)
             payload = op.payload or {}
+            if op.payload is None:
+                # Older deployments returned all 30 images before taking a
+                # snapshot. Recover their original native annotation JSON
+                # first so a retried attention operation sends only incomplete
+                # images, not images the annotator has already completed.
+                original = api.labeling_job.get_info_by_id(bindings[0].native_job_id)
+                if (original is None
+                        or original.dataset_id != job.native_dataset_id):
+                    raise NativeWorkerError("legacy_correction_source_missing")
+                capture_frame_submission(
+                    db, api, job, source_round=job.correction_round - 1,
+                )
+                db.flush()
+            remaining = pending_ids(db, job)
+            if not remaining and op.payload is None:
+                # All original images validated successfully during recovery;
+                # no replacement native job is required.
+                job.annotation_snapshot_round = job.correction_round
+                job.annotation_snapshot_frames = job.frame_count
+                task = db.get(NativeOperation, opid)
+                task.status = "done"
+                task.error_code = None
+                task.completed_at = epoch()
+                db.commit()
+                return {"operation_id": opid, "status": "done",
+                        "correction_round": job.correction_round}
             if (payload.get("pending_media_ids") is not None
                     and remaining != payload["pending_media_ids"]):
                 raise NativeWorkerError("correction_pending_media_changed")
