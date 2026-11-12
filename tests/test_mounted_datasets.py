@@ -161,7 +161,11 @@ def test_windows_source_picker_reuses_existing_live_stack_safely():
                    for line in helper.splitlines())
     assert "read_only: true" in compose
     assert "No dataset folders visible to Nightjar." in ui
-    assert "link-local-dataset.ps1" in ui
+    assert "Upload folder or ZIP" in ui
+    assert 'NIGHTJAR_DEDICATED_INDEXER: "1"' in compose
+    assert 'NIGHTJAR_DEDICATED_MIRROR: "1"' in compose
+    assert "  mirror-worker:" in compose
+    assert "up -d --no-deps @refreshFlag worker" in helper
 
 
 def test_mounted_indexer_runs_without_supervisely_connection(monkeypatch):
