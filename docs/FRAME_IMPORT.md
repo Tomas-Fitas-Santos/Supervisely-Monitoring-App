@@ -10,28 +10,29 @@ The **1 frame per second** option remains available. To use an existing
 sampled video at full density, import the retained original into a new
 dataset. This preserves the existing dataset and its references.
 
-For an image folder, name the frames by ordinal (for example, `frame_0001.jpg`)
-or put `frames.json` next to the images. Numeric names establish order, but
-cannot establish how many frames the original video contained. For example,
-this manifest declares a one-frame source:
+**Neither ZIP nor folder upload requires any JSON metadata file.** Supply
+`dataset/species/video-name/frame.jpg`, or upload the original video.
+For extracted frames, Nightjar reads numeric source ordinals from names such
+as `frame_000001.jpg`, `ColumbaPalumbus_f000013.jpg`, or `clip_000013.jpg`.
+If the names have no unique ordinal, the importer sorts them naturally
+(`image2.jpg` before `image10.jpg`) and assigns sequential ordinals.
 
-```json
-{
-  "version": 1,
-  "source_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-  "source_frame_count": 1,
-  "all_frames": true,
-  "time_base": "1/30",
-  "frame_rate": "30/1",
-  "frames": [{"file": "frame_0001.jpg", "ordinal": 1, "pts": 0}]
-}
-```
+When importing a frame folder with **Every source frame**, a contiguous
+numeric sequence is accepted as an explicitly declared full-density segment,
+including if the first available source ordinal is not 1. If the filenames
+contain internal numeric gaps, the import still succeeds but marks the video
+as incomplete/unknown-density, and full-density automatic planning will not
+silently skip those frames. Use an actual consecutive frame export for the
+official 30-frame jobs. **Sample one frame per second** accepts sparse frame
+numbers as sampled imagery and does not pretend that a sparse selection is
+the complete source video. When importing original video files, Nightjar uses
+FFmpeg for the selected extraction density and does not need any metadata.
 
-Use the real source SHA-256 and list every supplied image once. Include
-`time_base` if any frame has a PTS. Optional frame fields are `width`, `height`
-and `sha256`. For uploaded folders, the source checksum and density are
-declarations. Inspect the dataset’s video details for gaps or unknown
-density before choosing event footage.
+Legacy `frames.json` files are still accepted for backward compatibility,
+but creating or supplying one is no longer part of the upload workflow.
+For supplied frame folders, source-video completeness cannot be independently
+proven without the original video. Inspect the video's density and identity
+notes before selecting it for official automatic distribution.
 
 Import a representative batch on the organiser’s PC first. The dataset
 view estimates JPEG storage for a target frame count using measured bytes
@@ -42,7 +43,8 @@ Apply the additive migration with `alembic upgrade head` before starting
 the updated API and worker. Run
 `python -m annotatiathon.manage backfill-snapshots` to populate dashboard
 counters from existing local snapshots. The live Compose migration service
-runs both steps. Missing and unreadable manifests are reported separately.
+runs both steps. Optional legacy metadata is validated when supplied; it is
+not required for current uploads.
 
 On the isolated PostgreSQL benchmark with 6,240 stored jobs, the new
 2,000-row organiser handler issued three SQL statements. Ten concurrent
