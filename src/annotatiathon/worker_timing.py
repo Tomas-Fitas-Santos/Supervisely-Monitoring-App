@@ -9,10 +9,10 @@ the existing SINGLE live worker; do not run extra live publishers for timing.
 """
 import json
 import os
-from pathlib import Path
 import re
-from threading import Lock
 import time
+from pathlib import Path
+from threading import Lock
 from urllib.parse import urlsplit
 
 _lock = Lock()
