@@ -83,7 +83,7 @@ def test_register_index_review_mounted_frames_without_copying(monkeypatch, tmp_p
     from PIL import Image
     from sqlalchemy import select
 
-    from annotatiathon.models import MediaAsset, NativeOperation
+    from annotatiathon.models import DEFAULT_EVENT_ID, MediaAsset, NativeOperation
 
     fixture = test_dataset_workflows.ctx.__wrapped__
     # The shared fixture is a generator; manually run it under pytest's
@@ -129,7 +129,7 @@ def test_register_index_review_mounted_frames_without_copying(monkeypatch, tmp_p
             ))
             assert mirror is not None and mirror.status == "pending"
         assert sorted(asset.frame_index for asset in assets) == [1, 2]
-        assert not list((tmp_path / "event" / dataset_id / "media").rglob("*.jpg"))
+        assert not list((tmp_path / DEFAULT_EVENT_ID / dataset_id / "media").rglob("*.jpg"))
         preview = client.get(
             "/api/v1/review/datasets/"+dataset_id+"/assets/"+assets[0].id+"/image")
         assert preview.status_code == 200
