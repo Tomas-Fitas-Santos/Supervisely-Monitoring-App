@@ -146,6 +146,7 @@ def test_current_round_supersedes_old_review_only_after_new_review(dataset_ctx, 
             Person.team_id == job.team_id,
         ).limit(1))
         assert job.assignee_person_id
+        job.status = "on_review"
         asset_id = job.media_ids[0]
         original = ReviewSample(
             event_id=job.event_id, job_id=job.id, team_id=job.team_id,
