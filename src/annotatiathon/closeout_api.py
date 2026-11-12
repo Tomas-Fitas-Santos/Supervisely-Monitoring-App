@@ -33,6 +33,24 @@ router = APIRouter(prefix="/api/v1/closeout", tags=["event reports"])
 VIEWERS = ("organiser", "monitor", "observer")
 
 
+def complete_submission(job: LabelingJob) -> bool:
+    """Official single-annotator jobs complete when all JSON frames are captured.
+
+    Legacy jobs still require the historical whole-job acceptance decision.
+    """
+    if job.status == "completed":
+        return True
+    return (
+        job.assignee_person_id is not None
+        and job.release_mode in {
+            "shared_primary", "shared_repeat", "manual_released", "manual_hold",
+        }
+        and job.status == "on_review"
+        and job.annotation_snapshot_round == job.correction_round
+        and job.annotation_snapshot_frames == job.frame_count
+    )
+
+
 def frame_review_fairness(db: Session, event_id: str) -> dict:
     """Current-round completed-frame counts across all active competition teams."""
     teams = list(db.execute(select(CompetitionTeam.id, CompetitionTeam.name).where(
@@ -148,6 +166,7 @@ def event_report(db: Session, event_id: str) -> dict:
     ).where(TicketLedgerEntry.event_id == event_id).group_by(TicketLedgerEntry.kind)):
         ledger_totals[kind] = int(total)
     statuses = Counter(j.status for j in jobs)
+    complete = sum(complete_submission(job) for job in jobs)
     fairness = frame_review_fairness(db, event_id)
     return {
         "event_id": event_id, "event_name": event.name, "event_status": event.status,
@@ -168,11 +187,10 @@ def event_report(db: Session, event_id: str) -> dict:
         "labeling": {
             "jobs": len(jobs), "status_counts": dict(statuses),
             "frames_assigned": sum(j.frame_count for j in jobs),
-            "jobs_accepted": statuses["completed"],
+            "jobs_accepted": complete,
             "jobs_needing_action": sum(
-                status not in {"completed", "cancelled"} for status in (
-                    j.status for j in jobs
-                )
+                not complete_submission(job) and job.status != "cancelled"
+                for job in jobs
             ),
         },
         "reviews": {
