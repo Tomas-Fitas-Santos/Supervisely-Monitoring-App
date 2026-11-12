@@ -10,7 +10,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session, aliased
 
 from .auth import AuthContext
-from .models import CompetitionTeam, LabelingJob, NativeJobBinding, Person
+from .models import CompetitionTeam, LabelingJob, NativeJobBinding, Person, ReviewSample
 
 
 class JobCursor(BaseModel):
@@ -66,7 +66,18 @@ def read_job_page(db: Session, ctx: AuthContext, event_id: str, *,
     has_more = len(rows) > limit
     rows = rows[:limit]
     submissions = defaultdict(list)
+    validated_counts: dict[str, int] = {}
     if rows:
+        # One grouped query for the whole requested page (no per-job scans).
+        # A frame accepted in an earlier correction round remains accepted;
+        # subsequent native jobs contain only the still-incomplete images.
+        validated_counts = dict(db.execute(select(
+            ReviewSample.job_id, func.count(ReviewSample.id),
+        ).where(
+            ReviewSample.event_id == event_id,
+            ReviewSample.job_id.in_([row[0].id for row in rows]),
+            ReviewSample.validated_complete.is_(True),
+        ).group_by(ReviewSample.job_id)).all())
         bindings = select(NativeJobBinding, Person.name).outerjoin(Person, and_(
             Person.id == NativeJobBinding.person_id, Person.event_id == event_id,
         )).where(NativeJobBinding.event_id == event_id,
@@ -88,6 +99,8 @@ def read_job_page(db: Session, ctx: AuthContext, event_id: str, *,
         "review_status": job.review_status, "correction_round": job.correction_round,
         "annotation_snapshot_round": job.annotation_snapshot_round,
         "annotation_snapshot_frames": job.annotation_snapshot_frames,
+        "structurally_accepted_frames": validated_counts.get(job.id, 0),
+        "structurally_pending_frames": max(0, job.frame_count - validated_counts.get(job.id, 0)),
         "native_submissions": submissions[job.id], "assigned_monitor_id": job.assigned_monitor_id,
         "started_at": job.started_at, "submitted_at": job.submitted_at, "completed_at": job.completed_at,
     } for job, team_name, assignee_name in rows]
