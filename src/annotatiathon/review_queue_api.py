@@ -118,20 +118,31 @@ def claim(db, event_id, reviewer_id):
     now = epoch()
     rows = ReviewSample
     scope = rows.event_id == event_id
+    current_submission = (
+        rows.correction_round == LabelingJob.correction_round,
+        LabelingJob.status.in_(("on_review", "completed")),
+    )
     active = (rows.completed_at.is_(None), rows.expires_at > now)
-    existing = db.scalar(select(rows).where(scope, rows.reviewer_id == reviewer_id, *active))
+    existing = db.scalar(select(rows).join(
+        LabelingJob, LabelingJob.id == rows.job_id,
+    ).where(scope, *current_submission, rows.reviewer_id == reviewer_id, *active))
     if existing:
         return claim_view(db, existing)
     available = rows.completed_at.is_(None) & or_(rows.expires_at.is_(None), rows.expires_at <= now)
     load = func.sum(case((or_(rows.completed_at.is_not(None), rows.expires_at > now), 1), else_=0))
-    teams = db.execute(select(rows.team_id, load.label("load")).where(scope)
-                       .group_by(rows.team_id).having(func.sum(case((available, 1), else_=0)) > 0)
-                       .order_by(load)).all()
+    teams = db.execute(select(rows.team_id, load.label("load")).join(
+        LabelingJob, LabelingJob.id == rows.job_id,
+    ).where(scope, *current_submission)
+        .group_by(rows.team_id)
+        .having(func.sum(case((available, 1), else_=0)) > 0)
+        .order_by(load)).all()
     if not teams:
         return None
     team_id = choice([row.team_id for row in teams if row.load == teams[0].load])
     pivot = identifier()
-    query = select(rows).where(scope, rows.team_id == team_id, available)
+    query = select(rows).join(
+        LabelingJob, LabelingJob.id == rows.job_id,
+    ).where(scope, *current_submission, rows.team_id == team_id, available)
     sample = db.scalar(query.where(rows.random_key >= pivot).order_by(rows.random_key).limit(1))
     if sample is None:
         sample = db.scalar(query.order_by(rows.random_key).limit(1))
@@ -148,6 +159,10 @@ def owned(db, event_id, review_id, reviewer_id, token=None, *, allow_expired=Fal
     sample = db.get(ReviewSample, review_id)
     if sample is None or sample.event_id != event_id:
         raise HTTPException(404, "Review sample not found.")
+    job = db.get(LabelingJob, sample.job_id)
+    if (job is None or sample.correction_round != job.correction_round
+            or job.status not in {"on_review", "completed"}):
+        raise HTTPException(409, "This frame belongs to an incomplete or superseded submission.")
     if sample.reviewer_id != reviewer_id or (token is not None and sample.claim_token != str(token)):
         raise HTTPException(409, "Review is not owned by this claim.")
     if not allow_expired and sample.completed_at is None and (sample.expires_at or 0) <= epoch():
@@ -257,7 +272,10 @@ def status(ctx: AuthContext = Depends(read_access), db: Session = Depends(get_db
     for team, name, key, count in db.execute(
         select(ReviewSample.team_id, CompetitionTeam.name, state, func.count())
         .join(CompetitionTeam, CompetitionTeam.id == ReviewSample.team_id)
-        .where(ReviewSample.event_id == event.id)
+        .join(LabelingJob, LabelingJob.id == ReviewSample.job_id)
+        .where(ReviewSample.event_id == event.id,
+               ReviewSample.correction_round == LabelingJob.correction_round,
+               LabelingJob.status.in_(("on_review", "completed")))
         .group_by(ReviewSample.team_id, CompetitionTeam.name, state)
     ):
         counts[key] += count
