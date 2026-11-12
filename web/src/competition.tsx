@@ -546,7 +546,7 @@ export function CompetitionScreen({auth,view="progress"}:{
         </select></label>
       </div>
       <p className="muted small">{planMode==="shared_30_v1"?
-        "Allocate 30 consecutive frames per job across the ordered videos. A video's leftover frames are followed by the next video's opening frames. Only the final dataset job may have fewer than 30 frames. The next job releases after a complete submission.":
+        "Allocate 30 frames in uploaded dataset order across the ordered videos. The uploaded frames in each video are sorted by frame number, even if sampled. Only the final dataset job may have fewer than 30 frames. The next job releases after a complete submission.":
         "Assign whole videos to eligible teams. Each video goes to one annotator across the event."}</p>
       {planMode==="legacy"&&<div className="form-grid triple">
         <label>Maximum jobs per team<input type="number" min={1} max={100}
@@ -558,18 +558,18 @@ export function CompetitionScreen({auth,view="progress"}:{
       <p className="muted small">Supervisely mirror: {mirror?.state||"Unknown"} · {mirror?.uploaded_frames||0}/{mirror?.total_frames||0} frames uploaded. {mirror?.ready_for_automatic_jobs?"Upload verified.":"Wait until the complete dataset is mirrored before launching."}</p>
       {planMode==="shared_30_v1"&&dataset&&<div className="settings-note">
         <div className="panel-heading">
-          <strong>30-frame source verification</strong>
+          <strong>Imported frame order</strong>
           <button className="btn secondary" type="button" disabled={busy}
-            onClick={()=>void checkReadiness()}><RefreshCw size={14}/> Check source frames</button>
+            onClick={()=>void checkReadiness()}><RefreshCw size={14}/> Check imported frames</button>
         </div>
         {readinessError&&<p className="alert danger" role="alert">{readinessError}</p>}
-        {!readiness&&!readinessError&&<p>Checking dataset source-frame identities…</p>}
+        {!readiness&&!readinessError&&<p>Checking imported frame identities and order…</p>}
         {readiness&&<div>
           <p>{readiness.source_frames} frames · {readiness.source_videos} source videos ·
             {" "}{readiness.primary_jobs} primary blocks (up to 30 frames each).</p>
           <p>{readiness.source_ready?
-            "Source frame identities and full-density coverage verified.":
-            "Automatic distribution is blocked until the source issues below are corrected."}
+            "Imported frame order verified (sampled source videos are supported).":
+            "Automatic distribution is blocked until the imported-frame issues below are corrected."}
             {" "}{readiness.mirror_ready?
               "Supervisely upload is complete.":"Supervisely upload is not yet complete."}</p>
           {!readiness.source_ready&&<ul>
