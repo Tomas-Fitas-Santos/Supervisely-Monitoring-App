@@ -5,6 +5,7 @@ from sqlalchemy import select
 from test_dataset_workflows import act, ingest, teams
 
 from annotatiathon.models import (
+    DEFAULT_EVENT_ID,
     CompetitionTeam,
     Event,
     LabelingJob,
@@ -96,8 +97,17 @@ def test_shared_monitor_visibility_never_crosses_event_boundary(dataset_ctx):
         "password": "EventMonitorPassword123!",
     })
     assert login.status_code == 200
+    monitor_csrf = login.json()["csrf_token"]
+    # Login defaults to the most recently created active event. Explicitly
+    # switch to the original event to verify that the other event stays hidden.
+    assert act(http, monitor_csrf, f"/events/{DEFAULT_EVENT_ID}/select").status_code == 200
     jobs = http.get("/api/v1/labeling/jobs?limit=2000")
     assert jobs.status_code == 200
     assert "other-event-job" not in {row["id"] for row in jobs.json()["items"]}
     assert http.get("/api/v1/labeling/jobs/other-event-job/media").status_code == 404
     assert http.get("/api/v1/review/jobs/other-event-job").status_code == 404
+    # Switching events changes the authorized scope, never mixing both.
+    assert act(http, monitor_csrf, "/events/other-event/select").status_code == 200
+    alternate = http.get("/api/v1/labeling/jobs?limit=2000")
+    assert alternate.status_code == 200
+    assert {row["id"] for row in alternate.json()["items"]} == {"other-event-job"}
