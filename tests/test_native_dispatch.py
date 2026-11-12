@@ -1334,3 +1334,80 @@ def test_partial_submission_accepts_frames_once_and_reissues_only_missing(config
             ReviewSample.job_id == job_id
         )))) == 2
 
+
+
+def test_retry_old_users_info_404_correction_recovers_original_complete_frames(configured):
+    """Upgrading a live attention operation should not return all 30 frames."""
+    from annotatiathon.native_operations_api import queue_publish
+
+    http, maker, csrf, _plan_id, sdk = configured
+    with maker.begin() as db:
+        job = db.scalar(select(LabelingJob).where(LabelingJob.sequence == 1))
+        person = db.scalar(select(Person).where(Person.team_id == job.team_id))
+        job.assignee_person_id = person.id
+        job.release_mode = "shared_primary"
+        db.get(LabelingPlan, job.plan_id).status = "running"
+        db.add(WorkPacket(event_id=job.event_id, job_id=job.id,
+                          person_id=person.id))
+        db.flush()
+        queue_publish(db, job)
+        jid, original_ids = job.id, list(job.media_ids)
+    with maker() as db:
+        assert process_once(db, sdk, db.get(SuperviselyConfig, 1))["status"] == "done"
+        mapped = {row.media_id: row.native_image_id for row in db.scalars(
+            select(NativeMediaInstance).where(NativeMediaInstance.job_id == jid)
+        )}
+    original_native = sdk.jobs[-1]
+    original_native.status = "on_review"
+    original_native.finished_images_count = 1
+    original_get_annotations = sdk.labeling_job.get_annotations
+
+    def partial_annotations(job_id, **kwargs):
+        output = []
+        for info, annotation in zip(
+            kwargs["image_infos"], original_get_annotations(job_id, **kwargs)
+        ):
+            data = annotation.to_json()
+            if info.id == mapped[original_ids[-1]]:
+                data["objects"] = data["objects"][:1]
+            output.append(Obj(to_json=lambda value=data: value))
+        return output
+
+    sdk.labeling_job.get_annotations = partial_annotations
+    with maker.begin() as db:
+        job = db.get(LabelingJob, jid)
+        job.status = "needs_correction"
+        job.review_status = "returned_incomplete"
+        job.correction_round = 1
+        old_op = NativeOperation(
+            event_id=job.event_id, kind="restart_job", target_id=jid,
+            status="attention", error_code="native_correction_uncertain",
+            payload=None,
+        )
+        db.add(old_op)
+        db.flush()
+        opid = old_op.id
+    retried = call(http, csrf, f"/native/operations/{opid}/retry")
+    assert retried.status_code == 200, retried.text
+    with maker() as db:
+        corrected = process_correction_once(
+            db, sdk, db.get(SuperviselyConfig, 1)
+        )
+        assert corrected["status"] == "done", corrected
+        accepted = list(db.scalars(select(ReviewSample).where(
+            ReviewSample.job_id == jid,
+        )))
+        assert len(accepted) == 1
+        assert accepted[0].media_id == original_ids[0]
+        assert accepted[0].correction_round == 0
+        assert accepted[0].validated_complete
+        binding = db.scalar(select(NativeJobBinding).where(
+            NativeJobBinding.job_id == jid,
+        ))
+        followup = next(x for x in sdk.jobs if x.id == binding.native_job_id)
+        assert followup.images_count == 1
+        assert followup.image_ids == [mapped[original_ids[-1]]]
+        assert followup.name.endswith(" (Incomplete #1)")
+        assert len(list(db.scalars(select(LabelingJob).where(
+            LabelingJob.id == jid,
+        )))) == 1
