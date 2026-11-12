@@ -463,7 +463,7 @@ def simulate():
                 original_index = (image_id - 100000) // FRAMES
                 missing = (
                     PHASE == "turnaround" and 0 <= original_index < ANNOTATORS
-                    and original_index / ANNOTATORS < INCOMPLETE_RATE
+                    and (original_index * 137) % ANNOTATORS < round(INCOMPLETE_RATE * ANNOTATORS)
                     and (image_id - 100000) % FRAMES == 0
                 )
                 objects = annotation(image_id)["objects"]
