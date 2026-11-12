@@ -94,6 +94,60 @@ scan. If allocation fails, the status scheduler can retry.
   hardware headroom; PostgreSQL lock waits and memory peaks are reported.
 - No supervised bulk load test writes to the real Supervisely service.
 
+## Capacity sizing: two automated scenarios
+
+Use the isolated benchmark to choose worker counts for **each stage**, not
+just the total API latency. The test modes never contact the real Supervisely
+API, and the live environment is not scaled.
+
+* `-Phase initial`: activate and enqueue **300 new jobs together**. Time
+  from durable queue entry to the first, 150th, 290th, and 300th confirmed
+  native job. No monitor approval is involved. This isolates publisher
+  capacity and includes confirmation overhead. If the 300th job is still
+  missing, the report states the outstanding count; extend `-Seconds`.
+* `-Phase turnaround`: start with 300 jobs submitted in a burst, execute
+  production completeness validation on all 30 frames/job, automatically
+  return incomplete jobs to the **same participant**, and enqueue new
+  30-frame blocks for fully completed jobs. Default `-IncompleteRate 0.20`
+  makes 60/300 original jobs each lack one head landmark. Such frames
+  must never reach the review pool. No synthetic monitor accepts jobs.
+  Output counts validated review-ready frames, correction publications,
+  follow-up publications and any remaining work.
+
+The synthetic fixture intentionally reuses image content across many
+independent assignments for throughput measurement. It is **not** the
+competition's unique-frame allocation/fairness test. Publishing and API
+latency use simulated Supervisely replies; `-AssumedPublishMs` is a
+model assumption until calibrated against bounded live tests.
+
+Compare dimensions independently rather than testing every combination:
+
+```powershell
+# 300-job release: choose 1, then 2, then 3 publishing workers.
+.\scripts\run_worker_sweep.ps1 -Phase initial -Workers 1,2,3 -Validators 2 -Seconds 900 -Scenario burst
+
+# Full turnaround, including 20% incomplete submissions.
+.\scripts\run_worker_sweep.ps1 -Phase turnaround -Workers 1,2,3 -Validators 2 -Seconds 480 -Scenario burst -IncompleteRate 0.20
+
+# Isolate validation capacity while holding other roles fixed.
+.\scripts\run_worker_sweep.ps1 -Phase turnaround -Workers 2 -Validators 1 -Seconds 480
+.\scripts\run_worker_sweep.ps1 -Phase turnaround -Workers 2 -Validators 4 -Seconds 480
+
+# Isolate correction and status scheduler capacity separately.
+.\scripts\run_worker_sweep.ps1 -Phase turnaround -Workers 2 -Validators 2 -Correctors 2 -Seconds 480
+.\scripts\run_worker_sweep.ps1 -Phase turnaround -Workers 2 -Validators 2 -StatusWorkers 2 -Seconds 480
+```
+
+Review `summary.json` for `publication_cohort`,
+`submission_detection`, and `worker_timing.stage_lags`. These
+distinguish detection, durable queue wait, validation execution,
+incomplete-job correction queue/publishing, and complete-to-next-job
+turnaround. Each isolated run records actual running worker replica counts.
+To choose production roles require a completed 300-job cohort, negligible
+pending work, zero unexpected errors/duplicates, and acceptable p95/p99
+participant wait time under normal and slow/failure latency profiles.
+Do not infer a production staffing number from an unfinished cohort.
+
 ## Running the automated benchmark
 
 From repository root on Windows with Docker Desktop Linux engine running:
