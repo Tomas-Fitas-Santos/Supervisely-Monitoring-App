@@ -28,8 +28,10 @@ from annotatiathon.models import (
     NativeOperation,
     NativeSourceMedia,
     Person,
+    ReviewSample,
     StaffAccount,
     SuperviselyConfig,
+    WorkPacket,
     epoch,
 )
 from annotatiathon.native_media_pool import enqueue_mirror
@@ -1213,3 +1215,122 @@ def test_queue_priority_prefers_manual_high_priority(configured):
         assert done["status"] == "done"
         op = db.get(NativeOperation, done["operation_id"])
         assert op.target_id == higher_id
+
+
+def test_partial_submission_accepts_frames_once_and_reissues_only_missing(configured):
+    """Partial native retries never create new logical competition jobs."""
+    from annotatiathon.native_operations_api import queue_publish
+
+    _http, maker, _csrf, _plan_id, sdk = configured
+    with maker.begin() as db:
+        job = db.scalar(select(LabelingJob).where(LabelingJob.sequence == 1))
+        member = db.scalar(select(Person).where(Person.team_id == job.team_id))
+        job.assignee_person_id = member.id
+        job.release_mode = "shared_primary"
+        db.get(LabelingPlan, job.plan_id).status = "running"
+        db.add(WorkPacket(event_id=job.event_id, job_id=job.id,
+                          person_id=member.id))
+        db.flush()
+        queue_publish(db, job)
+        job_id, source_ids = job.id, list(job.media_ids)
+    with maker() as db:
+        assert process_once(db, sdk, db.get(SuperviselyConfig, 1))["status"] == "done"
+        mapped = {m.media_id: m.native_image_id for m in db.scalars(
+            select(NativeMediaInstance).where(NativeMediaInstance.job_id == job_id)
+        )}
+        assert set(mapped) == set(source_ids)
+    original_native = sdk.jobs[-1]
+    first_native_id = original_native.id
+    full_annotations = sdk.labeling_job.get_annotations
+
+    def partial_annotations(job_id, **kwargs):
+        annotations = full_annotations(job_id, **kwargs)
+        result = []
+        for image_info, annotation in zip(kwargs["image_infos"], annotations):
+            data = annotation.to_json()
+            if image_info.id == mapped[source_ids[1]]:
+                data["objects"] = data["objects"][:1]
+            result.append(Obj(to_json=lambda value=data: value))
+        return result
+
+    sdk.labeling_job.get_annotations = partial_annotations
+
+    def forbidden_restart(*args, **kwargs):
+        raise AssertionError("SDK restart must never be invoked for single-user subsets")
+
+    sdk.labeling_job.restart = forbidden_restart
+    original_native.status = "on_review"
+    original_native.finished_images_count = 1
+    with maker() as db:
+        assert sync_all(db, sdk, db.get(SuperviselyConfig, 1))["changed_jobs"] == 1
+        job = db.get(LabelingJob, job_id)
+        assert job.status == "needs_correction"
+        assert job.correction_round == 1
+        assert job.review_status == "returned_incomplete"
+        assert db.get(WorkPacket, job_id).submitted_at is None
+        accepted = list(db.scalars(select(ReviewSample).where(
+            ReviewSample.job_id == job_id
+        )))
+        assert len(accepted) == 1
+        assert accepted[0].media_id == source_ids[0]
+        assert accepted[0].validated_complete
+        assert accepted[0].completed_at is None
+        operation = db.scalar(select(NativeOperation).where(
+            NativeOperation.kind == "restart_job",
+            NativeOperation.target_id == job_id,
+        ))
+        assert operation.status == "pending"
+        assert operation.payload["pending_media_ids"] == source_ids[1:]
+        assert operation.payload["source_round"] == 0
+
+        # An accepted frame is visible to reviewers even when the logical
+        # job still has an outstanding correction round.
+        coverage = _http.get("/api/v1/rankings/teams").json()["items"]
+        member_team = next(x for x in coverage if x["team_id"] == job.team_id)
+        assert member_team["available_frames"] == 1
+
+        correction = process_correction_once(db, sdk, db.get(SuperviselyConfig, 1))
+        assert correction["status"] == "done", correction
+        job = db.get(LabelingJob, job_id)
+        assert job.status == "in_progress"
+        assert job.correction_round == 1
+        assert db.get(WorkPacket, job_id).submitted_at is None
+        binding = db.scalar(select(NativeJobBinding).where(
+            NativeJobBinding.job_id == job_id,
+        ))
+        assert binding.native_job_id != first_native_id
+        assert len(list(db.scalars(select(NativeJobRevision).where(
+            NativeJobRevision.job_id == job_id
+        )))) == 1
+        corrected_native = next(n for n in sdk.jobs if n.id == binding.native_job_id)
+        assert corrected_native.images_count == 1
+        assert corrected_native.image_ids == [mapped[source_ids[1]]]
+        assert corrected_native.name.endswith(" (Incomplete #1)")
+
+    sdk.labeling_job.get_annotations = full_annotations
+    corrected_native.status = "on_review"
+    corrected_native.finished_images_count = 1
+    with maker() as db:
+        sync_all(db, sdk, db.get(SuperviselyConfig, 1))
+        job = db.get(LabelingJob, job_id)
+        assert job.status == "on_review"
+        assert db.get(WorkPacket, job_id).submitted_at is not None
+        accepted = list(db.scalars(select(ReviewSample).where(
+            ReviewSample.job_id == job_id
+        )))
+        assert len(accepted) == 2
+        assert set(a.media_id for a in accepted) == set(source_ids)
+        assert all(a.validated_complete for a in accepted)
+        assert {a.correction_round for a in accepted} == {0, 1}
+        assert len(list(db.scalars(select(LabelingJob).where(
+            LabelingJob.id == job_id,
+        )))) == 1
+        status = _http.get("/api/v1/review-queue/status")
+        assert status.status_code == 200
+        assert status.json()["pending"] >= 2
+    with maker() as db:
+        sync_all(db, sdk, db.get(SuperviselyConfig, 1))
+        assert len(list(db.scalars(select(ReviewSample).where(
+            ReviewSample.job_id == job_id
+        )))) == 2
+
