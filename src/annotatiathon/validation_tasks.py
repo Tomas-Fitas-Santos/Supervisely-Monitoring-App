@@ -217,6 +217,7 @@ def process_validation_once(db: Session, api, config) -> dict | None:
     thread.start()
     problem = None
     completed = False
+    next_assignment_id = None
     try:
         from .native_worker import capture_job_annotations
         job = db.get(LabelingJob, job_id)
@@ -237,6 +238,21 @@ def process_validation_once(db: Session, api, config) -> dict | None:
         capture_job_annotations(db, api, job)
         if lease_lost.is_set():
             raise RuntimeError("validation_lease_lost")
+        # Finish validation and publish-queue insertion in ONE transaction.
+        # If this allocation fails, roll back the accepted sample writes and
+        # retry safely from the immutable per-round annotation manifest.
+        if job.status == "on_review" and job.release_mode in {
+            "shared_primary", "shared_repeat",
+        } and job.assignee_person_id:
+            plan = db.get(LabelingPlan, job.plan_id)
+            if plan and plan.status == "running":
+                from .work_queue import claim_primary_block
+                next_job = claim_primary_block(
+                    db, plan.id, job.team_id, job.assignee_person_id,
+                    include_repeats=False,
+                )
+                if next_job is not None:
+                    next_assignment_id = next_job.id
         completed = True
     except Exception as exc:  # noqa: BLE001 - retry safe read
         db.rollback()
@@ -257,26 +273,8 @@ def process_validation_once(db: Session, api, config) -> dict | None:
         milestone("validation_failed", job_id=job_id, operation_id=task_id)
         return {"operation_id": task_id, "status": "retry_or_attention"}
     milestone("validation_completed", job_id=job_id, operation_id=task_id)
-    # Validate + queue follow-up in the same worker invocation. This avoids
-    # waiting for a complete status scan before assigning the next block.
-    job = db.get(LabelingJob, job_id)
-    if job is not None and job.status == "on_review" and job.release_mode in {
-        "shared_primary", "shared_repeat",
-    }:
-        plan = db.get(LabelingPlan, job.plan_id)
-        if plan and plan.status == "running" and job.assignee_person_id:
-            from .work_queue import claim_primary_block
-            try:
-                claimed = claim_primary_block(
-                    db, plan.id, job.team_id, job.assignee_person_id,
-                    include_repeats=False,
-                )
-                db.commit()
-                if claimed is not None:
-                    milestone("publish_queued", job_id=claimed.id)
-                    return {"operation_id": task_id, "status": "done",
-                            "next_assignment_queued": True}
-            except Exception:  # scheduler will retry
-                db.rollback()
-                logger.exception("Next-job allocation deferred for job %s", job.id)
+    if next_assignment_id is not None:
+        milestone("publish_queued", job_id=next_assignment_id)
+        return {"operation_id": task_id, "status": "done",
+                "next_assignment_queued": True}
     return {"operation_id": task_id, "status": "done"}
