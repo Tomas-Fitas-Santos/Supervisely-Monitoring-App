@@ -9,7 +9,11 @@ from sqlalchemy.pool import StaticPool
 
 from annotatiathon import manage
 from annotatiathon.models import (
-    ApprovedStaffEmail, AuditEvent, Base, StaffAccount, StaffSession,
+    ApprovedStaffEmail,
+    AuditEvent,
+    Base,
+    StaffAccount,
+    StaffSession,
 )
 from annotatiathon.security import password_hash, password_matches
 
