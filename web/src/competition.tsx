@@ -20,6 +20,7 @@ type Job={id:string;plan_id:string;team_id:string;team_name:string;
   sequence:number;frame_count:number;video_count:number;status:string;
   review_status:string;correction_round:number;
   annotation_snapshot_round:number|null;annotation_snapshot_frames:number|null;
+  structurally_accepted_frames:number;structurally_pending_frames:number;
   morphology_counts:Record<string,number>;
   assignee_person_id:string|null;assignee_name:string|null;release_mode:string;
   native_submissions:Binding[]};
@@ -382,6 +383,9 @@ export function CompetitionScreen({auth,view="progress"}:{
           className={"job-list-row "+(chosen===job.id?"selected":"")}>
           <div><strong>{job.team_name} · {job.assignee_name||"Legacy shared assignment"}</strong>
             <span>{job.video_count===1?"1 video":job.video_count+" videos"} · {job.frame_count} frames · #{job.sequence}</span>
+            {job.structurally_accepted_frames>0&&
+              <span>{job.structurally_accepted_frames} structurally complete ·
+                {" "+job.structurally_pending_frames} awaiting completion</span>}
           </div><span className={"dataset-status "+job.status}>{job.release_mode==="manual_hold"?
             "held":job.status.replaceAll("_"," ")}</span>
         </button>)}
@@ -395,7 +399,17 @@ export function CompetitionScreen({auth,view="progress"}:{
             <div><span>Status</span><strong>{selectedJob.release_mode==="manual_hold"?"Saved, not published":selectedJob.status.replaceAll("_"," ")}</strong></div>
             <div><span>Media</span><strong>{selectedJob.video_count} video(s) · {selectedJob.frame_count} frames</strong></div>
             <div><span>Monitor decision</span><strong>{selectedJob.review_status.replaceAll("_"," ")}</strong></div>
+            <div><span>Structurally complete</span><strong>
+              {selectedJob.structurally_accepted_frames} / {selectedJob.frame_count} frames</strong></div>
+            <div><span>Incomplete / awaiting submission</span><strong>
+              {selectedJob.structurally_pending_frames} frames</strong></div>
+            <div><span>Correction rounds</span><strong>
+              {selectedJob.correction_round} · same Nightjar job</strong></div>
           </div>
+          {selectedJob.review_status==="returned_incomplete"&&
+            <p className="muted small">Complete images are already in the monitor review pool.
+              The worker sends only the remaining images to the original annotator,
+              with “Incomplete” in the Supervisely title. All rounds share this same competition job.</p>}
           {selectedJob.native_submissions?.map(binding=><div className="job-plan-row" key={binding.native_job_id}>
             <div><strong>{binding.person_name}</strong><span>Supervisely job #{binding.native_job_id}</span></div>
             <span className={"dataset-status "+binding.native_status}>
@@ -423,7 +437,12 @@ export function CompetitionScreen({auth,view="progress"}:{
         </>}
         <div className="native-operations">
           <h4>Supervisely synchronization</h4>
-          <p className="muted small">The live Docker worker performs uploads and checks submitted jobs every 12 seconds. Job creation and submission updates are not performed by this browser.</p>
+          <p className="muted small">Annotators submit jobs using Supervisely’s Submit/Finish workflow.
+            The worker checks submitted annotation JSON frame by frame (one bird rectangle and
+            exactly one visible or occluded point for each eye, beak and crown).
+            Complete frames enter monitor review; the remaining images become an
+            “Incomplete” correction job for the same annotator. Correction rounds do
+            not create additional Nightjar competition jobs. The worker polls approximately every 12 seconds.</p>
           <div className="morph-counts">
             <span>Native jobs: {native?.native_bindings??0}</span>
             <span>Last poll: {native?.last_sync?new Date(native.last_sync*1000).toLocaleString():"Not yet"}</span>
