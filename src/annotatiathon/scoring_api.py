@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from .auth import AuthContext, requires
 from .db import get_db
 from .events_api import current_event
-from .models import AuditEvent, CompetitionTeam, ReviewRubric, ReviewSample
+from .models import AuditEvent, CompetitionTeam, LabelingJob, ReviewRubric, ReviewSample
 
 router = APIRouter(prefix="/api/v1", tags=["review scoring"])
 
@@ -67,8 +67,10 @@ def rankings(ctx: AuthContext = Depends(requires("organiser", "monitor")),
                                         .where(CompetitionTeam.event_id == event.id))
     }
     for team_id, decision in db.execute(select(ReviewSample.team_id, ReviewSample.decision)
+                                        .join(LabelingJob, LabelingJob.id == ReviewSample.job_id)
                                         .where(ReviewSample.event_id == event.id,
-                                               ReviewSample.correction_round == 0)):
+                                               ReviewSample.correction_round ==
+                                               LabelingJob.correction_round)):
         row = teams[team_id]
         row["available_frames"] += 1
         if decision is not None:
@@ -99,4 +101,5 @@ def rankings(ctx: AuthContext = Depends(requires("organiser", "monitor")),
         "items": items,
         "rubric_version": current_rubric.version if current_rubric else 0,
         "weighted_scoring_policy": "Current rubric applies uniformly to all completed verdicts",
+        "submission_policy": "Only the latest submitted correction round per job counts after review",
     }
