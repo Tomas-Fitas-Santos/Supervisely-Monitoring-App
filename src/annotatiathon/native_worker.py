@@ -917,12 +917,19 @@ def sync_all(db: Session, api, config: SuperviselyConfig, *,
     # Limit the work per poll so job-status and publishing checks remain responsive.
     snapshots = 0
     failures = 0
+    # Legacy single-worker mode preserves the five expensive remote snapshots
+    # per cycle. A separate status scheduler only ENQUEUES cheap SQL tasks,
+    # so it can schedule all 300 burst submissions without 60 poll cycles.
+    task_limit = 600 if not capture_snapshots else 5
+    scan_limit = 300 if not capture_snapshots else 10
     for plan in event_plans:
-        if snapshots >= 5:
+        if snapshots >= task_limit:
             break
-        candidates = next_annotation_snapshot_candidates(db, plan)
+        candidates = next_annotation_snapshot_candidates(
+            db, plan, limit=scan_limit,
+        )
         for candidate in candidates:
-            if snapshots >= 5:
+            if snapshots >= task_limit:
                 break
             _annotation_snapshot_cursor[plan.id] = candidate.id
             try:
