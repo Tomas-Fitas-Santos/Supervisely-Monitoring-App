@@ -321,6 +321,35 @@ def test_sparse_full_mode_frames_import_but_are_not_full_density(dataset_ctx):
         "dataset_id": dataset_id, "mode": "shared_30_v1",
     })
     assert planned.status_code == 422
+    assert "ColumbaPalumbus/clip" in planned.json()["detail"]
+    assert "frame density" in planned.json()["detail"]
+
+
+def test_unlinked_standalone_images_get_specific_shared_queue_error(dataset_ctx):
+    client, _maker, csrf = dataset_ctx
+    output = io.BytesIO()
+    Image.new("RGB", (32, 24), "green").save(output, format="JPEG")
+    data = output.getvalue()
+    created = act(client, csrf, "/datasets/uploads", {
+        "name": "Individual images", "upload_kind": "folder",
+        "extraction_policy": "all_frames",
+    })
+    dataset_id = created.json()["id"]
+    image_path = "ColumbaPalumbus/standalone.jpg"
+    assert client.put(
+        f"/api/v1/datasets/uploads/{dataset_id}/chunk",
+        params={"relative_path": image_path, "offset": 0, "total": len(data)},
+        content=data, headers={"X-CSRF-Token": csrf},
+    ).status_code == 200
+    assert act(client, csrf, f"/datasets/{dataset_id}/finalize").status_code == 200
+    teams(client, csrf)
+    planned = act(client, csrf, "/labeling/plans", {
+        "dataset_id": dataset_id, "mode": "shared_30_v1",
+    })
+    assert planned.status_code == 422
+    assert "not linked to a source video" in planned.json()["detail"]
+    assert "video-name/frame_000001.jpg" in planned.json()["detail"]
+
 
 def test_manifest_invalid_time_base_is_a_validation_error():
     from pydantic import ValidationError
