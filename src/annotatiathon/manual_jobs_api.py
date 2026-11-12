@@ -79,6 +79,29 @@ def manual_options(
     existing = list(db.scalars(select(LabelingJob).where(
         LabelingJob.event_id == event.id, LabelingJob.dataset_id == ds.id,
     )))
+    reserved_ids = {asset_id for job in existing for asset_id in job.media_ids}
+    reserved_ids.update(asset_id for block in db.scalars(
+        select(WorkBlock).join(LabelingPlan, LabelingPlan.id == WorkBlock.plan_id)
+        .where(WorkBlock.event_id == event.id,
+               LabelingPlan.dataset_id == ds.id,
+               LabelingPlan.status.in_(("planned", "approved", "running", "paused")))
+    ) for asset_id in block.media_ids)
+    blocks = []
+    for group, frames in sorted(videos.items()):
+        for offset in range(0, len(frames), 30):
+            window = frames[offset:offset + 30]
+            if len(window) != 30 or any(
+                frame.frame_index is None or frame.frame_index != window[0].frame_index + i
+                for i, frame in enumerate(window)
+            ):
+                continue
+            blocks.append({
+                "video_group": group, "block_ordinal": offset // 30 + 1,
+                "first_frame": window[0].frame_index,
+                "last_frame": window[-1].frame_index,
+                "frames": 30, "morphology": window[0].morphology,
+                "reserved": any(frame.id in reserved_ids for frame in window),
+            })
     assignments = []
     for job in existing:
         for group, frames in videos.items():
@@ -101,6 +124,7 @@ def manual_options(
              "morphology": frames[0].morphology}
             for group, frames in sorted(videos.items())
         ],
+        "blocks": blocks,
         "existing": assignments,
     }
 
@@ -110,6 +134,7 @@ class ManualAssignment(BaseModel):
     team_id: str
     assignee_person_id: str
     video_group: str = Field(min_length=1, max_length=500)
+    block_ordinal: int | None = Field(default=None, ge=1)
 
 
 class ManualJobRequest(BaseModel):
@@ -161,11 +186,32 @@ def create_manual_jobs(
         for group, frames in videos.items():
             if frames and frames[0].id in frame_ids:
                 used.add(group)
+    used_ids = {mid for job in all_existing if job.dataset_id == dataset.id
+                for mid in job.media_ids}
+    used_ids.update(mid for block in db.scalars(
+        select(WorkBlock).join(LabelingPlan, LabelingPlan.id == WorkBlock.plan_id)
+        .where(WorkBlock.event_id == event.id,
+               LabelingPlan.dataset_id == dataset.id,
+               LabelingPlan.status.in_(("planned", "approved", "running", "paused")))
+    ) for mid in block.media_ids)
     validated: list[tuple[ManualAssignment, list[MediaAsset]]] = []
     for assignment in payload.assignments:
-        frames = videos.get(assignment.video_group)
-        if not frames:
+        source = videos.get(assignment.video_group)
+        if not source:
             raise HTTPException(status_code=422, detail="Selected video is not in this dataset.")
+        if assignment.block_ordinal is None:
+            # Historical whole-video API requests remain readable and valid.
+            frames = source
+        else:
+            offset = (assignment.block_ordinal - 1) * 30
+            frames = source[offset:offset + 30]
+            if len(frames) != 30 or any(
+                frame.frame_index is None or frame.frame_index != frames[0].frame_index + i
+                for i, frame in enumerate(frames)
+            ):
+                raise HTTPException(
+                    status_code=422, detail="Choose an existing consecutive 30-frame segment.",
+                )
         members = teams.get(assignment.team_id, [])
         if len(members) != 2:
             raise HTTPException(status_code=422, detail="Selected team needs exactly two members.")
@@ -177,13 +223,16 @@ def create_manual_jobs(
                 status_code=409,
                 detail="The selected annotator must have a verified Supervisely account.",
             )
-        if assignment.video_group in used and not payload.allow_duplicates:
+        conflict = (assignment.video_group in used if assignment.block_ordinal is None
+                    else any(frame.id in used_ids for frame in frames))
+        if conflict and not payload.allow_duplicates:
             raise HTTPException(
                 status_code=409,
-                detail="This video is already assigned. Enable Allow duplicate "
-                       "assignments explicitly to repeat a video manually.",
+                detail="This video segment is already reserved. Explicitly allow "
+                       "duplicates to repeat an existing segment.",
             )
         used.add(assignment.video_group)
+        used_ids.update(frame.id for frame in frames)
         validated.append((assignment, frames))
     plan = db.scalar(select(LabelingPlan).where(
         LabelingPlan.event_id == event.id,
