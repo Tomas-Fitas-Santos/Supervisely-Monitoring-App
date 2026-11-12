@@ -183,11 +183,13 @@ def owned(db, event_id, review_id, reviewer_id, token=None, *, allow_expired=Fal
     if sample is None or sample.event_id != event_id:
         raise HTTPException(404, "Review sample not found.")
     job = db.get(LabelingJob, sample.job_id)
-    if (job is None or (
-        not sample.validated_complete
-        and (sample.correction_round != job.correction_round
-             or job.status not in {"on_review", "completed"})
-    )):
+    if (job is None
+            or (sample.validated_complete and (
+                job.status not in {"on_review", "completed"}
+                or job.annotation_snapshot_frames != job.frame_count))
+            or (not sample.validated_complete and (
+                sample.correction_round != job.correction_round
+                or job.status not in {"on_review", "completed"}))):
         raise HTTPException(409, "This frame belongs to an incomplete or superseded submission.")
     if sample.reviewer_id != reviewer_id or (token is not None and sample.claim_token != str(token)):
         raise HTTPException(409, "Review is not owned by this claim.")
