@@ -575,7 +575,8 @@ def queue_automatic_incomplete_return(
     return job.status
 
 
-def sync_one(db: Session, api, job: LabelingJob) -> str:
+def sync_one(db: Session, api, job: LabelingJob, *,
+             queue_validation: bool = False) -> str:
     # Serialize worker polling against simultaneous monitor decisions.
     # Refresh any ORM-cached state after acquiring the PostgreSQL row lock.
     locked = db.scalar(select(LabelingJob).where(
@@ -639,6 +640,11 @@ def sync_one(db: Session, api, job: LabelingJob) -> str:
             pass
         job.status = "on_review"
         job.submitted_at = job.submitted_at or epoch()
+    if queue_validation and job.status == "on_review":
+        # Save submission status AND its durable validation task atomically.
+        # A crash after status detection cannot strand frames indefinitely.
+        from .validation_tasks import enqueue_validation
+        enqueue_validation(db, job)
     db.commit()
     if job.status == "on_review" and previous_status != "on_review":
         milestone("submission_detected", job_id=job.id,
@@ -869,7 +875,7 @@ def sync_all(db: Session, api, config: SuperviselyConfig, *,
                 continue
             before = job.status
             try:
-                after = sync_one(db, api, job)
+                after = sync_one(db, api, job, queue_validation=not capture_snapshots)
             except Exception as exc:  # noqa: BLE001 - isolate failures by native job
                 db.rollback()
                 code = exc.code if isinstance(exc, (NativeWorkerError, NativeAPIError)) else type(exc).__name__
