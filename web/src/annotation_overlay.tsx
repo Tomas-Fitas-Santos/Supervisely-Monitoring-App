@@ -51,12 +51,12 @@ function parseVisuals(annotation:Record<string,unknown>|null,
   }
   return shapes;
 }
-export function AnnotationFrame({src,alt,annotation,selectedIndex,onSelectObject,zoom}:{
+export function AnnotationFrame({src,alt,annotation,zoom}:{
   src:string;alt:string;annotation:Record<string,unknown>|null;
-  selectedIndex?:number|null;onSelectObject?:(index:number)=>void;
   zoom?:number;
 }){
   const [visible,setVisible]=useState(true);
+  const [hiddenClasses,setHiddenClasses]=useState<string[]>([]);
   const [imageSize,setImageSize]=useState<{width:number;height:number}|null>(null);
   const [palette,setPalette]=useState<Record<string,string>>(DEFAULT_COLORS);
   const [pan,setPan]=useState<Point>({x:0,y:0});
@@ -79,6 +79,10 @@ export function AnnotationFrame({src,alt,annotation,selectedIndex,onSelectObject
   const width=typeof metaWidth==="number"&&metaWidth>0?metaWidth:imageSize?.width||0;
   const height=typeof metaHeight==="number"&&metaHeight>0?metaHeight:imageSize?.height||0;
   const objects=useMemo(()=>parseVisuals(annotation,palette),[annotation,palette]);
+  const usedClasses=useMemo(()=>[...new Set(objects.map(object=>object.title))],[objects]);
+  const displayed=useMemo(()=>objects.filter(object=>!hiddenClasses.includes(object.title)),
+    [objects,hiddenClasses]);
+  useEffect(()=>setHiddenClasses([]),[src]);
   const pointRadius=Math.max(3,Math.min(width,height)*0.008);
   const magnification=zoom??1;
 
@@ -117,8 +121,7 @@ export function AnnotationFrame({src,alt,annotation,selectedIndex,onSelectObject
   },[magnification,imageSize,width,height,zoom]);
 
   function startPan(event:ReactPointerEvent<HTMLDivElement>){
-    if(magnification<=1||event.button!==0||
-       (event.target as Element).closest(".annotation-shape"))return;
+    if(magnification<=1||event.button!==0)return;
     dragRef.current={
       pointerId:event.pointerId,clientX:event.clientX,clientY:event.clientY,
       origin:pan,
@@ -146,7 +149,7 @@ export function AnnotationFrame({src,alt,annotation,selectedIndex,onSelectObject
 
   return <div className="review-annotation-visual">
     <div className="annotation-view-toolbar">
-      <span>{annotation?objects.length+" objects in Supervisely annotation":"Original source frame"}</span>
+      <span>{annotation?displayed.length+" of "+objects.length+" annotations visible":"Original source frame"}</span>
       <button type="button" className="btn secondary" onClick={()=>setVisible(x=>!x)}>
         {visible?<EyeOff size={14}/>:<Eye size={14}/>}
         {visible?"Hide overlay":"Show overlay"}
@@ -167,46 +170,31 @@ export function AnnotationFrame({src,alt,annotation,selectedIndex,onSelectObject
           width:event.currentTarget.naturalWidth,
           height:event.currentTarget.naturalHeight,
         })}/>
-      {visible&&width>0&&height>0&&objects.length>0&&
+      {visible&&width>0&&height>0&&displayed.length>0&&
         <svg className="annotation-image-overlay"
           viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="xMidYMid meet"
           role="img" aria-label="Saved Supervisely bird bounding boxes and keypoints">
-          {objects.map(object=>object.shape==="rectangle"?(()=>{
+          {displayed.map(object=>object.shape==="rectangle"?(()=>{
             const a=object.points[0],b=object.points[1];
-            const selected=object.index===selectedIndex;
-            return <g key={object.index} className={"annotation-shape "+(selected?"selected":"")}
-              role={onSelectObject?"button":undefined}
-              aria-label={onSelectObject?"Select "+object.title+" annotation "+(object.index+1):undefined}
-              tabIndex={onSelectObject?0:undefined}
-              onClick={()=>onSelectObject?.(object.index)}
-              onKeyDown={e=>{if(onSelectObject&&(e.key==="Enter"||e.key===" ")){
-                e.preventDefault();onSelectObject(object.index);
-              }}}>
+            return <g key={object.index} className="annotation-shape">
               <rect x={Math.min(a.x,b.x)} y={Math.min(a.y,b.y)}
                 width={Math.abs(b.x-a.x)} height={Math.abs(b.y-a.y)}
-                fill="none" stroke="#121827" strokeWidth={selected?Math.max(7,pointRadius*1.5):Math.max(4,pointRadius*.9)}/>
+                fill="none" stroke="#121827" strokeWidth={Math.max(4,pointRadius*.9)}/>
               <rect x={Math.min(a.x,b.x)} y={Math.min(a.y,b.y)}
                 width={Math.abs(b.x-a.x)} height={Math.abs(b.y-a.y)}
-                fill="none" stroke={selected?"#FFFFFF":object.color}
-                strokeWidth={selected?Math.max(4,pointRadius*.9):Math.max(2,pointRadius*.55)}/>
+                fill="none" stroke={object.color}
+                strokeWidth={Math.max(2,pointRadius*.55)}/>
               <text x={Math.min(a.x,b.x)+3} y={Math.max(14,Math.min(a.y,b.y)-5)}
                 stroke="#15212D" strokeWidth={Math.max(3,pointRadius*.6)}
                 paintOrder="stroke" fill={object.color} fontSize={Math.max(12,pointRadius*2)}
                 fontWeight="bold">{object.index+1}. {object.title}</text>
             </g>;
-          })():<g key={object.index} className={"annotation-shape "+(object.index===selectedIndex?"selected":"")}
-            role={onSelectObject?"button":undefined}
-            aria-label={onSelectObject?"Select "+object.title+" annotation "+(object.index+1):undefined}
-            tabIndex={onSelectObject?0:undefined}
-            onClick={()=>onSelectObject?.(object.index)}
-            onKeyDown={e=>{if(onSelectObject&&(e.key==="Enter"||e.key===" ")){
-              e.preventDefault();onSelectObject(object.index);
-            }}}>
+          })():<g key={object.index} className="annotation-shape">
             <circle cx={object.points[0].x} cy={object.points[0].y}
-              r={object.index===selectedIndex?pointRadius*2.3:pointRadius*1.4}
-              fill={object.index===selectedIndex?"#FFFFFF":"#141b28"} />
+              r={pointRadius*1.4} fill="#141b28"/>
             <circle cx={object.points[0].x} cy={object.points[0].y}
-              r={pointRadius} fill={object.color} stroke="#fff" strokeWidth={Math.max(1,pointRadius*.2)}/>
+              r={pointRadius} fill={object.color} stroke="#fff"
+              strokeWidth={Math.max(1,pointRadius*.2)}/>
             <text x={object.points[0].x+pointRadius*1.7}
               y={object.points[0].y-pointRadius*.9}
               stroke="#0E1822" strokeWidth={Math.max(3,pointRadius*.6)}
@@ -218,10 +206,22 @@ export function AnnotationFrame({src,alt,annotation,selectedIndex,onSelectObject
         </svg>}
       </div>
     </div>
-    <div className="annotation-legend">
-      {Object.entries(DEFAULT_COLORS).map(([name,color])=>
-        <span key={name}><i style={{backgroundColor:palette[name]||color}}/>{name}</span>)}
-    </div>
+    {usedClasses.length>0&&<div className="annotation-legend"
+      role="group" aria-label="Toggle visible annotation classes">
+      {usedClasses.map(name=>{
+        const enabled=!hiddenClasses.includes(name);
+        return <button key={name} type="button"
+          className={"annotation-legend-toggle"+(enabled?"":" is-hidden")}
+          aria-pressed={enabled}
+          aria-label={(enabled?"Hide ":"Show ")+name+" annotations"}
+          onClick={()=>setHiddenClasses(current=>
+            current.includes(name)?current.filter(entry=>entry!==name):[...current,name])}>
+          <i style={{backgroundColor:palette[name]||DEFAULT_COLORS[name]||"#FFFFFF"}}/>
+          {name}
+          {enabled?<Eye size={12}/>:<EyeOff size={12}/>}
+        </button>;
+      })}
+    </div>}
     {annotation&&objects.length===0&&
       <p className="muted small">No supported point or rectangle annotations are present in this downloaded frame.</p>}
   </div>;
