@@ -154,7 +154,8 @@ def test_windows_source_picker_reuses_existing_live_stack_safely():
     assert "source-datasets" in helper
     assert "up -d --no-deps --force-recreate api" in helper
     assert "up -d --no-deps --force-recreate web" in helper
-    assert "up -d --no-deps --force-recreate worker" in helper
+    assert "up -d --no-deps @refreshFlag worker" in helper
+    assert "up -d --no-deps @refreshFlag mirror-worker" in helper
     assert "docker compose @compose down" not in helper
     assert not any("--volumes" in line and not line.lstrip().startswith("#")
                    for line in helper.splitlines())
