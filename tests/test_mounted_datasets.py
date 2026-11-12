@@ -161,3 +161,47 @@ def test_windows_source_picker_reuses_existing_live_stack_safely():
     assert "read_only: true" in compose
     assert "No dataset folders visible to Nightjar." in ui
     assert "link-local-dataset.ps1" in ui
+
+
+def test_mounted_indexer_runs_without_supervisely_connection(monkeypatch):
+    """Local indexing is independent from native Team/Workspace credentials."""
+    class FakeSession:
+        def __enter__(self):
+            return self
+        def __exit__(self, *_args):
+            return False
+
+    calls = []
+    monkeypatch.setattr(
+        "annotatiathon.db.session_factory",
+        lambda: lambda: FakeSession(),
+    )
+    monkeypatch.setattr(
+        mounted_datasets, "process_mounted_index_once",
+        lambda db: calls.append(db) or {
+            "dataset_id": "local-test", "status": "done",
+        },
+    )
+    mounted_datasets.run_indexer(once=True)
+    assert len(calls) == 1
+
+
+def test_standard_live_api_deployment_starts_local_indexer():
+    """Normal web deployment starts indexing without the optional native worker."""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    compose = (root / "compose.live.yaml").read_text(encoding="utf-8")
+    script = (root / "scripts" / "deploy-live.ps1").read_text(encoding="utf-8")
+    picker = (root / "scripts" / "link-local-dataset.ps1").read_text(encoding="utf-8")
+    ui = (root / "web" / "src" / "mounted_dataset_library.tsx").read_text(encoding="utf-8")
+
+    assert "  indexer:" in compose
+    assert '"annotatiathon.mounted_datasets", "--loop"' in compose
+    api_section = compose.split("  api:", 1)[1].split("  web:", 1)[0]
+    assert "      indexer:" in api_section
+    assert "condition: service_started" in api_section
+    assert "--force-recreate migrate api web indexer" in script
+    assert "--force-recreate indexer" in picker
+    assert "Waiting for local dataset indexer" in ui
+    assert "Supervisely upload is queued" in ui
