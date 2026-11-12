@@ -149,21 +149,19 @@ def test_automatic_30_frame_stream_crosses_video_boundary_and_keeps_final_tail(d
         get_info_by_id=lambda _native_id: native,
     ))
     with maker() as db:
-        assert sync_one(db, api, db.get(LabelingJob, final_id)) == "needs_correction"
-        assert db.get(LabelingJob, final_id).correction_round == 1
+        assert sync_one(db, api, db.get(LabelingJob, final_id)) == "on_review"
+        assert db.get(LabelingJob, final_id).correction_round == 0
         assert db.get(WorkPacket, final_id).submitted_at is None
-        restart = db.scalar(select(NativeOperation).where(
+        # In the new workflow a native submission queues JSON capture,
+        # which individually validates six frames before any restart.
+        assert db.scalar(select(NativeOperation).where(
             NativeOperation.kind == "restart_job",
             NativeOperation.target_id == final_id,
-        ))
-        assert restart.status == "pending"
-    with maker.begin() as db:
-        db.get(LabelingJob, final_id).status = "in_progress"
-        db.get(NativeOperation, restart.id).status = "done"
+        )) is None
     native.finished_images_count = 6
     with maker() as db:
         assert sync_one(db, api, db.get(LabelingJob, final_id)) == "on_review"
-        assert db.get(WorkPacket, final_id).submitted_at is not None
+        assert db.get(WorkPacket, final_id).submitted_at is None
 
 
 def test_exact_multiple_of_30_has_no_short_final_block(dataset_ctx):
