@@ -46,6 +46,12 @@ def test_event_import_decodes_all_thirty_frames_with_timestamps(dataset_ctx, tmp
     assert len(videos[0]["source_sha256"]) == 64
     assert videos[0]["time_base"]
     assert videos[0]["identity_status"] == "complete"
+    readiness = client.get(f"/api/v1/labeling/datasets/{dataset_id}/shared-readiness")
+    assert readiness.status_code == 200
+    assert readiness.json()["source_ready"] is True
+    assert readiness.json()["source_frames"] == 30
+    assert readiness.json()["primary_jobs"] == 1
+    assert readiness.json()["mirror_ready"] is False
     teams(client, csrf)
     plan = act(client, csrf, "/labeling/plans", {
         "dataset_id": dataset_id, "mode": "shared_30_v1",
@@ -316,6 +322,10 @@ def test_sparse_full_mode_frames_import_but_are_not_full_density(dataset_ctx):
     assert video["identity_status"] == "gaps"
     assert video["density"] == "unknown"
     assert video["missing_frame_count"] == 29
+    readiness = client.get(f"/api/v1/labeling/datasets/{dataset_id}/shared-readiness")
+    assert readiness.status_code == 200
+    assert readiness.json()["source_ready"] is False
+    assert any("ColumbaPalumbus/clip" in message for message in readiness.json()["issues"])
     teams(client, csrf)
     planned = act(client, csrf, "/labeling/plans", {
         "dataset_id": dataset_id, "mode": "shared_30_v1",
@@ -354,6 +364,10 @@ def test_unlinked_frame_in_existing_video_gets_specific_shared_queue_error(datas
     assert planned.status_code == 422
     assert "not linked to a source video" in planned.json()["detail"]
     assert "video-name/frame_000001.jpg" in planned.json()["detail"]
+    readiness = client.get(f"/api/v1/labeling/datasets/{dataset_id}/shared-readiness")
+    assert readiness.status_code == 200
+    assert readiness.json()["source_ready"] is False
+    assert any("no source-video identity" in issue for issue in readiness.json()["issues"])
 
 
 def test_manifest_invalid_time_base_is_a_validation_error():
