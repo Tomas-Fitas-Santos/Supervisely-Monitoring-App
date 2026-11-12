@@ -24,9 +24,9 @@ import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path, PurePosixPath
+from threading import local
 
 from fastapi import HTTPException
-from threading import local
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
