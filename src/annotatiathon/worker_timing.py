@@ -24,7 +24,7 @@ _API_PATH = re.compile(r"^/public/api/v3/([A-Za-z0-9_.-]{1,72})$")
 def endpoint_group(endpoint: str) -> str:
     if endpoint in {"jobs.info", "jobs.list"}:
         return "status"
-    if endpoint.startswith("annotations."):
+    if endpoint.startswith("annotations.") or endpoint == "figures.list":
         return "annotation"
     if endpoint in {"jobs.add", "jobs.create"}:
         return "publish"
