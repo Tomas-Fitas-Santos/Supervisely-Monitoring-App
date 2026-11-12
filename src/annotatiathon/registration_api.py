@@ -1,9 +1,11 @@
-"""Roster-allowlisted, app-only monitor account registration.
+"""Roster-approved monitor registration with organiser-issued one-time codes.
 
-No email delivery, verification code or Supervisely token is involved.
-The existing approved event roster is the *only* source of signup eligibility.
-Supervisely identity is linked separately in authenticated Settings.
+Existing staff accounts sign in unchanged. This workflow does not require
+SMTP or a Supervisely API token from a new monitor.
 """
+import hashlib
+import hmac
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
@@ -12,7 +14,9 @@ from sqlalchemy.orm import Session
 
 from .auth import normalized_email, same_origin
 from .db import get_db
-from .models import AuditEvent, Event, Person, StaffAccount
+from .models import (
+    AuditEvent, Event, Person, RegistrationChallenge, StaffAccount, epoch,
+)
 from .security import password_hash
 
 router = APIRouter(prefix="/api/v1/auth/register", tags=["staff self-registration"])
@@ -22,6 +26,7 @@ class MonitorAccountRegistration(BaseModel):
     model_config = ConfigDict(extra="forbid")
     email: str = Field(min_length=3, max_length=320)
     password: str = Field(min_length=12, max_length=1024)
+    registration_code: str | None = Field(default=None, max_length=256)
 
     @field_validator("email")
     @classmethod
@@ -79,10 +84,10 @@ def create_monitor_account(
     request: Request,
     db: Session = Depends(get_db),
 ):
-    """Create a Nightjar-only monitor login if its email is on the allowlist.
+    """Create a Nightjar monitor login with an organiser-issued code.
 
-    Strictly never creates organiser privileges, joins Supervisely, or assumes
-    email ownership: possession of a known roster email is not verification.
+    Email ownership is not inferred from an approved roster address alone.
+    Organisers must deliver the code to the intended monitor privately.
     """
     same_origin(request)
     # Previously created accounts are never re-registered when event/roster
@@ -95,6 +100,23 @@ def create_monitor_account(
             status_code=403,
             detail="This email is not on the approved monitor roster. Contact the organiser.",
         )
+    challenge = db.scalar(select(RegistrationChallenge).where(
+        RegistrationChallenge.email == payload.email,
+    ).with_for_update())
+    if (challenge is None or challenge.expires_at < epoch()
+            or challenge.attempts >= 5):
+        raise HTTPException(
+            status_code=403,
+            detail="Ask the organiser for an active one-time registration code.",
+        )
+    digest = hashlib.sha256(
+        (payload.email + "\0" + (payload.registration_code or "")).encode(),
+    ).hexdigest()
+    if not hmac.compare_digest(digest, challenge.code_digest):
+        challenge.attempts += 1
+        db.commit()
+        raise HTTPException(status_code=403, detail="Invalid registration code.")
+
     staff = StaffAccount(
         email=payload.email,
         name=person.name,
@@ -114,10 +136,12 @@ def create_monitor_account(
                 "roster_person_id": person.id,
                 "matched_approved_roster_email": True,
                 "email_ownership_verified": False,
+                "organiser_registration_code_verified": True,
                 "roles": ["monitor"],
                 "supervisely_linked": False,
             },
         ))
+        db.delete(challenge)
         db.commit()
     except IntegrityError as exc:
         db.rollback()
@@ -127,5 +151,5 @@ def create_monitor_account(
         ) from exc
     return {
         "registered": True,
-        "message": "Nightjar account created. Sign in and link your Supervisely account in Settings.",
+        "message": "Nightjar account created using a private organiser code. Link Supervisely separately.",
     }
