@@ -188,7 +188,7 @@ export function DatasetScreen({auth}:{auth:Auth}) {
     <div className="content-grid datasets-layout">
       {admin&&<section className="panel">
         <span className="eyebrow">PRE-EVENT MEDIA LIBRARY</span><h3>Import and preload videos</h3>
-        <p className="muted small">Video-only structure: <code>dataset-name/bird-species/video.mp4</code> or <code>dataset-name/bird-species/video-title/frame.jpg</code>. Multiple species folders are supported. Do not create separate <code>images</code> or <code>videos</code> folders. You can upload the root folder or a ZIP containing it. Full-density import retains every decoded video frame in presentation order. Supplied frame folders retain their source density and need numeric names or a frames.json manifest.</p>
+        <p className="muted small">Upload a folder or ZIP with <code>dataset-name/bird-species/video.mp4</code> or <code>dataset-name/bird-species/video-title/frame.jpg</code>. Multiple species and videos are supported. <strong>No frames.json or other metadata file is required in either upload format.</strong> Source videos are decoded according to the selected extraction mode. For existing frame folders, Nightjar recognizes filenames such as <code>ColumbaPalumbus_f000013.jpg</code>, or infers a consistent natural filename order. If supplied frames have missing source ordinals, import still succeeds but marks them as incomplete for full-density automatic jobs.</p>
         <form className="form-stack" onSubmit={e=>void ingest(e)}>
           <label>Dataset name<input maxLength={200} value={name} placeholder="BirdGaze 2026"
             onChange={e=>setName(e.target.value)}/></label>
@@ -302,7 +302,7 @@ export function DatasetScreen({auth}:{auth:Auth}) {
         .map(([m,count])=><tr key={m}><td><strong>{m}</strong></td>
           <td>{count.frames}</td></tr>)}</tbody></table></div>
       <p className="muted small">Planning balances assignment counts by morphology and
-        uses frame count as job weight. Every frame of one video stays in the same job.</p>
+        uses frame count to track dataset coverage. Automatic jobs use consecutive 30-frame blocks and can carry a video's remaining frames into the next video.</p>
     </section>}
   </div>;
 }
