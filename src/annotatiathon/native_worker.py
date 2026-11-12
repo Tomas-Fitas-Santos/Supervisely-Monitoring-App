@@ -228,9 +228,16 @@ def upload_media(db: Session, api, job: LabelingJob, ds: MediaDataset,
                 native_dataset_id=native_dataset_id, native_image_id=remote_id,
             ))
             continue
-        path = (jobs_source / asset.relative_path).resolve()
-        if not path.is_relative_to(jobs_source) or not path.is_file():
-            raise NativeWorkerError("media_path_missing")
+        if ds.upload_kind == "mounted":
+            from .mounted_datasets import media_file
+            try:
+                path = media_file(ds, asset.relative_path)
+            except (OSError, HTTPException) as exc:
+                raise NativeWorkerError("mounted_media_path_missing") from exc
+        else:
+            path = (jobs_source / asset.relative_path).resolve()
+            if not path.is_relative_to(jobs_source) or not path.is_file():
+                raise NativeWorkerError("media_path_missing")
         pending.append((asset, name, str(path)))
     db.commit()
     # A batch is journaled only after Supervisely confirms the created image IDs.
@@ -1636,6 +1643,11 @@ def worker_cycle(lane: str) -> bool:
     """Use independent sessions and SDK clients for each lane."""
     with session_factory()() as db:
         try:
+            if lane in {"mirror", "bulk"}:
+                from .mounted_datasets import process_mounted_index_once
+                indexed = process_mounted_index_once(db)
+                if indexed:
+                    return True
             pending_reset = reset_pending(db)
             if pending_reset and lane != "reset":
                 return False
