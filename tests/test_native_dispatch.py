@@ -821,12 +821,16 @@ def test_team_dashboard_rankings_and_monitor_scoped_review(configured):
         assert login.status_code == 200, login.text
         allowed = monitor_client.get("/api/v1/review/assigned-jobs")
         assert allowed.status_code == 200
-        assert {j["team_id"] for j in allowed.json()["items"]} == {team_id}
+        assert {j["team_id"] for j in allowed.json()["items"]} == {
+            team_id, other_team.id,
+        }
         assert monitor_client.get("/api/v1/review/team-metrics").status_code == 200
-        assert monitor_client.get("/api/v1/review/jobs/" + outside_id).status_code == 403
+        # Monitors can inspect other competition teams, but cannot mutate the
+        # old whole-job review flow without authorization.
+        assert monitor_client.get("/api/v1/review/jobs/" + outside_id).status_code == 200
         assert monitor_client.get("/api/v1/review/jobs/" + outside_id +
-                                  "/annotations/test-frame").status_code == 403
-        assert monitor_client.get("/api/v1/labeling/jobs/" + outside_id + "/media").status_code == 403
+                                  "/annotations/test-frame").status_code == 404
+        assert monitor_client.get("/api/v1/labeling/jobs/" + outside_id + "/media").status_code == 200
         assert monitor_client.get("/api/v1/review/jobs/" + own_id).status_code == 200
 
 
