@@ -96,7 +96,7 @@ export function CloseoutScreen({auth}:{auth:Auth}) {
       <div className="stat-grid compact">
         <div className="stat-card"><BarChart3 size={19}/><span className="muted small">Participants checked in</span>
           <strong>{report.people.checked_in}/{report.people.participants}</strong></div>
-        <div className="stat-card"><CheckCircle2 size={19}/><span className="muted small">Accepted jobs</span>
+        <div className="stat-card"><CheckCircle2 size={19}/><span className="muted small">Complete submissions</span>
           <strong>{report.labeling.jobs_accepted}/{report.labeling.jobs}</strong></div>
         <div className="stat-card"><Archive size={19}/><span className="muted small">Shared-queue reviews completed</span>
           <strong>{reviewCounts?.completed??"—"}</strong></div>
