@@ -96,9 +96,11 @@ Nginx password prompt or Cloudflare email challenge.
 ```powershell
 git switch main
 git pull --ff-only origin main
+# FIRST installation only: .\scripts\init-live-test.ps1
+# Existing installs: preserve the original .env.live, database and media.
 .\scripts\deploy-live.ps1
 # After verifying the shared Supervisely integration in Settings:
-.\scripts\deploy-live.ps1 -StartWorker
+docker compose --env-file .env.live -f compose.live.yaml --profile native up -d --build worker
 ```
 
 Open a second PowerShell terminal:
