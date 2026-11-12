@@ -56,3 +56,48 @@ def test_worker_sweep_caches_builds_without_reusing_test_databases():
     assert "up -d --build" not in script
     assert '"nightjar-bench-300-$stamp-p$count-v$Validators"' in script
     assert "down --volumes --remove-orphans" in script
+
+
+def test_capacity_sweep_separates_initial_release_from_complete_turnaround():
+    root = Path(__file__).resolve().parents[1]
+    runner = (root / "scripts" / "run_worker_sweep.ps1").read_text(encoding="utf-8")
+    compose = (root / "compose.benchmark.yaml").read_text(encoding="utf-8")
+    fixture = (root / "scripts" / "benchmark_full.py").read_text(encoding="utf-8")
+    for param in ('[string]$Phase = "turnaround"', '[int]$Correctors = 1',
+                  '[int]$StatusWorkers = 1', '[double]$IncompleteRate = 0.20'):
+        assert param in runner
+    for role in ("worker", "validation-worker", "correction-worker", "status-worker"):
+        assert f'Name = "{role}"' in runner
+    assert "label=com.docker.compose.service=" in runner
+    assert "BENCHMARK_PHASE:" in compose
+    assert "BENCHMARK_INCOMPLETE_RATE:" in compose
+    assert 'PHASE == "initial"' in fixture
+    assert 'PHASE == "turnaround"' in fixture
+    assert '"shared_primary"' in fixture
+    assert '"restart_job:done"' not in fixture  # job state comes from SQL, not fake stats
+    assert '"/api/v1/review/jobs/{job_id}/decision"' not in fixture
+
+
+def test_automated_turnaround_metrics_link_original_and_next_native_job():
+    script = Path(__file__).resolve().parents[1] / "scripts" / "analyze_worker_timing.py"
+    spec = importlib.util.spec_from_file_location("nightjar_worker_metrics", script)
+    analyzer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(analyzer)
+
+    rows = [
+        {"kind": "stage", "job_id": "original", "stage": "submission_detected", "unix_ms": 1000},
+        {"kind": "stage", "job_id": "original", "stage": "validation_queued", "unix_ms": 1200},
+        {"kind": "stage", "job_id": "original", "stage": "validation_started", "unix_ms": 1600},
+        {"kind": "stage", "job_id": "original", "stage": "validation_completed", "unix_ms": 1700},
+        {"kind": "stage", "job_id": "original", "stage": "next_job_queued",
+         "operation_id": "replacement", "unix_ms": 1710},
+        {"kind": "stage", "job_id": "replacement", "stage": "publish_queued", "unix_ms": 1710},
+        {"kind": "stage", "job_id": "replacement", "stage": "publish_started", "unix_ms": 2000},
+        {"kind": "stage", "job_id": "replacement", "stage": "publish_confirmed", "unix_ms": 2500},
+    ]
+    report, _profile = analyzer.summarize(rows)
+    assert report["next_job_relations"] == 1
+    assert report["next_jobs_confirmed"] == 1
+    assert report["stage_lags"]["validation_queue_wait"]["p95_ms"] == 400
+    assert report["stage_lags"]["complete_validation_to_new_job"]["p95_ms"] == 800
+    assert report["stage_lags"]["submission_detected_to_new_job"]["p95_ms"] == 1500
