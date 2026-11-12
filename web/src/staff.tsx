@@ -6,15 +6,16 @@ type Approved = {
   email:string; role:"admin"|"organiser"; enabled:boolean;
   registered:boolean; active:boolean; login_ready:boolean;
   login_issue:"access_disabled"|"not_registered"|"account_disabled"|
-    "role_mismatch"|"temporarily_locked"|null;
+    "role_mismatch"|"temporarily_locked"|"duplicate_email_records"|null;
   last_login_at:number|null;
 };
 const REASONS:Record<Exclude<Approved["login_issue"],null>,string>={
   access_disabled:"Access disabled",
-  not_registered:"Not registered yet",
+  not_registered:"No account in this installation",
   account_disabled:"Account disabled",
   role_mismatch:"Account role needs reconciliation",
   temporarily_locked:"Temporarily locked after failed attempts",
+  duplicate_email_records:"Conflicting staff email records — contact Admin",
 };
 
 export function StaffScreen({auth}:{auth:Auth}) {
@@ -56,7 +57,7 @@ export function StaffScreen({auth}:{auth:Auth}) {
           <strong>{person.login_issue?REASONS[person.login_issue]:
             person.last_login_at!==null?"Login verified":"Ready to sign in"}</strong>
           <span>{person.login_issue==="not_registered"&&person.enabled?
-            "Approved: use Create account on the Nightjar login page.":""}</span>
+            "Approved email, but no matching account in this Nightjar database. If this account was created on a different installation, use Create account here.":""}</span>
           {person.login_ready&&<span>{person.last_login_at!==null?
             "Last successful sign-in: "+new Date(person.last_login_at*1000).toLocaleString():
             "No successful sign-in recorded yet. Ask this person to sign in."}</span>}
