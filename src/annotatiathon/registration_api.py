@@ -15,7 +15,12 @@ from sqlalchemy.orm import Session
 from .auth import normalized_email, same_origin
 from .db import get_db
 from .models import (
-    AuditEvent, Event, Person, RegistrationChallenge, StaffAccount, epoch,
+    AuditEvent,
+    Event,
+    Person,
+    RegistrationChallenge,
+    StaffAccount,
+    epoch,
 )
 from .security import password_hash
 

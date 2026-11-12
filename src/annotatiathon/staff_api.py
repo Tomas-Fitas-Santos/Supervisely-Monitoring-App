@@ -8,10 +8,16 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .auth import ROLES, AuthContext, normalized_email, requires, staff_view
-from .events_api import current_event
-from .registration_api import monitor_can_register
 from .db import get_db
-from .models import AuditEvent, Person, RegistrationChallenge, StaffAccount, epoch
+from .events_api import current_event
+from .models import (
+    AuditEvent,
+    Person,
+    RegistrationChallenge,
+    StaffAccount,
+    epoch,
+)
+from .registration_api import monitor_can_register
 
 router = APIRouter(prefix="/api/v1/staff", tags=["staff"])
 
