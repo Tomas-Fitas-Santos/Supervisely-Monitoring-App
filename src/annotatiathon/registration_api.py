@@ -22,8 +22,8 @@ from .models import (
     StaffAccount,
     epoch,
 )
-from .security import password_hash
 from .organiser_access import is_restricted_mode
+from .security import password_hash
 
 router = APIRouter(prefix="/api/v1/auth/register", tags=["staff self-registration"])
 
