@@ -175,7 +175,7 @@ def main() -> None:
             print("Corrected account sessions revoked; existing password and ID preserved.")
         else:
             print("Kept account ID, password and role unchanged.")
-        print("Accounts were not merged; obsolete account retained but disabled.")
+        print("accounts were not merged; obsolete account retained but disabled.")
         print("Use the corrected email and its existing Nightjar password to sign in.")
         return
     if args.action == "change-staff-email":
