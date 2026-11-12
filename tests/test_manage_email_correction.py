@@ -198,3 +198,74 @@ def test_keep_existing_approved_target_role_without_replacing_password(
         assert approval.enabled and approval.role == "organiser"
         assert kept.active
         assert password_matches(kept.password_hash, "OtherPassword2026!")
+
+
+def test_explicitly_reconcile_preexisting_monitor_login_to_approved_organiser(
+    database, monkeypatch, capsys,
+):
+    """The corrected login may have originated as a monitor-only account."""
+    old_id = add_source(database, destination_account=True)
+    with database.begin() as db:
+        kept = db.scalar(select(StaffAccount).where(
+            StaffAccount.email == "staff.corrected@example.org",
+        ))
+        kept_id = kept.id
+        kept.roles = ["monitor"]
+        kept.active = False
+        kept.login_failures = 5
+        kept.locked_until = 9999999999
+        db.add(StaffSession(id="kept-session", staff_id=kept_id,
+                            csrf_token="csrf-kept", expires_at=9999999999))
+    monkeypatch.setattr(sys, "argv", [
+        "nightjar-manage", "keep-existing-staff-account",
+        "--obsolete-email", "staff.previous@example.org",
+        "--keep-email", "staff.corrected@example.org",
+        "--reconcile-kept-access",
+    ])
+    manage.main()
+    assert "role reconciled: organiser" in capsys.readouterr().out
+    with database() as db:
+        old = db.get(StaffAccount, old_id)
+        kept = db.get(StaffAccount, kept_id)
+        assert old.active is False
+        assert kept.active is True
+        assert kept.roles == ["organiser"]
+        assert kept.login_failures == 0 and kept.locked_until is None
+        assert password_matches(kept.password_hash, "OtherPassword2026!")
+        assert db.get(ApprovedStaffEmail, "staff.previous@example.org").enabled is False
+        assert db.get(ApprovedStaffEmail, "staff.corrected@example.org").enabled is True
+        assert db.get(StaffSession, "kept-session") is None
+        assert db.get(StaffSession, "session-digest") is None
+        audit = db.scalar(select(AuditEvent).where(
+            AuditEvent.action == "staff.email.conflict.resolved_cli",
+        ))
+        assert audit.details["approved_role_applied"] is True
+        assert audit.details["kept_prior_roles"] == ["monitor"]
+        assert audit.details["kept_sessions_revoked"] is True
+
+
+def test_explicit_reconcile_refuses_demoting_an_admin(
+    database, monkeypatch,
+):
+    old_id = add_source(database, destination_account=True)
+    with database.begin() as db:
+        kept = db.scalar(select(StaffAccount).where(
+            StaffAccount.email == "staff.corrected@example.org",
+        ))
+        kept.roles = ["admin", "organiser"]
+    monkeypatch.setattr(sys, "argv", [
+        "nightjar-manage", "keep-existing-staff-account",
+        "--obsolete-email", "staff.previous@example.org",
+        "--keep-email", "staff.corrected@example.org",
+        "--reconcile-kept-access",
+    ])
+    with pytest.raises(SystemExit):
+        manage.main()
+    with database() as db:
+        assert db.get(StaffAccount, old_id).active is True
+        assert db.get(ApprovedStaffEmail, "staff.previous@example.org").enabled
+        assert db.get(ApprovedStaffEmail, "staff.corrected@example.org") is None
+        kept = db.scalar(select(StaffAccount).where(
+            StaffAccount.email == "staff.corrected@example.org",
+        ))
+        assert kept.roles == ["admin", "organiser"]
