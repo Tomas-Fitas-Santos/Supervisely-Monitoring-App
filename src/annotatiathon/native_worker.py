@@ -81,6 +81,8 @@ from .native_operations_api import (
 )
 from .pair_members import pair_members
 from .supervisely_client import NativeAPIError, require_connection
+from .worker_timing import enable as enable_worker_timing
+from .worker_timing import milestone
 
 logger = logging.getLogger(__name__)
 _checked_visual_projects: set[int] = set()
@@ -568,6 +570,8 @@ def queue_automatic_incomplete_return(
                  "correction_round": job.correction_round},
     ))
     db.commit()
+    milestone("correction_queued", job_id=job.id,
+              frame_count=len(unresolved))
     return job.status
 
 
@@ -580,6 +584,7 @@ def sync_one(db: Session, api, job: LabelingJob) -> str:
     if locked is None:
         raise NativeWorkerError("job_missing_during_sync")
     job = locked
+    previous_status = job.status
     # A returned job is managed by the explicit native correction operation.
     # Do not treat two old 'on_review' records as a new submission.
     if job.status in {"queued", "publishing", "completed", "needs_correction"}:
@@ -635,6 +640,9 @@ def sync_one(db: Session, api, job: LabelingJob) -> str:
         job.status = "on_review"
         job.submitted_at = job.submitted_at or epoch()
     db.commit()
+    if job.status == "on_review" and previous_status != "on_review":
+        milestone("submission_detected", job_id=job.id,
+                  frame_count=job.frame_count)
     return job.status
 
 
@@ -654,6 +662,8 @@ def capture_job_annotations(db: Session, api, job: LabelingJob) -> bool:
     )
     if official:
         result = capture_frame_submission(db, api, job)
+        milestone("frames_validated", job_id=job.id,
+                  frame_count=len(job.media_ids) - len(result["pending"]))
         if result["pending"]:
             queue_automatic_incomplete_return(
                 db, job, len(job.media_ids) - len(result["pending"]),
@@ -962,6 +972,7 @@ def process_once(db: Session, api, config: SuperviselyConfig) -> dict | None:
     op.attempts += 1
     opid = op.id
     db.commit()
+    milestone("publish_started", job_id=job.id, operation_id=opid)
     try:
         details = publish_job(db, job, api, config)
     except Exception as exc:  # noqa: BLE001 - remote outcome may be uncertain
@@ -986,6 +997,7 @@ def process_once(db: Session, api, config: SuperviselyConfig) -> dict | None:
     finished.completed_at = epoch()
     finished.error_code = None
     db.commit()
+    milestone("publish_confirmed", job_id=job.id, operation_id=opid)
     return {"operation_id": opid, "status": "done", **details}
 
 
@@ -1101,6 +1113,7 @@ def process_correction_once(db: Session, api, config: SuperviselyConfig) -> dict
     op.attempts += 1
     opid, jobid = op.id, job.id
     db.commit()
+    milestone("correction_publish_started", job_id=jobid, operation_id=opid)
     try:
         people = assigned_people(db, job)
         by_person = {p.id: p for p in people}
@@ -1288,6 +1301,7 @@ def process_correction_once(db: Session, api, config: SuperviselyConfig) -> dict
             },
         ))
         db.commit()
+        milestone("correction_publish_confirmed", job_id=jobid, operation_id=opid)
         return {"operation_id": opid, "status": "done", "correction_round": job.correction_round}
     except Exception as exc:  # noqa: BLE001 - native restart may succeed with lost response
         db.rollback()
@@ -1653,8 +1667,12 @@ def main() -> None:
     group.add_argument("--loop", action="store_true",
                        help="Process continuously while this terminal remains open")
     parser.add_argument("--poll-seconds", type=int, default=12)
+    parser.add_argument("--timing-file", default=os.environ.get("NIGHTJAR_WORKER_TIMING_FILE"),
+                        help="Opt-in local JSONL timings; no credentials, URLs or payloads")
     arguments = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
+    if arguments.timing_file:
+        enable_worker_timing(arguments.timing_file)
     run_worker(once=arguments.once, poll_seconds=arguments.poll_seconds)
 
 
