@@ -8,12 +8,12 @@ from .closeout_api import router as closeout_router
 from .coverage_api import router as coverage_router
 from .database import database_is_ready
 from .datasets_api import router as datasets_router
-from .mounted_datasets import router as mounted_datasets_router
 from .events_api import router as events_router
 from .full_reset_api import router as full_reset_router
 from .labeling_api import router as labeling_router
 from .manual_jobs_api import router as manual_jobs_router
 from .monitoring_api import router as monitoring_router
+from .mounted_datasets import router as mounted_datasets_router
 from .native_export_api import router as native_export_router
 from .native_operations_api import router as native_operations_router
 from .native_sync_api import router as native_router
