@@ -206,7 +206,9 @@ def simulate():
     for ordinal, cls in enumerate(metadata["classes"], 1):
         cls["id"] = 40000 + ordinal
     class_ids = {cls["title"]: cls["id"] for cls in metadata["classes"]}
-    classes_to_label = list(class_ids)
+    # LabelingJobApi._convert_json_info expects class records, not strings.
+    # A string yields HTTP 200 but raises TypeError while decoding jobs.info.
+    classes_to_label = [{"title": title} for title in class_ids]
 
     def info(api_class, **values):
         result = {}
