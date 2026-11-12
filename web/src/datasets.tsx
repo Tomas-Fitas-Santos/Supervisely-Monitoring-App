@@ -30,7 +30,7 @@ export function DatasetScreen({auth}:{auth:Auth}) {
   const [selected,setSelected]=useState("");
   const [summary,setSummary]=useState<Summary|null>(null);
   const [mirror,setMirror]=useState<MirrorStatus|null>(null);
-  const [mode,setMode]=useState<"zip"|"folder">("zip");
+  const [mode,setMode]=useState<"zip"|"folder">("folder");
   const [name,setName]=useState("");
   const [extractionPolicy,setExtractionPolicy]=useState<"all_frames"|"sample_1fps">("all_frames");
   const [videoResult,setVideoResult]=useState<{datasetId:string;items:SourceVideo[]}|null>(null);
@@ -116,7 +116,9 @@ export function DatasetScreen({auth}:{auth:Auth}) {
     try {
       validateDatasetSources(files,mode);
       created=await api<Dataset>("/datasets/uploads","POST",{
-        name:name.trim()||files[0].name.replace(/\.zip$/i,""),
+        name:name.trim()||(mode==="folder"?
+          files[0].webkitRelativePath.split("/")[0]:
+          files[0].name.replace(/\.zip$/i,"")),
         upload_kind:mode,extraction_policy:extractionPolicy
       },auth.csrf_token);
       setSelected(created.id);
@@ -197,7 +199,7 @@ export function DatasetScreen({auth}:{auth:Auth}) {
     <div className="content-grid datasets-layout">
       {admin&&<section className="panel">
         <span className="eyebrow">PRE-EVENT MEDIA LIBRARY</span><h3>Import and preload videos</h3>
-        <p className="muted small">For 30-frame automatic labeling jobs, keep <strong>Every source frame</strong> selected and upload consecutive frames from each source video. Uploading only sampled frames cannot establish full-density job coverage. Upload a folder or ZIP with <code>dataset-name/bird-species/video.mp4</code> or <code>dataset-name/bird-species/video-title/frame.jpg</code>. Multiple species and videos are supported. <strong>No frames.json or other metadata file is required in either upload format.</strong> Source videos are decoded according to the selected extraction mode. For existing frame folders, Nightjar recognizes filenames such as <code>ColumbaPalumbus_f000013.jpg</code>, or infers a consistent natural filename order. If supplied frames have missing source ordinals, import still succeeds but marks them as incomplete for full-density automatic jobs.</p>
+        <p className="muted small">Choose a local folder in your browser without running commands. Files are transferred securely to Nightjar, then uploaded to Supervisely by its separate worker. If the dataset is already under Nightjar\u0027s linked host source root, use <strong>Link host folder (optional)</strong> instead for a faster no-copy import. For 30-frame automatic labeling jobs, keep <strong>Every source frame</strong> selected and upload consecutive frames from each source video. Uploading only sampled frames cannot establish full-density job coverage. Upload a folder or ZIP with <code>dataset-name/bird-species/video.mp4</code> or <code>dataset-name/bird-species/video-title/frame.jpg</code>. Multiple species and videos are supported. <strong>No frames.json or other metadata file is required in either upload format.</strong> Source videos are decoded according to the selected extraction mode. For existing frame folders, Nightjar recognizes filenames such as <code>ColumbaPalumbus_f000013.jpg</code>, or infers a consistent natural filename order. If supplied frames have missing source ordinals, import still succeeds but marks them as incomplete for full-density automatic jobs.</p>
         <form className="form-stack" onSubmit={e=>void ingest(e)}>
           <label>Dataset name<input maxLength={200} value={name} placeholder="BirdGaze 2026"
             onChange={e=>setName(e.target.value)}/></label>
@@ -216,7 +218,7 @@ export function DatasetScreen({auth}:{auth:Auth}) {
             <input ref={fileInputRef} aria-label="ZIP dataset" type="file" accept=".zip,application/zip"
               disabled={busy} onChange={e=>setFiles(Array.from(e.target.files||[]))}/>
           </label>:<label className="dataset-drop">
-            <FolderOpen size={28}/><span>Select entire dataset folder</span>
+            <FolderOpen size={28}/><span>Choose dataset folder on this computer</span>
             <input ref={fileInputRef} aria-label="Folder dataset" type="file" multiple
               {...{webkitdirectory:"",directory:""}}
               disabled={busy} onChange={e=>setFiles(Array.from(e.target.files||[]))}/>
