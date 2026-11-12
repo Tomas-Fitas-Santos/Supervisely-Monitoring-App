@@ -1106,18 +1106,40 @@ def process_correction_once(db: Session, api, config: SuperviselyConfig) -> dict
         )))
         if len(bindings) != len(people) or {b.person_id for b in bindings} != set(by_person):
             raise NativeWorkerError("correction_binding_mismatch")
-        # Reconcile independently named restart jobs before any remote write,
-        # including if the first remote restart succeeded but its response was lost.
+        # The SDK restart() path probes users.info to validate team
+        # memberships. On some Supervisely Pro servers that route returns
+        # 404 even for verified members. Instead create a new native job
+        # referencing ONLY the unresolved image IDs. The Nightjar job ID
+        # and WorkPacket remain unchanged.
+        remaining = pending_ids(db, job)
+        payload = op.payload or {}
+        if payload.get("pending_media_ids") is not None:
+            if remaining != payload["pending_media_ids"]:
+                raise NativeWorkerError("correction_pending_media_changed")
+        if not remaining:
+            raise NativeWorkerError("correction_has_no_incomplete_frames")
+        mappings = {m.media_id: m for m in db.scalars(select(NativeMediaInstance).where(
+            NativeMediaInstance.event_id == job.event_id,
+            NativeMediaInstance.job_id == job.id,
+        ))}
+        if any(mid not in mappings or mappings[mid].native_dataset_id != job.native_dataset_id
+               for mid in remaining):
+            raise NativeWorkerError("correction_source_mapping_missing")
+        images_to_return = [mappings[mid].native_image_id for mid in remaining]
         remote = api.labeling_job.get_list(
             config.team_id, dataset_id=job.native_dataset_id, show_disabled=True,
         )
         updated = []
         for binding in bindings:
             person = by_person[binding.person_id]
-            title = (
-                f"Nightjar correction {job.id} round {job.correction_round} "
-                f"member {binding.person_id}"
-            )
+            old_native = api.labeling_job.get_info_by_id(binding.native_job_id)
+            if old_native is None or old_native.dataset_id != job.native_dataset_id:
+                raise NativeWorkerError("correction_original_job_missing")
+            # Keep original readable name, appending a clear incomplete suffix.
+            # Strip previous suffix when this is round 2 or later.
+            original_title = old_native.name.split(" (Incomplete #")[0]
+            suffix = f" (Incomplete #{job.correction_round})"
+            title = original_title[:255 - len(suffix)] + suffix
             matches = [
                 row for row in remote
                 if row.name == title and row.assigned_to_id == person.supervisely_user_id
@@ -1126,12 +1148,22 @@ def process_correction_once(db: Session, api, config: SuperviselyConfig) -> dict
             if len(matches) > 1:
                 raise NativeWorkerError("duplicate_correction_job")
             if not matches:
-                api.labeling_job.restart(
-                    binding.native_job_id,
-                    assignee_ids=[person.supervisely_user_id],
-                    title=title,
-                    complete_existing=True,
-                    only_rejected_entities=False,
+                # SDK create(images_ids=...) uses the supported jobs.add method
+                # and does not invoke restart()'s failing users.info preflight.
+                api.labeling_job.create(
+                    name=title,
+                    dataset_id=job.native_dataset_id,
+                    user_ids=[person.supervisely_user_id],
+                    images_ids=images_to_return,
+                    classes_to_label=[name for name, _geometry, _color, _description
+                                      in ANNOTATION_CLASSES],
+                    readme=(
+                        "INCOMPLETE SUBMISSION: finish these remaining images. "
+                        "For EACH image annotate exactly one bird rectangle "
+                        "and one left_eye, right_eye, beak and crown point. "
+                        "Use the *_occ variant for occluded landmarks. "
+                        "Previously complete images are already accepted."
+                    ),
                 )
                 remote = api.labeling_job.get_list(
                     config.team_id, dataset_id=job.native_dataset_id,
@@ -1143,8 +1175,9 @@ def process_correction_once(db: Session, api, config: SuperviselyConfig) -> dict
                     and row.assigned_to_id == person.supervisely_user_id
                     and row.dataset_id == job.native_dataset_id
                 ]
-            if len(matches) != 1 or matches[0].id == binding.native_job_id:
-                raise NativeWorkerError("correction_restart_not_confirmed")
+            if (len(matches) != 1 or matches[0].id == binding.native_job_id
+                    or matches[0].images_count != len(images_to_return)):
+                raise NativeWorkerError("correction_subset_not_confirmed")
             updated.append((binding, matches[0]))
         # One local transaction switches both bindings. Old native IDs remain
         # in a separate historical table (and remain on the remote server).
