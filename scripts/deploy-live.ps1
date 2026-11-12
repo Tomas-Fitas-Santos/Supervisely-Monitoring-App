@@ -45,7 +45,7 @@ try {
   $workerWasRunning = @($runningWorkerIds | Where-Object { $_ }).Count -gt 0
 
   # Pause native writes before the consistent PostgreSQL backup and upgrade.
-  & docker compose @compose --profile native stop worker api web
+  & docker compose @compose --profile native stop worker api web indexer
   Check-LastExit "Stopping web/API/native worker"
   & docker compose @compose up -d --wait db
   Check-LastExit "Starting existing PostgreSQL service"
@@ -74,7 +74,7 @@ try {
   Write-Host "Also keep a separate backup of NIGHTJAR_MEDIA_DIR and the original .env.live."
 
   # Compose migrate service applies Alembic HEAD before API startup.
-  & docker compose @compose up -d --build --force-recreate migrate api web
+  & docker compose @compose up -d --build --force-recreate migrate api web indexer
   Check-LastExit "Building and starting Nightjar services"
 
   & docker compose @compose ps
@@ -82,7 +82,7 @@ try {
   & curl.exe --fail --silent --show-error http://127.0.0.1:8080/health/ready
   Check-LastExit "Nightjar health/ready"
   Write-Host ""
-  Write-Host "Nightjar web/API is healthy on port 8080."
+  Write-Host "Nightjar web/API is healthy on port 8080. Mounted dataset indexer is enabled."
 
   if ($StartWorker -or $workerWasRunning) {
     # Preserve the pre-deployment running state, or start explicitly after the
