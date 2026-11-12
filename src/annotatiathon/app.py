@@ -8,6 +8,7 @@ from .closeout_api import router as closeout_router
 from .coverage_api import router as coverage_router
 from .database import database_is_ready
 from .datasets_api import router as datasets_router
+from .mounted_datasets import router as mounted_datasets_router
 from .events_api import router as events_router
 from .full_reset_api import router as full_reset_router
 from .labeling_api import router as labeling_router
@@ -53,6 +54,7 @@ app.include_router(native_operations_router)
 app.include_router(native_export_router)
 app.include_router(monitoring_router)
 app.include_router(datasets_router)
+app.include_router(mounted_datasets_router)
 app.include_router(labeling_router)
 app.include_router(manual_jobs_router)
 app.include_router(reviews_router)
