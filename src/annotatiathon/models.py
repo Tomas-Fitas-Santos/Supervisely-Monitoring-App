@@ -734,6 +734,11 @@ class ReviewSample(Base):
         UniqueConstraint("job_id", "correction_round", "media_id",
                          name="uq_review_sample_job_round_media"),
         Index("ix_review_sample_claim", "event_id", "team_id", "random_key"),
+        Index(
+            "ix_review_sample_event_random_pending", "event_id", "random_key",
+            postgresql_where=text("completed_at IS NULL"),
+            sqlite_where=text("completed_at IS NULL"),
+        ),
     )
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=identifier)
     event_id: Mapped[str] = mapped_column(ForeignKey("events.id"), index=True)
