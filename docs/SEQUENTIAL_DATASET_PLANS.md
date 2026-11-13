@@ -68,3 +68,19 @@ does not prove live participant permissions or exercise real remote job writes.
 A dataset-preserving rehearsal reset is **not implemented by this change**.
 The existing full event reset clears datasets and must not be used as a
 substitute for that proposed feature.
+
+## Deployment verification — 2026-11-13
+
+Deployed application commit `2011cb7` with migration `0032_sequential_image_plans`
+and all 14 native workers. The public tunnel served the new image-plan controls
+and passed the readiness check. Before deployment, all 344 backend tests,
+lint, and the frontend build passed.
+
+The Official Event retained its ready ZIP dataset (50,447 frames, 149 videos)
+and existing draft plan (1,682 blocks, zero assigned jobs). Ordered checksums
+of every asset, source mapping, and block matched before and after deployment;
+the dataset and original plan fields also matched exactly. All 50,447 local
+media files remained present, with the original media and source mounts intact.
+The pre-upgrade database dump was restored successfully into an isolated,
+network-disabled PostgreSQL container, where the same checksums matched.
+No real jobs were created for deployment verification.
