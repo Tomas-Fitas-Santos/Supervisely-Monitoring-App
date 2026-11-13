@@ -531,8 +531,13 @@ def process_append_once(db: Session) -> dict | None:
         finished.completed_at = epoch()
         finished.error_code = None
         db.commit()
-        # Only this batch's private staging is removed, never prior media.
-        shutil.rmtree(_append_root(ds, batch) / "stage", ignore_errors=True)
+        # The SQL commit makes the append irrevocable. Cleanup is only
+        # best-effort: a staging cleanup error must NEVER roll back the
+        # committed batch or remove already published source frames.
+        try:
+            shutil.rmtree(_append_root(ds, batch) / "stage", ignore_errors=True)
+        except (OSError, HTTPException):
+            pass
         return {"status": "done", "operation_id": op_id, **result}
     except Exception as exc:  # noqa: BLE001 - preserve failure state for local importer
         db.rollback()
