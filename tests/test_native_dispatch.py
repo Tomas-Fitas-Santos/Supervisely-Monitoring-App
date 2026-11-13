@@ -182,9 +182,11 @@ class MockSDK:
     def jobs_list(self, team_id, dataset_id=None, project_id=None, **kwargs):
         assert team_id == 125980 and kwargs["show_disabled"] is True
         assert dataset_id is not None or project_id is not None
+        user_id = kwargs.get("assigned_to_id")
         return [j for j in self.jobs if
                 (dataset_id is None or j.dataset_id == dataset_id) and
-                (project_id is None or j.project_id == project_id)]
+                (project_id is None or j.project_id == project_id) and
+                (user_id is None or j.assigned_to_id == user_id)]
 
     def jobs_get_project_meta(self, job_id):
         job = next(item for item in self.jobs if item.id == job_id)
@@ -1535,3 +1537,45 @@ def test_once_worker_prioritises_mirror_before_status_sync(monkeypatch):
                         lambda lane: lanes.append(lane))
     worker.run_worker(once=True, poll_seconds=12)
     assert lanes == ["mirror", "publish", "background"]
+
+
+
+def test_assignee_scoped_job_list_retries_pagination_without_writing(monkeypatch):
+    from annotatiathon.native_worker import list_assigned_native_jobs
+
+    sdk = MockSDK()
+    attempted = []
+    row = Obj(id=1234, name="Job 001", dataset_id=2000, assigned_to_id=1001)
+
+    def unstable_read(team_id, **kwargs):
+        attempted.append((team_id, kwargs))
+        assert kwargs == {
+            "dataset_id": 2000, "assigned_to_id": 1001, "show_disabled": True,
+        }
+        if len(attempted) == 1:
+            raise RuntimeError("Method 'jobs.list': error during pagination, some items are missed")
+        return [row]
+
+    sdk.labeling_job.get_list = unstable_read
+    monkeypatch.setattr("annotatiathon.native_worker.time.sleep", lambda _seconds: None)
+    assert list_assigned_native_jobs(sdk, 125980, 2000, [1001]) == [row]
+    assert len(attempted) == 2
+    assert sdk.jobs == []
+
+
+def test_assignee_scoped_job_list_does_not_hide_persistent_read_failure(monkeypatch):
+    from annotatiathon.native_worker import list_assigned_native_jobs
+
+    sdk = MockSDK()
+    calls = []
+
+    def unstable_read(*_args, **_kwargs):
+        calls.append(1)
+        raise RuntimeError("Method 'jobs.list': error during pagination, some items are missed")
+
+    sdk.labeling_job.get_list = unstable_read
+    monkeypatch.setattr("annotatiathon.native_worker.time.sleep", lambda _seconds: None)
+    with pytest.raises(RuntimeError, match="error during pagination"):
+        list_assigned_native_jobs(sdk, 125980, 2000, [1001])
+    assert len(calls) == 3
+    assert sdk.jobs == []
