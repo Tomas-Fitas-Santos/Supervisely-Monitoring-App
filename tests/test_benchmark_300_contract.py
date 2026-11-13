@@ -301,3 +301,24 @@ def test_full_simulator_recognizes_actual_correction_names():
     assert bench.is_correction_job_title("Job 001 (Incomplete #3)")
     assert not bench.is_correction_job_title("Job 001")
     assert not bench.is_correction_job_title("Bird video · Incomplete plumage")
+
+
+
+def test_fake_supervisely_filters_jobs_using_sdk_user_id_field():
+    import importlib.util
+    from pathlib import Path
+
+    script = Path(__file__).resolve().parents[1] / "scripts" / "benchmark_full.py"
+    spec = importlib.util.spec_from_file_location("nightjar_benchmark_filter", script)
+    assert spec is not None and spec.loader is not None
+    bench = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bench)
+
+    items = [
+        {"id": 1, "userId": 1000, "name": "Job 001"},
+        {"id": 2, "userId": 1001, "name": "Job 002"},
+    ]
+    assert bench.filter_jobs_by_assignee(items, [
+        {"field": "userId", "operator": "=", "value": 1001},
+    ]) == [items[1]]
+    assert bench.filter_jobs_by_assignee(items, []) == items
