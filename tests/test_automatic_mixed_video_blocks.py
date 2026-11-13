@@ -28,6 +28,12 @@ dataset_ctx = __import__("test_dataset_workflows").ctx
 def test_automatic_30_frame_stream_crosses_video_boundary_and_keeps_final_tail(dataset_ctx):
     http, maker, csrf = dataset_ctx
     teams(http, csrf)
+    # Empty teams must not block DATASET-WIDE queue planning. Individuals
+    # are checked only when the status worker assigns a block.
+    with maker.begin() as db:
+        db.add(CompetitionTeam(
+            event_id=DEFAULT_EVENT_ID, name="ZZ Unassigned Team", active=True,
+        ))
     with maker.begin() as db:
         owner_id = db.scalar(select(StaffAccount.id).where(
             StaffAccount.email == "owner@example.org",
