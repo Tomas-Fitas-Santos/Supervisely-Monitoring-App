@@ -623,6 +623,59 @@ def database_summary():
         }
 
 
+def full_flow_summary(plan_id, dataset_id):
+    """Read-only lifecycle accounting, scoped to this synthetic plan only."""
+    from annotatiathon import models as m
+    from annotatiathon.db import session_factory
+
+    with session_factory()() as db:
+        jobs = list(db.scalars(select(m.LabelingJob).where(
+            m.LabelingJob.plan_id == plan_id,
+        )))
+        source_count = db.scalar(select(func.count(m.MediaAsset.id)).where(
+            m.MediaAsset.dataset_id == dataset_id,
+        )) or 0
+        media_bound = db.scalar(select(func.count(m.NativeSourceMedia.id)).where(
+            m.NativeSourceMedia.dataset_id == dataset_id,
+        )) or 0
+        accepted = db.scalar(select(func.count(m.ReviewSample.id)).join(
+            m.LabelingJob, m.LabelingJob.id == m.ReviewSample.job_id,
+        ).where(
+            m.LabelingJob.plan_id == plan_id,
+            m.ReviewSample.validated_complete.is_(True),
+        )) or 0
+        reviewed = db.scalar(select(func.count(m.ReviewSample.id)).join(
+            m.LabelingJob, m.LabelingJob.id == m.ReviewSample.job_id,
+        ).where(
+            m.LabelingJob.plan_id == plan_id,
+            m.ReviewSample.completed_at.is_not(None),
+        )) or 0
+        operations = list(db.execute(
+            select(m.NativeOperation.kind, m.NativeOperation.status,
+                   func.count(m.NativeOperation.id))
+            .join(m.LabelingJob, m.LabelingJob.id == m.NativeOperation.target_id)
+            .where(m.LabelingJob.plan_id == plan_id)
+            .group_by(m.NativeOperation.kind, m.NativeOperation.status)
+        ))
+        work_blocks = list(db.scalars(select(m.WorkBlock).where(
+            m.WorkBlock.plan_id == plan_id,
+        )))
+        return {
+            "plan_id": plan_id, "dataset_id": dataset_id,
+            "source_frames": source_count, "mirrored_frames": media_bound,
+            "source_blocks": len(work_blocks),
+            "source_blocks_allocated": sum(block.job_id is not None for block in work_blocks),
+            "logical_jobs": len(jobs),
+            "jobs_by_status": dict(Counter(job.status for job in jobs)),
+            "jobs_with_native_bindings": db.scalar(select(func.count(m.NativeJobBinding.id))
+                 .join(m.LabelingJob, m.LabelingJob.id == m.NativeJobBinding.job_id)
+                 .where(m.LabelingJob.plan_id == plan_id)) or 0,
+            "validated_frames": accepted, "reviewed_frames": reviewed,
+            "operation_kinds": {f"{kind}:{status}": count
+                                for kind, status, count in operations},
+        }
+
+
 def import_dataset(client, call):
     archive = io.BytesIO()
     with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zipped:
@@ -954,6 +1007,7 @@ def load(seconds, latency, fail_rate, profile_scale=1.0, timeout_rate=0.0,
     with httpx.Client(verify=context, trust_env=False, timeout=120) as control:
         simulator = control.get("https://supervisely-sim/control/stats").json()
     event_summary = database_summary()
+    full_flow = full_flow_summary(full_plan_id, full_dataset_id) if PHASE == "full" else None
     if seconds >= 300 and PHASE != "full":
         with httpx.Client(base_url="https://web", verify=context, trust_env=False, timeout=120) as organiser:
             response = call(organiser, "POST", "/api/v1/auth/login", json={
@@ -995,7 +1049,7 @@ def load(seconds, latency, fail_rate, profile_scale=1.0, timeout_rate=0.0,
         "p99_ms": latencies[int(len(latencies) * .99)] if latencies else None,
         "transferred_bytes": sum(item["bytes"] for item in records),
         "monitors": monitors, "simulator": simulator, "database": event_summary, "phases": phases,
-        "full_dataset_id": full_dataset_id,
+        "full_dataset_id": full_dataset_id, "full_flow": full_flow,
     }
     RESULTS.mkdir(exist_ok=True)
     (RESULTS / "requests.json").write_text(json.dumps(records, indent=2))
