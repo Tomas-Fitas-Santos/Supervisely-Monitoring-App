@@ -19,13 +19,25 @@ try {
     }
     Write-Host "$service : running"
   }
-  foreach ($service in @("worker", "mirror-worker")) {
-    $ids = @(& docker compose @compose --profile native ps --status running -q $service) | Where-Object { $_ }
+  $nativeCounts = [ordered]@{
+    "worker" = 4
+    "validation-worker" = 3
+    "correction-worker" = 3
+    "status-worker" = 1
+    "recovery-worker" = 1
+    "bulk-worker" = 1
+    "mirror-worker" = 1
+  }
+  foreach ($service in $nativeCounts.Keys) {
+    $ids = @(& docker compose @compose --profile native ps --status running -q $service) |
+      Where-Object { $_ }
     if ($LASTEXITCODE -ne 0) { throw "Failed to inspect $service state." }
-    if ($RequireWorkers -and $ids.Count -ne 1) {
-      throw "Expected one running $service container. The Supervisely SDK job/upload lanes are not ready."
+    $expected = $nativeCounts[$service]
+    $actual = @($ids).Count
+    if ($RequireWorkers -and $actual -ne $expected) {
+      throw "Expected $expected running $service container(s); found $actual."
     }
-    Write-Host "$service : $(if ($ids.Count -eq 1) {'running'} else {'stopped'})"
+    Write-Host "$service : $actual / $expected running"
   }
   $environment = Get-Content ".env.live" -Raw
   $portMatch = [regex]::Match($environment, '(?m)^NIGHTJAR_LIVE_TEST_PORT=([0-9]+)')
