@@ -81,6 +81,7 @@ def test_capacity_sweep_separates_initial_release_from_complete_turnaround():
     assert '"shared_primary"' in fixture
     assert '"restart_job:done"' not in fixture  # job state comes from SQL, not fake stats
     assert '"/api/v1/review/jobs/{job_id}/decision"' not in fixture
+    assert '(body.get("meta") or {}).get("entityIds")' in fixture
 
 
 def test_automated_turnaround_metrics_link_original_and_next_native_job():
