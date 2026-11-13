@@ -109,12 +109,18 @@ def test_automated_turnaround_metrics_link_original_and_next_native_job():
 
 
 def test_worker_sweep_scales_requested_role_and_verifies_all_replicas():
-    """All 1/2/3/4 role counts must map to Compose replicas and the report."""
+    """All roles support 8+ replicas with verification and resource warnings."""
     root = Path(__file__).resolve().parents[1]
     script = (root / "scripts" / "run_worker_sweep.ps1").read_text(encoding="utf-8")
     assert '[ValidateSet("publisher", "validation", "correction", "status")]' in script
-    assert '[int[]]$Workers' in script
-    assert '[int]$PublisherBaseline = 2' in script
+    assert '[ValidateRange(1, 16)][int[]]$Workers' in script
+    for flag in ("PublisherBaseline", "Validators", "Correctors", "StatusWorkers"):
+        assert f"[ValidateRange(1, 16)][int]${flag}" in script
+    assert "[int]$PublisherBaseline = 2" in script
+    assert "docker info --format '{{.NCPU}}'" in script
+    assert "docker info --format '{{.MemTotal}}'" in script
+    assert "combined CPU limits" in script
+    assert "Combined container memory limits" in script
     for role, actual, service in [
         ("publisher", "publishers", "worker"),
         ("validation", "validatorsRun", "validation-worker"),
