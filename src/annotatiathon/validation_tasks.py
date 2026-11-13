@@ -225,6 +225,7 @@ def process_validation_once(db: Session, api, config) -> dict | None:
     problem = None
     completed = False
     next_assignment_id = None
+    assignment_candidate = None
     try:
         from .native_worker import capture_job_annotations
         job = db.get(LabelingJob, job_id)
@@ -246,22 +247,17 @@ def process_validation_once(db: Session, api, config) -> dict | None:
             capture_job_annotations(db, api, job)
         if lease_lost.is_set():
             raise RuntimeError("validation_lease_lost")
-        # Finish validation and publish-queue insertion in ONE transaction.
-        # If this allocation fails, roll back the accepted sample writes and
-        # retry safely from the immutable per-round annotation manifest.
+        # Complete and fence the accepted submission BEFORE claiming more
+        # work. Otherwise another validator can hold the Event lock while
+        # trying to acquire the Plan lock in the opposite order.
         if job.status == "on_review" and job.release_mode in {
             "shared_primary", "shared_repeat",
         } and job.assignee_person_id:
             plan = db.get(LabelingPlan, job.plan_id)
             if plan and plan.status == "running":
-                from .work_queue import claim_primary_block
-                with code_timing("validation.claim_next_primary_block", job_id=job_id):
-                    next_job = claim_primary_block(
-                        db, plan.id, job.team_id, job.assignee_person_id,
-                        include_repeats=False,
-                    )
-                if next_job is not None:
-                    next_assignment_id = next_job.id
+                assignment_candidate = (
+                    plan.id, job.team_id, job.assignee_person_id,
+                )
         completed = True
     except Exception as exc:
         db.rollback()
@@ -288,6 +284,26 @@ def process_validation_once(db: Session, api, config) -> dict | None:
         milestone("validation_failed", job_id=job_id, operation_id=task_id)
         return {"operation_id": task_id, "status": "retry_or_attention"}
     milestone("validation_completed", job_id=job_id, operation_id=task_id)
+    if assignment_candidate is not None:
+        # A separate short transaction avoids holding validated-frame and
+        # job locks while waiting on the shared plan. Status polling remains
+        # the durable recovery path if the allocation cannot commit.
+        from .work_queue import claim_primary_block
+        try:
+            with Session(db.get_bind()) as assignment_db:
+                with code_timing("validation.claim_next_primary_block", job_id=job_id):
+                    next_job = claim_primary_block(
+                        assignment_db, *assignment_candidate,
+                        include_repeats=False,
+                    )
+                    if next_job is not None:
+                        next_assignment_id = next_job.id
+                    assignment_db.commit()
+        except Exception:
+            logger.exception(
+                "Successor allocation deferred to status worker for job %s",
+                job_id,
+            )
     if next_assignment_id is not None:
         milestone("next_job_queued", job_id=job_id, operation_id=next_assignment_id)
         milestone("publish_queued", job_id=next_assignment_id)
