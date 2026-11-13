@@ -6,17 +6,26 @@ checks and reuse the disposable local dataset test fixture.
 import io
 from types import SimpleNamespace
 
+import pytest
+from fastapi.testclient import TestClient
 from PIL import Image
-from sqlalchemy import select
-from test_dataset_workflows import act, ctx as dataset_ctx, teams
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+from test_dataset_workflows import act, teams
+
+from annotatiathon.app import app
+from annotatiathon.db import get_db
 
 from annotatiathon.balanced_queue import process_preparation_once
 from annotatiathon.dataset_append import process_append_once
 from annotatiathon.models import (
     DEFAULT_EVENT_ID,
+    Base,
     BalancedVideoRun,
     CompetitionTeam,
     DatasetAppendBatch,
+    Event,
     LabelingJob,
     LabelingPlan,
     MediaAsset,
@@ -26,7 +35,47 @@ from annotatiathon.models import (
     Person,
     StaffAccount,
 )
+from annotatiathon.security import password_hash
 from annotatiathon.work_queue import claim_primary_block
+
+
+@pytest.fixture
+def dataset_ctx(monkeypatch, tmp_path):
+    engine = create_engine("sqlite+pysqlite://",
+                           connect_args={"check_same_thread": False},
+                           poolclass=StaticPool)
+    Base.metadata.create_all(engine)
+    maker = sessionmaker(bind=engine, expire_on_commit=False)
+    with maker.begin() as db:
+        db.add(Event(id=DEFAULT_EVENT_ID, name="Initial Event"))
+        db.add(StaffAccount(
+            email="owner@example.org", name="Owner",
+            roles=["organiser"], password_hash=password_hash("StrongLocalPassword!"),
+        ))
+    def override():
+        with maker() as db:
+            yield db
+    app.dependency_overrides[get_db] = override
+    monkeypatch.setattr(
+        "annotatiathon.auth.get_settings",
+        lambda: type("Settings", (), {"app_env": "local"})(),
+    )
+    monkeypatch.setattr(
+        "annotatiathon.datasets_api.get_settings",
+        lambda: type("Settings", (), {
+            "local_data_dir": str(tmp_path),
+            "max_dataset_bytes": 150_000_000_000,
+            "max_dataset_assets": 250000,
+        })(),
+    )
+    with TestClient(app) as client:
+        login = client.post("/api/v1/auth/login", json={
+            "email": "owner@example.org", "password": "StrongLocalPassword!",
+        })
+        assert login.status_code == 200
+        yield client, maker, login.json()["csrf_token"]
+    app.dependency_overrides.clear()
+    engine.dispose()
 
 
 def _create_two_video_dataset(maker, tmp_path):
