@@ -123,6 +123,7 @@ services:
   worker:
     <<: *backend
     profiles: ["native"]
+    scale: 4
     build: *native-worker-build
     depends_on:
       migrate:
@@ -137,6 +138,7 @@ services:
   validation-worker:
     <<: *backend
     profiles: ["native"]
+    scale: 3
     build: *native-worker-build
     depends_on:
       migrate:
@@ -149,6 +151,7 @@ services:
   correction-worker:
     <<: *backend
     profiles: ["native"]
+    scale: 3
     build: *native-worker-build
     depends_on:
       migrate:
