@@ -3,6 +3,7 @@ import io
 import os
 import shutil
 import subprocess
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -268,6 +269,22 @@ def test_raw_video_sync_recovers_only_new_decoder_output(mounted, monkeypatch):
         assets = list(db.scalars(select(MediaAsset).where(
             MediaAsset.dataset_id == dsid, MediaAsset.video_group == "bird/second")))
         assert len(assets) == 2
-        root = __import__("pathlib").Path(db.get(MediaDataset, dsid).root_path) / "media"
+        root = Path(db.get(MediaDataset, dsid).root_path) / "media"
         assert all((root / a.relative_path).is_file() for a in assets)
         assert not (root / "videos/bird/second/uncommitted.jpg").exists()
+
+
+def test_abandoned_new_decoder_frames_never_shadow_supplied_additions(mounted):
+    client, maker, _csrf, dsid, _source, content, add_clip, _originals = mounted
+    add_clip("second")
+    with maker() as db:
+        abandoned = Path(db.get(MediaDataset, dsid).root_path) / "media/videos/bird/second"
+    abandoned.mkdir(parents=True)
+    (abandoned / "frame_000001.jpg").write_bytes(b"abandoned decoder output")
+    result, status = synchronize(mounted)
+    assert result["status"] == "done", status
+    with maker() as db:
+        asset_id = db.scalar(select(MediaAsset.id).where(
+            MediaAsset.dataset_id == dsid, MediaAsset.video_group == "bird/second"))
+    assert client.get(f"/api/v1/review/datasets/{dsid}/assets/{asset_id}/image").content == content
+    assert not abandoned.exists()

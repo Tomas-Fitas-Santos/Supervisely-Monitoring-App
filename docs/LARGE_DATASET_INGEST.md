@@ -130,7 +130,8 @@ intentional complete clip without a manifest or original source video.
 Sync never renumbers old frames or removes inventory. Missing existing files,
 replacements, and extra frames inside an already indexed video fail atomically.
 Put each complete new video under a new video name. Resolve the reported source
-problem and click the button again; existing committed IDs and remote bindings
+problem and click the button again; abandoned decoder output for a new video is
+removed before retry so it cannot shadow supplied mounted frames. Existing committed IDs and remote bindings
 remain intact. The source folder must remain mounted throughout app use.
 
 A successful nonempty sync increments the inventory revision, invalidates
@@ -173,7 +174,7 @@ delivery, review completion, and subsequent nonduplicating job allocation. All
 external operations in these tests use the isolated SDK test double, not the
 real Supervisely workspace. The PostgreSQL checks use a disposable migrated
 database. Lint ignores executable-bit checks because Docker's Windows bind mount
-presents source files as executable. The final local gates passed **323 backend
+presents source files as executable. The final local gates passed **324 backend
 tests**, **8 browser upload/read tests**, Python lint, and the production
 TypeScript/Vite build. These are regression checks; the SDK transport smoke and
 live deployment checks are separate operational gates.

@@ -5,6 +5,7 @@ Only the native worker opens media and uploads paths directly to Supervisely.
 No browser transfer, local copy of supplied frames, or public filesystem browsing.
 """
 import logging
+import shutil
 from pathlib import Path, PurePosixPath
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -216,6 +217,15 @@ def index_mounted_dataset(db: Session, ds: MediaDataset, progress=None, *, addit
     from .frame_extraction import extract_full_video
     from .frame_import import index_supplied_frames
 
+    def clear_new_output(path):
+        # A failed raw-video attempt may later be replaced by a supplied frame
+        # folder with the same NEW group name. Never let abandoned private
+        # frames shadow the newly mounted originals in media_file().
+        if additions and path.exists():
+            if path.is_symlink() or not path.resolve().is_relative_to(media_root.resolve()):
+                raise ValueError("unsafe_new_video_output")
+            shutil.rmtree(path)
+
     def source_stat(path):
         if path.is_symlink() or not path.is_file() or not path.resolve().is_relative_to(source):
             raise ValueError("unsafe_source_file")
@@ -331,12 +341,7 @@ def index_mounted_dataset(db: Session, ds: MediaDataset, progress=None, *, addit
                 video.source_sha256 = digest
                 video.identity_notes = ["Original video is read-only on the mounted source volume."]
                 dest = media_root / "videos" / species / entry.stem
-                if additions and dest.exists():
-                    # Only this NEW group's uncommitted decoder output can remain after a crash.
-                    import shutil
-                    if dest.is_symlink() or not dest.resolve().is_relative_to(media_root.resolve()):
-                        raise ValueError("unsafe_new_video_output")
-                    shutil.rmtree(dest)
+                clear_new_output(dest)
                 if ds.extraction_policy == "all_frames":
                     result = extract_full_video(entry, dest,
                         max_frames=settings.max_dataset_assets - frame_count - image_count)
@@ -382,6 +387,7 @@ def index_mounted_dataset(db: Session, ds: MediaDataset, progress=None, *, addit
                         elif frame.suffix.lower() in IMAGE_EXTENSIONS or frame.is_symlink():
                             raise ValueError(f"existing_video_has_new_frames_use_new_video_folder:{group}")
                     continue
+                clear_new_output(media_root / "videos" / species / title)
                 video = MediaVideo(
                     event_id=ds.event_id, dataset_id=ds.id,
                     video_group=f"{species}/{title}",
