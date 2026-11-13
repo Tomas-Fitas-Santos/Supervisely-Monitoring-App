@@ -157,6 +157,17 @@ def upload_status(
     event = current_event(db, ctx)
     ds = get_dataset(db, event.id, dataset_id)
     scope = DatasetStagedFile.dataset_id == ds.id
+    # Lost-chunk recovery is a single indexed lookup, not an aggregate over
+    # potentially hundreds of thousands of staged files.
+    if relative_path is not None and not include_files:
+        rel = str(safe_relative(relative_path))
+        found = db.scalar(select(DatasetStagedFile).where(
+            scope, DatasetStagedFile.relative_path == rel,
+        ))
+        return {"dataset": dataset_view(ds), "file": ({
+            "received_bytes": found.received_bytes,
+            "expected_bytes": found.expected_bytes,
+        } if found else None)}
     count, received, complete = db.execute(select(
         func.count(), func.coalesce(func.sum(DatasetStagedFile.received_bytes), 0),
         func.coalesce(func.sum(case(
