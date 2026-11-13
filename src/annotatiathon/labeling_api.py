@@ -302,16 +302,23 @@ def create_plan(
     teams = list(db.scalars(select(CompetitionTeam).where(
         CompetitionTeam.event_id == event.id, CompetitionTeam.active.is_(True),
     ).order_by(CompetitionTeam.name, CompetitionTeam.id)))
-    if not teams:
-        raise HTTPException(status_code=422, detail="Import competition teams first.")
-    for team in teams:
-        people, group = pair_members(db, event.id, team.id)
-        if not people or group == "invalid":
-            raise HTTPException(
-                status_code=422,
-                detail="Every team needs one or two active participants or two active "
-                       "monitor-pair members before planning.",
-            )
+    # A shared 30-frame queue belongs to the DATASET, not to a fixed team
+    # roster. Competition teams and individual annotators may join later.
+    # Claiming a block still requires an active, checked-in and verified
+    # assignee in an eligible team (see work_queue.claim_primary_block).
+    # Legacy whole-video planning creates per-person jobs immediately, so
+    # it continues to require at least one valid team with members.
+    if payload.mode != "shared_30_v1":
+        if not teams:
+            raise HTTPException(status_code=422, detail="Import competition teams first.")
+        for team in teams:
+            people, group = pair_members(db, event.id, team.id)
+            if not people or group == "invalid":
+                raise HTTPException(
+                    status_code=422,
+                    detail="Every team needs one or two active participants or two active "
+                           "monitor-pair members before planning.",
+                )
     assets = list(db.scalars(select(MediaAsset).where(
         MediaAsset.event_id == event.id, MediaAsset.dataset_id == dataset.id,
     ).order_by(MediaAsset.video_group, MediaAsset.frame_index.nulls_last(), MediaAsset.relative_path, MediaAsset.id)))
