@@ -2,10 +2,11 @@
  * The server owns saved offsets, isolated staging and atomic inventory commits.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { CloudUpload, FolderOpen, RefreshCw, Trash2 } from "lucide-react";
-import { uploadApi as api, uploadFile, validateOffset } from "./upload_helpers";
+import { ChevronDown, CloudUpload, RefreshCw, Trash2 } from "lucide-react";
+import { uploadApi as api, uploadFile, uploadSources, uploadDirectorySources, validateOffset } from "./upload_helpers";
 import { confirmAction } from "./dialogs";
-import { validateDatasetSources } from "./dataset_transfer";
+import { useDatasetSelection } from "./dataset_selection";
+import { DatasetSourcePicker } from "./dataset_source_picker";
 
 type UploadKind="zip"|"folder";
 type Batch={id:string;dataset_id:string;status:string;upload_kind:UploadKind;
@@ -17,7 +18,8 @@ export function AppendVideos({datasetId,csrf,onCommitted}:{
   datasetId:string;csrf:string;onCommitted:()=>Promise<unknown>|void;
 }){
   const [kind,setKind]=useState<UploadKind>("folder");
-  const [files,setFiles]=useState<File[]>([]);
+  const selection=useDatasetSelection(kind);
+  const files=selection.files;
   const [batches,setBatches]=useState<Batch[]>([]);
   const [activeId,setActiveId]=useState<string|null>(null);
   const [running,setRunning]=useState(false);
@@ -25,6 +27,8 @@ export function AppendVideos({datasetId,csrf,onCommitted}:{
   const [error,setError]=useState("");
   const [notice,setNotice]=useState("");
   const [stage,setStage]=useState("");
+  const [expanded,setExpanded]=useState(false);
+  const [discovering,setDiscovering]=useState(false);
   const controller=useRef<AbortController|null>(null);
   const lastCommitted=useRef<string>("");
   const fileRef=useRef<HTMLInputElement|null>(null);
@@ -47,17 +51,18 @@ export function AppendVideos({datasetId,csrf,onCommitted}:{
     return()=>{live=false;window.clearInterval(timer);};
   },[refresh]);
   useEffect(()=>{
-    setFiles([]);setActiveId(null);setError("");setNotice("");
+    selection.clear();setActiveId(null);setError("");setNotice("");
   },[datasetId]);
   const active=batches.find(b=>b.id===activeId)||null;
-  const total=files.reduce((sum,file)=>sum+file.size,0);
-  function selectedFiles(next:File[]){setFiles(next);setError("");}
+  useEffect(()=>{if(active||running)setExpanded(true);},[active?.id,running]);
+  const total=selection.prepared?.total||0;
 
   async function sendBatch(batch:Batch){
     const signal=controller.current!.signal;
-    setStage("Checking selected file metadata…");
-    const {sources,total}=await validateDatasetSources(files,batch.upload_kind,signal,
-      count=>setStage(`Checking file metadata: ${count} / ${files.length}`));
+    const directory=selection.directory;
+    const sources=selection.prepared?.sources||new Map<string,File>();
+    let total=selection.prepared?.total||0;
+    setDiscovering(Boolean(directory));
     setStage("Checking saved upload progress…");
     const previous=new Map<string,Receipt>();
     let after:string|null=null;
@@ -67,17 +72,22 @@ export function AppendVideos({datasetId,csrf,onCommitted}:{
         (after?"&after="+encodeURIComponent(after):""),"GET",undefined,undefined,signal);
       for(const row of details.files){
         const source=sources.get(row.path);
-        if(!source||source.size!==row.expected_bytes)throw new Error("Reselected files do not match the saved batch paths and sizes.");
-        validateOffset(row.received_bytes,source.size);previous.set(row.path,row);
+        if(!directory&&(!source||source.size!==row.expected_bytes))throw new Error("Reselected files do not match the saved batch paths and sizes.");
+        validateOffset(row.received_bytes,row.expected_bytes);previous.set(row.path,row);
       }
+      setStage(`Checked ${previous.size.toLocaleString()} saved file receipts…`);
       if(details.next_after&&details.next_after===after)throw new Error("Upload progress paging did not advance.");
       after=details.next_after||null;
     }while(after);
-    let done=0;for(const row of previous.values())done+=row.received_bytes;
+    let done=0;if(!directory)for(const row of previous.values())done+=row.received_bytes;
     setProgress({done,total});let count=0;
-    for(const [path,file] of sources){
-      setStage(`Uploading files: ${count} / ${files.length}`);
-      await uploadFile({file,offset:previous.get(path)?.received_bytes||0,csrf,signal,
+    const send=async(path: string,file: File)=>{
+      const saved=previous.get(path);
+      if(saved&&saved.expected_bytes!==file.size)throw new Error("Reselected files do not match the saved batch paths and sizes.");
+      previous.delete(path);
+      if(directory&&saved)done+=saved.received_bytes;
+      setStage(`Uploading files: ${count.toLocaleString()} completed${directory?" · Reading folder progressively":` / ${files.length.toLocaleString()}`}`);
+      await uploadFile({file,offset:saved?.received_bytes||0,csrf,signal,
         url:`/datasets/${datasetId}/append-batches/${batch.id}/chunk?relative_path=`+encodeURIComponent(path),
         readOffset:async()=>{
           const state=await api<BatchDetails>(`/datasets/${datasetId}/append-batches/${batch.id}?relative_path=`+encodeURIComponent(path),
@@ -85,17 +95,23 @@ export function AppendVideos({datasetId,csrf,onCommitted}:{
           return state.file?.received_bytes||0;
         },onProgress:bytes=>{done+=bytes;setProgress({done,total});}});
       count++;
-    }
+    };
+    if(directory)await uploadDirectorySources(directory,send,signal,(_count,bytes)=>{
+      total=bytes;setProgress({done,total});
+    });
+    else await uploadSources(sources,send);
+    if(previous.size)throw new Error("Reselected folder is missing files from the saved batch.");
+    setDiscovering(false);
     setStage("Starting local indexing…");
     await api(`/datasets/${datasetId}/append-batches/${batch.id}/finish`,
       "POST",undefined,csrf,signal);
     setNotice("Batch uploaded. Local indexing will commit complete videos into the existing dataset.");
-    setFiles([]);if(fileRef.current)fileRef.current.value="";
+    selection.clear();if(fileRef.current)fileRef.current.value="";
     void refresh().catch(()=>undefined);
   }
 
   async function upload(){
-    if(running||!files.length)return;
+    if(running||!selection.ready)return;
     setRunning(true);setError("");setNotice("");
     controller.current=new AbortController();setStage("Preparing append upload…");
     try{
@@ -135,47 +151,42 @@ export function AppendVideos({datasetId,csrf,onCommitted}:{
     finally{setRunning(false);}
   }
 
-  return <div className="settings-note">
-    <div className="panel-heading"><div>
-      <strong>Add videos to this dataset</strong>
-      <p className="muted small">Append another ZIP or folder containing complete
-        species/video clips. New species may overlap existing batches, but
-        existing video names and source frames cannot be replaced.</p>
-    </div><button className="btn secondary" type="button" disabled={running}
-      onClick={()=>void refresh().catch(e=>setError((e as Error).message))}><RefreshCw size={14}/> Refresh</button></div>
+  return <details className="dataset-append" open={expanded}
+    onToggle={e=>setExpanded(e.currentTarget.open)}>
+    <summary><span><CloudUpload size={18}/><strong>Add videos to this dataset</strong></span>
+      <ChevronDown size={17}/></summary>
+    <div className="dataset-append-body">
+    <p className="muted small">Add a ZIP or folder of complete videos before assigning jobs.
+      Use new video names; existing videos and frames cannot be replaced.</p>
+    <div className="dataset-append-toolbar">
     <label>Append upload format
       <select value={kind} disabled={running||Boolean(active&&active.status==="uploading")}
-        onChange={e=>{setKind(e.target.value as UploadKind);setFiles([]);
+        onChange={e=>{setKind(e.target.value as UploadKind);selection.clear();
           if(fileRef.current)fileRef.current.value="";}}>
-        <option value="folder">Folder of species/video clips</option>
-        <option value="zip">ZIP of species/video clips</option>
+        <option value="folder">Folder</option>
+        <option value="zip">ZIP archive</option>
       </select>
     </label>
-    <label className="dataset-drop">
-      {kind==="folder"?<FolderOpen size={23}/>:<CloudUpload size={23}/>}
-      <span>{kind==="folder"?"Choose a folder to append":"Choose a ZIP to append"}</span>
-      {kind==="folder"?<input ref={fileRef} type="file" multiple
-        {...{webkitdirectory:"",directory:""}}
-        disabled={running||Boolean(active&&active.status!=="uploading")}
-        onChange={e=>selectedFiles(Array.from(e.target.files||[]))}/>:
-        <input ref={fileRef} type="file" accept=".zip,application/zip"
-          disabled={running||Boolean(active&&active.status!=="uploading")}
-          onChange={e=>selectedFiles(Array.from(e.target.files||[]))}/>}
-    </label>
-    <p className="muted small">{files.length} file(s) selected ·
-      {" "}{Math.round(total/1048576)} MiB</p>
+    <button className="btn secondary" type="button" disabled={running}
+      onClick={()=>void refresh().catch(e=>setError((e as Error).message))}><RefreshCw size={14}/> Refresh</button>
+    </div>
+    <DatasetSourcePicker kind={kind} selection={selection} inputRef={fileRef}
+      disabled={running||Boolean(active&&active.status!=="uploading")} append
+      folderLabel="Choose a folder to append" zipLabel="Choose a ZIP to append"/>
+    <p className="dataset-selection muted small">{selection.directory?`Folder selected: ${selection.directory.name}`:
+      files.length?`${files.length.toLocaleString()} file(s) selected · ${Math.round(total/1048576)} MiB`:"No files selected"}</p>
     {active&&<p className="muted small">Latest batch: {active.status}
       {" "}({active.upload_kind}, revision {active.started_revision})
       {active.error_code?" · "+active.error_code:""}</p>}
     {running&&<p className="muted small" role="status">{stage}</p>}
-    {running&&<progress max={progress.total||1} value={progress.done}/>}
+    {running&&<progress max={progress.total||1} value={discovering?undefined:progress.done}/>}
     {running&&<p className="muted small">{Math.round(progress.done/1048576)}
       /{Math.round(progress.total/1048576)} MiB uploaded</p>}
     {error&&<p className="alert danger" role="alert">{error}</p>}
     {notice&&<p className="alert success" role="status">{notice}</p>}
     <div className="button-row">
       <button className="btn secondary" type="button"
-        disabled={running||!files.length||Boolean(active&&active.status!=="uploading")}
+        disabled={running||!selection.ready||Boolean(active&&active.status!=="uploading")}
         onClick={()=>void upload()}><CloudUpload size={15}/>
         {active?.status==="uploading"?"Resume and finish append":"Upload and append"}
       </button>
@@ -188,5 +199,6 @@ export function AppendVideos({datasetId,csrf,onCommitted}:{
         <button className="btn danger-outline" type="button" disabled={running}
           onClick={()=>void discard()}><Trash2 size={15}/> Discard batch</button>}
     </div>
-  </div>;
+    </div>
+  </details>;
 }

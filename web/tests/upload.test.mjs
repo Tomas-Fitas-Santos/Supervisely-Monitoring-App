@@ -1,12 +1,81 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {validateDatasetSources, uploadFile, uploadRequest, uploadSources} from '../src/upload_helpers.ts';
+import {validateDatasetSources, uploadFile, uploadRequest, uploadSources, uploadDirectorySources} from '../src/upload_helpers.ts';
 
 test('100k file validation yields, counts metadata, and never reads contents', async()=>{
   let yielded=false; setTimeout(()=>{yielded=true;},0);
   const files=Array.from({length:100000},(_,i)=>({name:`${i}.jpg`,webkitRelativePath:`birds/species/video/${i}.jpg`,size:150000,slice(){throw Error('content read');}}));
   const result=await validateDatasetSources(files,'folder');
   assert.equal(yielded,true);assert.equal(result.total,15000000000);assert.equal(result.sources.size,100000);
+});
+
+test('selection validation reads each file size once and accepts a FileList-like source', async()=>{
+  let reads=0;
+  const files={length:2,0:{name:'a.jpg',webkitRelativePath:'birds/species/video/a.jpg',get size(){reads++;return 100;}},
+    1:{name:'b.jpg',webkitRelativePath:'birds/species/video/b.jpg',get size(){reads++;return 200;}}};
+  const updates=[];
+  const result=await validateDatasetSources(files,'folder',undefined,(count,bytes)=>updates.push({count,bytes}));
+  assert.equal(reads,2);assert.equal(result.total,300);
+  assert.deepEqual(updates.at(-1),{count:2,bytes:300});
+});
+
+function directory(name,children){return {name,kind:'directory',async* values(){yield* children();}};}
+function frame(name,getFile=async()=>({name,size:100})){return {name,kind:'file',getFile};}
+
+test('50k-folder upload starts before enumeration finishes, with bounded metadata and uploads', async()=>{
+  let discovered=0,read=0,uploaded=0,active=0,maximum=0,firstRead=null;
+  const frames=directory('clip',function*(){
+    for(let i=0;i<50000;i++)yield frame(`frame_${i}.jpg`,async()=>{
+      read++;return {name:`frame_${i}.jpg`,size:100};
+    });
+  });
+  const species=directory('species',function*(){yield frames;});
+  const root=directory('birds',function*(){yield species;});
+  await uploadDirectorySources(root,async(path)=>{
+    assert.match(path,/^birds\/species\/clip\/frame_\d+\.jpg$/);
+    if(firstRead===null)firstRead=read;
+    active++;maximum=Math.max(maximum,active);
+    await new Promise(resolve=>setImmediate(resolve));
+    active--;uploaded++;
+  },new AbortController().signal,(count,bytes)=>{discovered=count;assert.equal(bytes,count*100);});
+  assert.ok(firstRead<=4,`first upload waited for ${firstRead} metadata reads`);
+  assert.equal(uploaded,50000);assert.equal(discovered,50000);assert.equal(maximum,4);
+});
+
+test('directory read or upload failure settles active writes and stops scheduling new files', async()=>{
+  let active=0,started=0;
+  const root=directory('birds',function*(){
+    yield directory('species',function*(){yield directory('clip',function*(){
+      for(let i=0;i<20;i++)yield frame(`frame_${i}.jpg`);
+    });});
+  });
+  await assert.rejects(uploadDirectorySources(root,async()=>{
+    started++;active++;
+    try{await new Promise(resolve=>setTimeout(resolve,5));throw Error('network stopped');}
+    finally{active--;}
+  },new AbortController().signal),/network stopped/);
+  assert.equal(active,0);assert.equal(started,4);
+});
+
+test('pause does not wait for a stalled browser metadata read or send any late upload', async()=>{
+  let uploads=0,reads=0;
+  const controller=new AbortController();
+  const root=directory('birds',function*(){yield directory('species',function*(){
+    yield directory('clip',function*(){yield frame('frame_1.jpg',()=>{
+      reads++;controller.abort();return new Promise(()=>{});
+    });});
+  });});
+  await assert.rejects(uploadDirectorySources(root,async()=>{uploads++;},controller.signal),/paused/);
+  assert.equal(reads,1);assert.equal(uploads,0);
+});
+
+test('invalid directory paths fail before upload and empty folders fail visibly', async()=>{
+  let uploads=0;
+  const unsafe=directory('birds',function*(){yield frame('../escape.jpg');});
+  await assert.rejects(uploadDirectorySources(unsafe,async()=>{uploads++;},new AbortController().signal),/Invalid source filename/);
+  const empty=directory('birds',function*(){});
+  await assert.rejects(uploadDirectorySources(empty,async()=>{uploads++;},new AbortController().signal),/no supported files/);
+  assert.equal(uploads,0);
 });
 
 test('folder requests use bounded concurrency and settle active writes before failing', async()=>{

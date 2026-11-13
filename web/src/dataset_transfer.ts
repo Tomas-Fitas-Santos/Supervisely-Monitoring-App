@@ -2,7 +2,9 @@
  * A full browser reload loses File objects: the organiser must reselect the
  * original archive/folder, and we resume using offsets persisted on the server.
  */
-import { uploadApi as api, uploadFile, uploadSources, validateOffset, validateDatasetSources } from "./upload_helpers";
+import { uploadApi as api, uploadFile, uploadSources, uploadDirectorySources,
+  validateOffset, validateDatasetSources, type DatasetDirectoryHandle,
+  type PreparedDatasetSources } from "./upload_helpers";
 export { validateDatasetSources } from "./upload_helpers";
 
 type UploadKind = "zip" | "folder";
@@ -17,6 +19,7 @@ export type DatasetTransferState = {
   phase: "preparing" | "reconciling" | "uploading" | "validating" | "queued" | "ready" | "interrupted";
   done: number; total: number; files: number; count: number;
   error: string | null;
+  discovering: boolean;
 };
 
 const listeners = new Set<(state: DatasetTransferState | null) => void>();
@@ -62,17 +65,20 @@ export function beginDatasetTransfer(params: {
   files: File[];
   csrf: string;
   resume: boolean;
+  directory?: DatasetDirectoryHandle | null;
+  prepared?: PreparedDatasetSources | null;
 }): void {
   if (task?.state.running) {
     throw new Error("A dataset transfer is already running in this browser tab.");
   }
-  const { datasetId, name, kind, files, csrf, resume } = params;
+  const { datasetId, name, kind, files, csrf, resume, directory, prepared } = params;
   const total = 0;
   const controller = new AbortController();
   task = {
     state: {
       datasetId, name, running: true, phase: "preparing",
       done: 0, total, files: 0, count: files.length, error: null,
+      discovering: Boolean(directory),
     },
     controller,
     done: Promise.resolve(),
@@ -81,10 +87,12 @@ export function beginDatasetTransfer(params: {
 
   task.done = (async () => {
     try {
-      const {sources, total} = await validateDatasetSources(files, kind, controller.signal,
-        count => update({files: count}));
+      const {sources, total} = directory ? {sources:new Map<string,File>(),total:0}
+        : prepared || await validateDatasetSources(files, kind, controller.signal,
+          count => update({files: count}));
       update({total, files: 0, phase: resume ? "reconciling" : "uploading"});
       const offsets = new Map<string, number>();
+      const remaining = new Map<string, FileReceipt>();
       if (resume) {
         await api("/datasets/" + datasetId + "/resume", "POST", undefined, csrf, controller.signal);
         let after: string | null = null;
@@ -94,18 +102,24 @@ export function beginDatasetTransfer(params: {
             "GET", undefined, undefined, controller.signal);
           for (const row of status.file_progress || []) {
             const source = sources.get(row.relative_path);
-            if (!source || source.size !== row.expected_bytes) throw new Error("Reselected dataset does not match stored file paths and sizes.");
-            offsets.set(row.relative_path, validateOffset(row.received_bytes, source.size));
+            if (!directory && (!source || source.size !== row.expected_bytes)) throw new Error("Reselected dataset does not match stored file paths and sizes.");
+            offsets.set(row.relative_path, validateOffset(row.received_bytes, row.expected_bytes));
+            remaining.set(row.relative_path,row);
           }
+          update({files:remaining.size});
           if(status.next_after && status.next_after === after) throw new Error("Upload progress paging did not advance.");
           after = status.next_after || null;
         } while(after);
       }
       let done = 0;
-      for(const offset of offsets.values()) done += offset;
-      update({done, phase: "uploading"});
+      if(!directory)for(const offset of offsets.values()) done += offset;
+      update({done, files:0, phase: "uploading"});
       let index = 0;
-      await uploadSources(sources, async (path, file) => {
+      const send = async (path: string, file: File) => {
+        const saved=remaining.get(path);
+        if(saved&&saved.expected_bytes!==file.size)throw new Error("Reselected dataset does not match stored file paths and sizes.");
+        remaining.delete(path);
+        if(directory&&saved){done+=saved.received_bytes;update({done});}
         await uploadFile({file, offset: offsets.get(path) || 0, csrf, signal: controller.signal,
           url: "/datasets/uploads/" + datasetId + "/chunk?relative_path=" + encodeURIComponent(path),
           readOffset: async () => {
@@ -116,8 +130,12 @@ export function beginDatasetTransfer(params: {
           onProgress: bytes => {done += bytes; update({done});},
         });
         update({files: ++index});
-      });
-      update({ phase: "validating" });
+      };
+      if(directory)await uploadDirectorySources(directory,send,controller.signal,
+        (count,total)=>update({count,total}));
+      else await uploadSources(sources,send);
+      if(remaining.size)throw new Error("Reselected folder is missing files from the saved upload.");
+      update({ phase: "validating", discovering:false });
       await api("/datasets/" + datasetId + "/finalize?background=true", "POST", undefined, csrf, controller.signal);
       update({ phase: "queued", running: false });
     } catch (error) {

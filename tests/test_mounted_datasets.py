@@ -229,7 +229,8 @@ def test_in_app_dataset_picker_and_isolated_upload_paths():
     assert "Choose dataset folder on this computer" in browser
     assert 'useState<"zip"|"folder">("folder")' in browser
     assert 'useState<"all_frames"|"sample_1fps">("all_frames")' in browser
-    assert 'webkitdirectory:""' in browser
+    picker = (root / "web/src/dataset_source_picker.tsx").read_text(encoding="utf-8")
+    assert 'webkitdirectory:""' in picker
     assert "files[0].webkitRelativePath.split" in browser
     assert "  mirror-worker:" in compose
     assert 'NIGHTJAR_DEDICATED_MIRROR: "1"' in compose
