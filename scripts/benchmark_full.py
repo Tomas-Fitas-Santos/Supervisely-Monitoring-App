@@ -31,6 +31,7 @@ PASSWORD = "SyntheticBenchmarkPassword!"
 FRAMES = int(os.environ.get("BENCHMARK_FRAMES", "30"))
 ANNOTATORS = int(os.environ.get("BENCHMARK_ANNOTATORS", "300"))
 MONITORS = int(os.environ.get("BENCHMARK_MONITORS", "12"))
+FULL_FOLLOWUPS = max(1, ANNOTATORS // 5)
 SECONDS_PER_FRAME = int(os.environ.get("BENCHMARK_SECONDS_PER_FRAME", "90"))
 UPLOAD = os.environ.get("BENCHMARK_UPLOAD") == "1"
 PHASE = os.environ.get("BENCHMARK_PHASE", "turnaround")
@@ -686,7 +687,7 @@ def import_dataset(client, call):
             # the API upload/finalize and Supervisely mirror worker paths.
             from PIL import Image
 
-            for video in range(ANNOTATORS + 60):
+            for video in range(ANNOTATORS + FULL_FOLLOWUPS):
                 for frame in range(FRAMES):
                     index = video * FRAMES + frame
                     buffer = io.BytesIO()
@@ -723,7 +724,7 @@ def import_dataset(client, call):
             "transfer_seconds": round(transfer_seconds, 3),
             "finalize_seconds": time.monotonic() - started,
             "dataset": response.json(),
-            "uploaded_images": (ANNOTATORS + 60) * FRAMES
+            "uploaded_images": (ANNOTATORS + FULL_FOLLOWUPS) * FRAMES
                 if PHASE == "full" else FRAMES}
 
 
@@ -879,11 +880,11 @@ def load(seconds, latency, fail_rate, profile_scale=1.0, timeout_rate=0.0,
                 })
                 response.raise_for_status()
                 plan_data = response.json()
-                if plan_data["primary_blocks"] != ANNOTATORS + 60 or (
-                        plan_data["unique_frames"] != (ANNOTATORS + 60) * FRAMES):
+                if plan_data["primary_blocks"] != ANNOTATORS + FULL_FOLLOWUPS or (
+                        plan_data["unique_frames"] != (ANNOTATORS + FULL_FOLLOWUPS) * FRAMES):
                     raise RuntimeError(
-                        "Full-flow plan did not allocate the 300 initial and "
-                        "60 follow-up unique 30-frame blocks")
+                        "Full-flow plan did not allocate initial and "
+                        "follow-up unique 30-frame blocks")
                 full_plan_id = plan_data["plan_id"]
                 response = call(organiser, "POST",
                                 f"/api/v1/labeling/plans/{full_plan_id}/approve")
