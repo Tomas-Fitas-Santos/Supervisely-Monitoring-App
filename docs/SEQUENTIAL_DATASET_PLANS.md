@@ -1,0 +1,68 @@
+# Videos first, standalone images second
+
+An event can use a ZIP/folder-imported video dataset followed by a separate
+mounted image dataset. Storage method does not determine scheduling. Both
+datasets retain their original asset IDs and Supervisely source mappings.
+
+## Organiser workflow
+
+1. Keep the existing video plan. Standard shared queues require no morphology
+   classification. Balanced queues still require their existing eligibility
+   checks and must cover every video frame to support this handoff.
+2. Link the separate image folder using the dataset page. Its layout is
+   `dataset/category/photo.jpg`: images sit directly inside category folders.
+   Category names need not identify a species or morphology. Keep the host
+   folder available to the API and workers. Finish copying and synchronizing
+   before creating its plan.
+3. Wait for image indexing and the Supervisely mirror to complete.
+4. Under **Job Distribution → Automatic distribution**, select the image
+   dataset and **Standalone images · 30-image queue**. Select the existing
+   video plan under **Start after video plan**.
+5. Create and approve the image draft, then **Arm image plan**. It enters a
+   persistent `waiting` state. The video plan can be approved and launched
+   before or after arming the image plan; its identity and blocks stay intact.
+
+Image jobs contain 30 images, except the final job, which may be shorter. They
+reuse the mirrored image IDs and the existing validation, correction, review,
+and scoring paths. Image batches never pretend to be source videos.
+
+## Handoff rules
+
+The worker starts the armed image plan once the running video plan has
+structurally validated submissions covering **every distinct video frame**,
+with no open primary work packets. Assignment exhaustion or clicking Submit
+in Supervisely is insufficient. Partial submissions remain in correction;
+accepted frames and their reviews are retained. Monitor review does not need
+to finish before images begin.
+
+Activation also requires an active event and a complete image mirror. A
+paused video plan does not trigger activation. The transition is transactional,
+audited, and safe to retry after restart or concurrent worker polls. Each
+annotator still has at most one open automatic work packet per event.
+
+There is one following image plan per video plan. Unrelated automatic plans
+cannot be approved alongside the sequence. A waiting image plan can be
+cancelled without deleting either dataset or changing the video plan. After
+image jobs begin, use the existing pause controls rather than cancellation.
+
+The migration adds an optional dependency and permits image blocks without
+a source-video ID. Existing plans receive no dependency and retain their
+current state, source mappings, and assignments.
+
+## Verification and limitations
+
+Tests cover ZIP video imports followed by mounted unclassified images, both
+video queue modes, waiting before video approval, complete and partial
+submissions, image correction jobs, authorised image previews, monitor review
+and scoring, missing mirrors, cancellation, duplicate claims, and concurrent
+PostgreSQL activation/allocation. All remote writes in these tests use the SDK
+test double; real event data is not used for mutations.
+
+A read-only production audit can verify remote IDs, names, dimensions, and
+local metadata without creating jobs. Allocation can be exercised against an
+ephemeral copy of dataset metadata and synthetic participants. Such an audit
+does not prove live participant permissions or exercise real remote job writes.
+
+A dataset-preserving rehearsal reset is **not implemented by this change**.
+The existing full event reset clears datasets and must not be used as a
+substitute for that proposed feature.

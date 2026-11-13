@@ -47,7 +47,8 @@ def list_annotation_classes(
 class PlanInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     dataset_id: str
-    mode: Literal["legacy", "shared_30_v1", "balanced_30_v1"] = "legacy"
+    mode: Literal["legacy", "shared_30_v1", "balanced_30_v1", "images_30_v1"] = "legacy"
+    after_plan_id: str | None = None
     jobs_per_team: int = Field(default=4, ge=1, le=100)
     redundancy: int = Field(default=1, ge=1, le=1)
     video_limit: int | None = Field(default=None, ge=0, le=100000)
@@ -284,15 +285,27 @@ def create_plan(
     dataset = get_dataset(db, event.id, payload.dataset_id)
     if dataset.status != "ready":
         raise HTTPException(status_code=409, detail="Finalize local dataset before planning.")
+    if payload.after_plan_id and payload.mode != "images_30_v1":
+        raise HTTPException(422, "Only a standalone-image queue can follow a video plan.")
+    parent = None
+    if payload.after_plan_id:
+        from .plan_sequence import video_predecessor
+        parent = video_predecessor(db, event.id, dataset.id, payload.after_plan_id)
+        if db.scalar(select(LabelingPlan.id).where(
+            LabelingPlan.after_plan_id == parent.id,
+            LabelingPlan.status != "cancelled",
+        ).limit(1)):
+            raise HTTPException(409, "This video plan already has a following image plan.")
     shared_pool = db.scalar(select(LabelingPlan.id).where(
         LabelingPlan.event_id == event.id, LabelingPlan.dataset_id == dataset.id,
         LabelingPlan.queue_seed.is_not(None),
-        LabelingPlan.status.in_(["planned", "approved", "running", "paused"]),
+        LabelingPlan.status.in_(["planned", "approved", "waiting", "running", "paused"]),
     ).limit(1))
     if shared_pool:
         raise HTTPException(status_code=409, detail="This dataset is already reserved by a shared queue plan.")
     existing = db.scalar(select(LabelingPlan.id).where(
-        LabelingPlan.event_id == event.id, LabelingPlan.status == "approved"
+        LabelingPlan.event_id == event.id, LabelingPlan.status == "approved",
+        LabelingPlan.id != parent.id if parent else True,
     ))
     if existing:
         raise HTTPException(
@@ -308,7 +321,7 @@ def create_plan(
     # assignee in an eligible team (see work_queue.claim_primary_block).
     # Legacy whole-video planning creates per-person jobs immediately, so
     # it continues to require at least one valid team with members.
-    if payload.mode not in {"shared_30_v1", "balanced_30_v1"}:
+    if payload.mode not in {"shared_30_v1", "balanced_30_v1", "images_30_v1"}:
         if not teams:
             raise HTTPException(status_code=422, detail="Import competition teams first.")
         for team in teams:
@@ -361,6 +374,31 @@ def create_plan(
     # The automatic pool is exclusive across ALL teams; manual video reuse
     # is the only explicit way to assign duplicate video footage.
     reserved = {mid for job in prior_jobs for mid in job.media_ids}
+    if payload.mode == "images_30_v1":
+        if reserved or payload.video_limit is not None:
+            raise HTTPException(409, "Use an unassigned image dataset without a video limit.")
+        if not assets or any(a.kind != "image" or a.video_id is not None for a in assets):
+            raise HTTPException(422, "Choose a separate dataset containing only standalone images.")
+        plan = LabelingPlan(event_id=event.id, dataset_id=dataset.id, jobs_per_team=0,
+                            redundancy=1, created_by=ctx.staff.id, queue_seed=identifier(),
+                            allocation_mode="images_30_v1", after_plan_id=payload.after_plan_id)
+        db.add(plan)
+        db.flush()
+        ordered = sorted(assets, key=lambda a: (a.relative_path, a.id))
+        for offset in range(0, len(ordered), 30):
+            ids = [asset.id for asset in ordered[offset:offset + 30]]
+            db.add(WorkBlock(event_id=event.id, plan_id=plan.id, video_id=None,
+                             ordinal=offset // 30 + 1, frame_count=len(ids),
+                             media_ids=ids, repeat_media_ids=[]))
+        summary = {"primary_blocks": (len(ordered) + 29) // 30, "unique_frames": len(ordered),
+                   "mixed_video_blocks": 0, "short_tails": int(bool(len(ordered) % 30)),
+                   "short_final_frames": len(ordered) % 30, "repeat_frames": 0}
+        db.add(AuditEvent(staff_id=ctx.staff.id, event_id=event.id,
+                          action="labeling.plan.create", target_type="labeling_plan",
+                          target_id=plan.id, details={"mode": payload.mode,
+                              "after_plan_id": payload.after_plan_id, **summary}))
+        db.commit()
+        return {"plan_id": plan.id, "status": plan.status, "mode": payload.mode, **summary}
     if payload.mode == "shared_30_v1":
         if reserved or payload.video_limit is not None:
             raise HTTPException(status_code=409, detail="Use an unassigned dataset without a video limit for the shared queue.")
@@ -521,8 +559,9 @@ def list_plans(
     ).order_by(LabelingPlan.created_at.desc())).all()
     return {"items": [{
         "id": p.id, "dataset_id": p.dataset_id, "status": p.status,
-        "mode": (p.allocation_mode if p.allocation_mode == "balanced_30_v1"
+        "mode": (p.allocation_mode if p.allocation_mode in {"balanced_30_v1", "images_30_v1"}
                  else "shared_30_v1" if p.queue_seed else "legacy"),
+        "after_plan_id": p.after_plan_id,
         "jobs_per_team": p.jobs_per_team, "redundancy": p.redundancy,
         "video_limit": p.video_limit, "created_at": p.created_at,
         "approved_at": p.approved_at,
@@ -547,8 +586,16 @@ def approve_plan(
         raise HTTPException(status_code=409, detail="Plan is not approvable.")
     conflicts = select(LabelingPlan.id).where(
         LabelingPlan.event_id == event.id,
-        LabelingPlan.status.in_(["approved", "running", "paused"]),
+        LabelingPlan.status.in_(["approved", "waiting", "running", "paused"]),
     )
+    # The two explicitly linked plans may coexist; unrelated automatic plans may not.
+    if plan.after_plan_id:
+        from .plan_sequence import video_predecessor
+        video_predecessor(db, event.id, plan.dataset_id, plan.after_plan_id)
+        conflicts = conflicts.where(LabelingPlan.id != plan.after_plan_id)
+    else:
+        conflicts = conflicts.where(or_(LabelingPlan.after_plan_id.is_(None),
+                                        LabelingPlan.after_plan_id != plan.id))
     if plan.queue_seed:
         conflicts = conflicts.where(or_(LabelingPlan.jobs_per_team > 0, LabelingPlan.queue_seed.is_not(None)))
     else:
@@ -579,19 +626,23 @@ def cancel_balanced_plan(
     ctx: AuthContext = Depends(requires("organiser", mutation=True)),
     db: Session = Depends(get_db),
 ):
-    """Release a never-launched balanced plan so new footage may be appended."""
+    """Release an unstarted balanced/image plan while preserving its dataset."""
     event = current_event(db, ctx, writable=True)
     plan = db.scalar(select(LabelingPlan).where(
         LabelingPlan.id == plan_id, LabelingPlan.event_id == event.id,
     ).with_for_update())
     if plan is None:
         raise HTTPException(404, "Plan not found.")
-    if plan.allocation_mode != "balanced_30_v1":
-        raise HTTPException(409, "Only an unlaunched balanced plan can be cancelled here.")
+    if plan.allocation_mode not in {"balanced_30_v1", "images_30_v1"}:
+        raise HTTPException(409, "Only an unlaunched balanced or image plan can be cancelled here.")
     if plan.status == "cancelled":
         return {"id": plan.id, "status": "cancelled", "already_cancelled": True}
-    if plan.status not in {"planned", "approved"}:
+    if plan.status not in {"planned", "approved", "waiting"}:
         raise HTTPException(409, "Launched plans cannot be cancelled or their media changed.")
+    if db.scalar(select(LabelingPlan.id).where(
+        LabelingPlan.after_plan_id == plan.id, LabelingPlan.status != "cancelled",
+    ).limit(1)):
+        raise HTTPException(409, "Cancel the following image plan first.")
     if db.scalar(select(LabelingJob.id).where(
         LabelingJob.plan_id == plan.id,
     ).limit(1)):
@@ -599,7 +650,8 @@ def cancel_balanced_plan(
     plan.status = "cancelled"
     db.add(AuditEvent(
         staff_id=ctx.staff.id, event_id=event.id,
-        action="balanced.plan.cancel", target_type="labeling_plan",
+        action="balanced.plan.cancel" if plan.allocation_mode == "balanced_30_v1"
+               else "labeling.plan.cancel", target_type="labeling_plan",
         target_id=plan.id, details={"previous_status": "approved" if plan.approved_at else "planned"},
     ))
     db.commit()

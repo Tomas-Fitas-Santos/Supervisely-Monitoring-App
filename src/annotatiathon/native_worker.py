@@ -975,6 +975,8 @@ def next_annotation_snapshot_candidates(
 
 def sync_all(db: Session, api, config: SuperviselyConfig, *,
              capture_snapshots: bool = True) -> dict:
+    from .plan_sequence import activate_waiting_plans
+    activate_waiting_plans(db)
     event_plans = list(db.scalars(select(LabelingPlan).where(
         LabelingPlan.status.in_(["running", "paused"]),
     )))

@@ -156,6 +156,8 @@ def launch_event(
     ).with_for_update())
     if plan is None:
         raise HTTPException(status_code=404, detail="Labeling plan not found.")
+    if plan.status == "waiting":
+        return {"status": "waiting", "plan_id": plan.id, "after_plan_id": plan.after_plan_id}
     if plan.status not in {"approved", "running"}:
         raise HTTPException(status_code=409, detail="Approve the labeling plan first.")
     dataset = db.get(MediaDataset, plan.dataset_id)
@@ -174,14 +176,17 @@ def launch_event(
         from .balanced_queue import validate_prepared_plan
         validate_prepared_plan(db, plan)
     if plan.queue_seed:
-        plan.status = "running"
+        plan.status = "waiting" if plan.after_plan_id and plan.status == "approved" else "running"
         db.add(AuditEvent(staff_id=ctx.staff.id, event_id=event.id, action="labeling.plan.launch",
                           target_type="labeling_plan", target_id=plan.id,
                           details={"mode": plan.allocation_mode}))
         db.commit()
-        return {"status": "running", "plan_id": plan.id, "first_jobs": 0,
+        return {"status": plan.status, "plan_id": plan.id, "first_jobs": 0,
+                "after_plan_id": plan.after_plan_id,
                 "pending_operations": 0, "remote_writes_queued": False,
-                "note": "The worker will claim available blocks on its next poll."}
+                "note": ("Image plan armed. Waiting until every video frame passes submission validation."
+                         if plan.status == "waiting" else
+                         "The worker will claim available blocks on its next poll.")}
     jobs = list(db.scalars(select(LabelingJob).where(
         LabelingJob.event_id == event.id, LabelingJob.plan_id == plan.id,
     ).order_by(LabelingJob.team_id, LabelingJob.sequence)))

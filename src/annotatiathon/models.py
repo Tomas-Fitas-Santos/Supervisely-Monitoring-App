@@ -576,6 +576,9 @@ class LabelingPlan(Base):
     allocation_mode: Mapped[str] = mapped_column(String(24), default="legacy",
                                                   server_default="legacy")
     prepared_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    after_plan_id: Mapped[str | None] = mapped_column(
+        ForeignKey("labeling_plans.id"), nullable=True, index=True,
+    )
 
 
 class BalancedVideoRun(Base):
@@ -654,7 +657,7 @@ class WorkBlock(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=identifier)
     event_id: Mapped[str] = mapped_column(ForeignKey("events.id"), index=True)
     plan_id: Mapped[str] = mapped_column(ForeignKey("labeling_plans.id"))
-    video_id: Mapped[str] = mapped_column(ForeignKey("media_videos.id"))
+    video_id: Mapped[str | None] = mapped_column(ForeignKey("media_videos.id"), nullable=True)
     ordinal: Mapped[int] = mapped_column(Integer)
     frame_count: Mapped[int] = mapped_column(Integer)
     media_ids: Mapped[list[str]] = mapped_column(JSON)

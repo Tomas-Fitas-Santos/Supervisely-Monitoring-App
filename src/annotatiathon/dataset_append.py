@@ -95,8 +95,20 @@ def ensure_append_allowed(db: Session, ds: MediaDataset, *, indexing=False) -> N
     ).limit(1)):
         raise HTTPException(409, "Dataset has assigned jobs and cannot be expanded.")
     if db.scalar(select(LabelingPlan.id).where(
+        LabelingPlan.after_plan_id.in_(select(LabelingPlan.id).where(
+            LabelingPlan.dataset_id == ds.id,
+        )), LabelingPlan.status != "cancelled",
+    ).limit(1)):
+        raise HTTPException(409, "Cancel the following image plan before changing its video dataset.")
+    if db.scalar(select(LabelingPlan.id).where(
         LabelingPlan.dataset_id == ds.id,
-        LabelingPlan.status.in_(["approved", "running", "paused"]),
+        LabelingPlan.allocation_mode == "images_30_v1",
+        LabelingPlan.status == "planned",
+    ).limit(1)):
+        raise HTTPException(409, "Cancel the image draft before appending more images.")
+    if db.scalar(select(LabelingPlan.id).where(
+        LabelingPlan.dataset_id == ds.id,
+        LabelingPlan.status.in_(["approved", "waiting", "running", "paused"]),
     ).limit(1)):
         raise HTTPException(409, "Revoke approval or use a new dataset before appending.")
 

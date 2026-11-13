@@ -25,7 +25,8 @@ def test_one_linear_migration_head_after_merge():
     heads = set(entries) - parents
     assert entries["0030_balanced_queue"] == "0029_competition_closeout"
     assert entries["0031_mounted_source_receipts"] == "0030_balanced_queue"
-    assert heads == {"0031_mounted_source_receipts"}
+    assert entries["0032_sequential_image_plans"] == "0031_mounted_source_receipts"
+    assert heads == {"0032_sequential_image_plans"}
 
 
 def test_review_ui_keeps_missing_landmark_tracking_and_box_reasons():

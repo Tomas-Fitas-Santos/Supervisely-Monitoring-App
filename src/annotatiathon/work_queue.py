@@ -117,7 +117,7 @@ def claim_primary_block(
     # New plans store
     # dataset-wide ordinals; sorting by anchor-video name also preserves the
     # order of pre-upgrade plans whose ordinals restarted for each video.
-    block = db.scalar(select(WorkBlock).join(
+    block = db.scalar(select(WorkBlock).outerjoin(
         MediaVideo, MediaVideo.id == WorkBlock.video_id,
     ).where(
         WorkBlock.plan_id == plan.id, WorkBlock.event_id == plan.event_id,
@@ -152,10 +152,13 @@ def claim_primary_block(
     )))
     if (len(source_frames) != len(frame_ids)
             or len(set(frame_ids)) != len(frame_ids)
-            or any(asset.video_id is None for asset in source_frames)):
+            or (plan.allocation_mode != "images_30_v1"
+                and any(asset.video_id is None for asset in source_frames))
+            or (plan.allocation_mode == "images_30_v1"
+                and any(asset.kind != "image" or asset.video_id is not None for asset in source_frames))):
         raise ValueError("Shared job source-frame identities are incomplete")
     morphologies = Counter(asset.morphology for asset in source_frames)
-    video_ids = {asset.video_id for asset in source_frames}
+    video_ids = {asset.video_id for asset in source_frames if asset.video_id is not None}
     sequence = db.scalar(select(func.max(LabelingJob.sequence)).where(
         LabelingJob.plan_id == plan.id, LabelingJob.team_id == team.id,
     )) or 0

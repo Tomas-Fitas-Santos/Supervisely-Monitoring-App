@@ -276,6 +276,9 @@ export function DatasetScreen({auth}:{auth:Auth}) {
           <div className="dataset-help-content">
             <p>Use species folders containing videos or extracted frame folders:</p>
             <pre>dataset / species / video.mp4{"\n"}dataset / species / video-name / frame_000001.jpg</pre>
+            <p>For a separate standalone-image dataset, upload <code>dataset/images/category/photo.jpg</code>.
+              Mounted image datasets use <code>dataset/category/photo.jpg</code>.
+              In Job Distribution, choose the standalone-image queue and link it to your video plan to process videos first.</p>
             <p>No frames.json or other metadata file is required in either upload format.
               Frame numbers or natural filename order determine the image order. Sampled frames are supported.</p>
             <p><strong>Every source frame</strong> extracts all frames from raw videos.

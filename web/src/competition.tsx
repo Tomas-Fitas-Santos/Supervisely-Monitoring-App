@@ -9,9 +9,9 @@ import { api, refreshSuperviselyRoster, type Auth, type Team, type TeamResponse 
 
 type Dataset={id:string;name:string;status:string;image_count:number;
   frame_count:number;video_count:number};
-type PlanMode="legacy"|"shared_30_v1"|"balanced_30_v1";
+type PlanMode="legacy"|"shared_30_v1"|"balanced_30_v1"|"images_30_v1";
 type Plan={id:string;dataset_id:string;status:string;jobs_per_team:number;mode:PlanMode;
-  redundancy:number;video_limit:number|null};
+  redundancy:number;video_limit:number|null;after_plan_id:string|null};
 type Created={job_count:number;assets:number;min_frames_per_team:number;max_frames_per_team:number}
   |{primary_blocks:number;unique_frames:number;short_tails:number;repeat_frames:number;
     mixed_video_blocks:number;short_final_frames:number}
@@ -75,6 +75,7 @@ export function CompetitionScreen({auth,view="progress"}:{
   const [page,setPage]=useState(1);
   const [jobsPerTeam,setJobsPerTeam]=useState(4);
   const [planMode,setPlanMode]=useState<PlanMode>("shared_30_v1");
+  const [afterPlan,setAfterPlan]=useState("");
   const [videoLimit,setVideoLimit]=useState("");
   const [created,setCreated]=useState<Created|null>(null);
   const [native,setNative]=useState<NativeStatus|null>(null);
@@ -259,6 +260,7 @@ export function CompetitionScreen({auth,view="progress"}:{
     try {
       const response=await api<Created>("/labeling/plans","POST",planMode!=="legacy"?{
         dataset_id:dataset,mode:planMode,
+        ...(planMode==="images_30_v1"?{after_plan_id:afterPlan||null}:{}),
       }:{
         dataset_id:dataset,jobs_per_team:jobsPerTeam,redundancy:1,
         video_limit:videoLimit.trim()?Number(videoLimit):null,
@@ -278,7 +280,9 @@ export function CompetitionScreen({auth,view="progress"}:{
     setBusy(true);setError("");setNotice("");
     try {
       await api("/labeling/plans/"+plan.id+"/approve","POST",undefined,auth.csrf_token);
-      setNotice(plan.mode==="balanced_30_v1"?
+      setNotice(plan.mode==="images_30_v1"?
+        "Image queue approved. Arm it to wait for all video submissions, or launch if it has no preceding plan.":
+        plan.mode==="balanced_30_v1"?
         "Balanced queue approved at its prepared revision. Launch to allocate 30-frame jobs to eligible individuals.":
         plan.mode==="shared_30_v1"?
         "Shared queue approved. Launch it to let the worker assign available blocks.":
@@ -289,11 +293,11 @@ export function CompetitionScreen({auth,view="progress"}:{
   }
   async function cancelBalanced(planId:string){
     if(!await confirmAction(
-      "Cancel this unlaunched balanced plan? Existing dataset files and prepared coverage remain; you can append new footage afterward."))return;
+      "Cancel this unlaunched plan? Dataset files and the other plan remain unchanged."))return;
     setBusy(true);setError("");setNotice("");
     try{
       await api("/labeling/plans/"+planId+"/cancel","POST",undefined,auth.csrf_token);
-      setNotice("Balanced plan cancelled. Append or reclassify footage, then prepare again.");
+      setNotice("Plan cancelled. Dataset files and the other plan are preserved.");
       await refresh();
     }catch(e){setError((e as Error).message);}
     finally{setBusy(false);}
@@ -617,10 +621,22 @@ export function CompetitionScreen({auth,view="progress"}:{
         <label>Distribution mode<select value={planMode} onChange={e=>setPlanMode(e.target.value as PlanMode)}>
           <option value="shared_30_v1">Shared 30-image queue</option>
           <option value="balanced_30_v1">Morphology-balanced 30-frame queue</option>
+          <option value="images_30_v1">Standalone images · 30-image queue</option>
           <option value="legacy">Whole videos</option>
         </select></label>
       </div>
-      <p className="muted small">{planMode==="balanced_30_v1"?
+      {planMode==="images_30_v1"&&<label>Start after video plan<select value={afterPlan}
+        onChange={e=>setAfterPlan(e.target.value)}>
+        <option value="">No dependency · launch independently</option>
+        {plans.filter(p=>["shared_30_v1","balanced_30_v1"].includes(p.mode)&&
+          ["planned","approved","running","paused"].includes(p.status)&&p.dataset_id!==dataset)
+          .map(p=><option key={p.id} value={p.id}>
+            {datasets.find(d=>d.id===p.dataset_id)?.name||p.dataset_id} · {p.status}
+          </option>)}
+      </select></label>}
+      <p className="muted small">{planMode==="images_30_v1"?
+        "Use a separate standalone-image dataset, uploaded or mounted. Jobs contain up to 30 images. When linked to a video plan, images wait until every video frame passes submission validation; monitor review may continue. Approve and arm this plan to enable the automatic handoff.":
+        planMode==="balanced_30_v1"?
         "Prepare once from complete source videos, with no roster required. Assign 30 frames per individual job, prioritising unfinished videos and least-covered morphology groups. Launch only after the full dataset is mirrored.":
         planMode==="shared_30_v1"?
         "Allocate 30 frames in uploaded dataset order across the ordered videos. The uploaded frames in each video are sorted by frame number, even if sampled. Only the final dataset job may have fewer than 30 frames. The next job releases after a complete submission.":
@@ -689,14 +705,17 @@ export function CompetitionScreen({auth,view="progress"}:{
         </div>}
       </div>}
       <button className="btn secondary" disabled={busy||!dataset||
-        plans.some(p=>p.status==="approved")||
+        plans.some(p=>p.status==="approved"&&!(planMode==="images_30_v1"&&p.id===afterPlan))||
+        (planMode==="images_30_v1"&&(!datasets.find(d=>d.id===dataset)?.image_count||
+          Boolean(datasets.find(d=>d.id===dataset)?.frame_count)))||
         (planMode==="shared_30_v1"&&Boolean(readiness&&!readiness.source_ready))||
         (planMode==="balanced_30_v1"&&
          (!balanced?.current||balanced.status!=="prepared"||
           !balanced.summary?.eligible_videos))}
         onClick={()=>void generate()}><UsersRound size={15}/>{planMode==="balanced_30_v1"?
           "Create balanced queue draft":planMode==="shared_30_v1"?
-          "Create shared queue draft":"Generate draft plan"}</button>
+          "Create shared queue draft":planMode==="images_30_v1"?
+          "Create image queue draft":"Generate draft plan"}</button>
       {created&&<div className="job-plan-summary">{"eligible_videos" in created?<>
         <strong>{created.eligible_videos} video runs prepared</strong>
         <p>{created.eligible_frames.toLocaleString()} frames available;
@@ -711,26 +730,32 @@ export function CompetitionScreen({auth,view="progress"}:{
       </>}</div>}
       <div className="job-plan-history"><h4>Plans in this event</h4>
         {plans.map(plan=><div className="job-plan-row" key={plan.id}>
-          <div><strong>{plan.mode==="balanced_30_v1"?"Morphology-balanced 30-frame queue":
+          <div><strong>{plan.mode==="images_30_v1"?"Standalone-image queue":
+            plan.mode==="balanced_30_v1"?"Morphology-balanced 30-frame queue":
             plan.mode==="shared_30_v1"?"Shared 30-image queue":
             plan.jobs_per_team===0?"Manual assignments":"Whole-video plan"} · {plan.status}</strong>
             <span>{datasets.find(item=>item.id===plan.dataset_id)?.name||plan.dataset_id}</span>
+            {plan.after_plan_id&&<span>Starts after all validated video submissions from {datasets.find(d=>
+              d.id===plans.find(p=>p.id===plan.after_plan_id)?.dataset_id)?.name||"the linked video plan"}.
+              {plan.status==="waiting"&&" Armed · waiting for video submissions."}</span>}
             <span>{plan.mode==="balanced_30_v1"?
               "Prepared complete videos; balanced 30-frame individual jobs":
+              plan.mode==="images_30_v1"?"Up to 30 standalone images per job":
               plan.mode==="shared_30_v1"?"30 frames per job; crosses video boundaries when necessary":plan.jobs_per_team===0?"Jobs added as needed":
               plan.jobs_per_team+" maximum jobs/team · "+(plan.redundancy===1?"No overlap":"Legacy overlap plan")}</span></div>
           {plan.status==="planned"&&<button className="btn secondary" disabled={busy}
             onClick={()=>void approve(plan)}><ClipboardCheck size={15}/> Approve</button>}
-          {plan.mode==="balanced_30_v1"&&
-            ["planned","approved"].includes(plan.status)&&
+          {["balanced_30_v1","images_30_v1"].includes(plan.mode)&&
+            ["planned","approved","waiting"].includes(plan.status)&&
             <button className="btn danger-outline" disabled={busy}
-              onClick={()=>void cancelBalanced(plan.id)}>Cancel balanced plan</button>}
+              onClick={()=>void cancelBalanced(plan.id)}>Cancel plan</button>}
           {plan.status==="approved"&&<button className="btn primary" disabled={busy}
             onClick={()=>void nativeAction("/native/launch",
+              plan.after_plan_id?"Arm this image queue? It will start automatically only after every video frame passes submission validation.":
               plan.mode!=="legacy"?
                 "Launch this prepared queue? Workers will assign individual jobs only to eligible annotators.":
                 "Launch this plan? The worker creates one native job per individual annotator.",
-              {plan_id:plan.id})}><PlayCircle size={15}/> Launch plan</button>}
+              {plan_id:plan.id})}><PlayCircle size={15}/> {plan.after_plan_id?"Arm image plan":"Launch plan"}</button>}
           {plan.mode==="balanced_30_v1"&&plan.status==="running"&&
             <button className="btn secondary" disabled={busy}
               onClick={()=>void refreshBalancedProgress(plan.id)}>
