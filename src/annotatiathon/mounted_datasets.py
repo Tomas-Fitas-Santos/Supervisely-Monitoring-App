@@ -386,13 +386,15 @@ def run_indexer(*, once: bool = False, poll_seconds: int = 8) -> None:
     while True:
         try:
             with session_factory()() as db:
-                from .dataset_append import process_append_once
-                result = process_append_once(db)
+                # Preserve mounted indexing as the first local-only operation.
+                # An open index requires finishing before queue preparation.
+                result = process_mounted_index_once(db)
+                if result is None:
+                    from .dataset_append import process_append_once
+                    result = process_append_once(db)
                 if result is None:
                     from .balanced_queue import process_preparation_once
                     result = process_preparation_once(db)
-                if result is None:
-                    result = process_mounted_index_once(db)
             if result is not None:
                 logger.info(
                     "Mounted indexing job %s ended with %s",

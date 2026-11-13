@@ -23,7 +23,8 @@ def test_one_linear_migration_head_after_merge():
     assert entries["0029_competition_closeout"] == "0028_native_job_numbers"
     parents = {rev for rev in entries.values() if rev is not None}
     heads = set(entries) - parents
-    assert heads == {"0029_competition_closeout"}
+    assert entries["0030_balanced_queue"] == "0029_competition_closeout"
+    assert heads == {"0030_balanced_queue"}
 
 
 def test_review_ui_keeps_missing_landmark_tracking_and_box_reasons():
