@@ -1276,9 +1276,9 @@ def process_correction_once(db: Session, api, config: SuperviselyConfig) -> dict
             # Preserve legacy two-person jobs: their original restart and
             # correction-review semantics predate per-frame validation.
             remote = list_assigned_native_jobs(
-                    api, config.team_id, job.native_dataset_id,
-                    [person.supervisely_user_id for person in people],
-                )
+                api, config.team_id, job.native_dataset_id,
+                [person.supervisely_user_id for person in people],
+            )
             updated = []
             for binding in bindings:
                 person = by_person[binding.person_id]
@@ -1307,9 +1307,9 @@ def process_correction_once(db: Session, api, config: SuperviselyConfig) -> dict
                         only_rejected_entities=False,
                     )
                     remote = list_assigned_native_jobs(
-                    api, config.team_id, job.native_dataset_id,
-                    [person.supervisely_user_id for person in people],
-                )
+                        api, config.team_id, job.native_dataset_id,
+                        [person.supervisely_user_id for person in people],
+                    )
                     matches = [
                         row for row in remote
                         if row.name in accepted_titles
@@ -1366,9 +1366,9 @@ def process_correction_once(db: Session, api, config: SuperviselyConfig) -> dict
                 raise NativeWorkerError("correction_source_mapping_missing")
             images_to_return = [mappings[mid].native_image_id for mid in remaining]
             remote = list_assigned_native_jobs(
-                    api, config.team_id, job.native_dataset_id,
-                    [person.supervisely_user_id for person in people],
-                )
+                api, config.team_id, job.native_dataset_id,
+                [person.supervisely_user_id for person in people],
+            )
             updated = []
             for binding in bindings:
                 person = by_person[binding.person_id]
@@ -1412,9 +1412,9 @@ def process_correction_once(db: Session, api, config: SuperviselyConfig) -> dict
                             ),
                         )
                     remote = list_assigned_native_jobs(
-                    api, config.team_id, job.native_dataset_id,
-                    [person.supervisely_user_id for person in people],
-                )
+                        api, config.team_id, job.native_dataset_id,
+                        [person.supervisely_user_id for person in people],
+                    )
                     matches = [
                         row for row in remote
                         if row.name in accepted_titles
