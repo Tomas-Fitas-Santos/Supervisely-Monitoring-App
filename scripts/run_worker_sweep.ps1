@@ -284,6 +284,16 @@ try {
       $job290 = $report.publication_cohort.two_hundred_ninetieth_confirmed_ms
       $job300 = $report.publication_cohort.three_hundredth_confirmed_ms
       $states = $report.workload.database.operation_kinds
+      $attentionCount = [int]$report.workload.database.operation_states.attention
+      $operationErrors = @($report.workload.database.operation_errors)
+      $integrityFailure = ($attentionCount -gt 0 -or $operationErrors.Count -gt 0)
+      if ($integrityFailure) {
+        Write-Warning "$attentionCount operations need attention; $($operationErrors.Count) error categories. This configuration is NOT a successful capacity result."
+        foreach ($problem in $operationErrors) {
+          Write-Warning "Operation failure: $problem"
+        }
+        Write-Warning "Inspect $out\services.log for synthetic tracebacks. No production systems were accessed."
+      }
       $corrections = [int]$states.'restart_job:done'
       $validations = [int]$states.'validate_submission:done'
       if (($Phase -eq "initial" -and $confirmed -eq 0) -or
@@ -298,6 +308,9 @@ try {
       $results += [PSCustomObject]@{
         SweepRole = $SweepRole
         SweepCount = $count
+        Valid = -not $integrityFailure
+        AttentionOperations = $attentionCount
+        OperationErrorKinds = $operationErrors.Count
         Publishers = $publishers
         Phase = $Phase
         Validators = $validatorsRun
@@ -338,6 +351,9 @@ try {
   $results | Sort-Object SweepCount | Format-Table -AutoSize
   $results | ConvertTo-Json -Depth 5 | Out-File (Join-Path $rootOut "comparison.json") -Encoding utf8
   Write-Host "Benchmark comparison saved: $rootOut\comparison.json"
+  if (@($results | Where-Object { -not $_.Valid }).Count -gt 0) {
+    Write-Warning "One or more configurations are INVALID (native operations in attention/error states). Do not size production workers from these rows."
+  }
   Write-Host "Choose per-role worker counts by complete job turnaround (p95/p99), 300-job drain time, backlog and errors; not CPU alone."
 }
 finally {
