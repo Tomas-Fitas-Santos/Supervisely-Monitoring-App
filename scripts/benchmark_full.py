@@ -991,15 +991,20 @@ def load(seconds, latency, fail_rate, profile_scale=1.0, timeout_rate=0.0,
                 m.WorkBlock.plan_id == full_plan_id,
                 m.WorkBlock.job_id.is_(None),
             ))
-            preexisting_packets = db.scalar(select(func.count(m.WorkPacket.job_id)).where(
+            # New packets may legitimately appear seconds after launch.
+            # Only historic/seeded packets are forbidden in the full fixture.
+            preexisting_packets = db.scalar(select(func.count(m.WorkPacket.job_id)).join(
+                m.LabelingJob, m.LabelingJob.id == m.WorkPacket.job_id,
+            ).where(
                 m.WorkPacket.event_id == "event",
+                m.LabelingJob.plan_id != full_plan_id,
                 m.WorkPacket.submitted_at.is_(None),
             )) or 0
-            phases["launch"]["preexisting_open_packets"] = preexisting_packets
+            phases["launch"]["stale_open_packets"] = preexisting_packets
             if preexisting_packets:
                 raise RuntimeError(
                     "Full-lifecycle fixture incorrectly has "
-                    f"{preexisting_packets} open work packets before first job assignment")
+                    f"{preexisting_packets} historic open work packets after launch")
             if active.status != "running" or len(ready_people) != ANNOTATORS:
                 raise RuntimeError(
                     "Full-lifecycle queue not eligible after launch: "
