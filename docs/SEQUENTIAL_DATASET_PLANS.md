@@ -65,9 +65,10 @@ local metadata without creating jobs. Allocation can be exercised against an
 ephemeral copy of dataset metadata and synthetic participants. Such an audit
 does not prove live participant permissions or exercise real remote job writes.
 
-A dataset-preserving rehearsal reset is **not implemented by this change**.
-The existing full event reset clears datasets and must not be used as a
-substitute for that proposed feature.
+A separate [dataset-preserving event clean](EVENT_CLEAN.md) can clear both
+plans and rehearsal activity while retaining the datasets and source mappings.
+The Settings clean button explicitly selects preservation; the legacy full-reset
+API mode still clears datasets and must not be used as a substitute.
 
 ## Deployment verification — 2026-11-13
 

@@ -15,7 +15,8 @@ type ResetPreview={
   workspace_id:number|null;team_id:number|null;remote_scope:string;
   remote_action:string;preserved:string[];cleared:string[];
   confirmation_phrase:string;
-  operation:{status:string;error_code:string|null;attempts:number}|null;
+  operation:{status:string;error_code:string|null;attempts:number;
+    preserve_datasets:boolean;phase:string|null;cleared_annotations:number}|null;
 };
 
 export function SettingsScreen({auth}:{auth:Auth}) {
@@ -88,27 +89,28 @@ export function SettingsScreen({auth}:{auth:Auth}) {
   async function loadResetPreview(){
     setResetBusy(true);setError("");
     try{
-      setResetPreview(await api<ResetPreview>("/settings/reset/preview"));
+      setResetPreview(await api<ResetPreview>("/settings/reset/preview?preserve_datasets=true"));
     }catch(e){setError((e as Error).message);}
     finally{setResetBusy(false);}
   }
-  async function requestFullReset(){
+  async function requestCleanEvent(){
     if(!resetPreview||resetPhrase!==resetPreview.confirmation_phrase)return;
     if(!await confirmAction(
-      "Archive this event's Nightjar projects in Supervisely and clear its " +
-      "local event data? This cannot be undone in Nightjar. Team memberships " +
-      "and monitor accounts will be preserved."))return;
+      "Clean this event's jobs, annotations, reviews, rankings, tickets and attendance? " +
+      "In-progress Supervisely jobs will be removed permanently. Datasets, source images, " +
+      "current registrations, teams and verified memberships will be kept. " +
+      "Participants must stop annotating before you continue."))return;
     setResetBusy(true);setError("");setMessage("");
     try{
       await api("/settings/reset/request","POST",
-        {confirmation:resetPhrase},auth.csrf_token);
+        {confirmation:resetPhrase,preserve_datasets:true},auth.csrf_token);
       setResetPhrase("");
-      setMessage("Full event reset queued. The Supervisely worker must remove native jobs and archive their datasets/projects before local deletion.");
+      setMessage("Event clean queued. Workers will remove remote jobs and annotations before clearing local activity. Datasets and registrations will be kept.");
       await loadResetPreview();
     }catch(e){setError((e as Error).message);}
     finally{setResetBusy(false);}
   }
-  async function retryFullReset(){
+  async function retryCleanEvent(){
     setResetBusy(true);setError("");setMessage("");
     try{
       await api("/settings/reset/retry","POST",undefined,auth.csrf_token);
@@ -223,16 +225,16 @@ export function SettingsScreen({auth}:{auth:Auth}) {
     {organiser&&<section className="panel full-reset-panel">
       <div className="panel-heading"><div>
         <span className="eyebrow">DANGER ZONE · ORGANISER ONLY</span>
-        <h3>Reset event operations — preserve people and teams</h3>
-        <p className="muted">Start this event from a clean operational state without deleting Supervisely team members or Nightjar accounts. This resets only the selected event and only its Nightjar-owned Supervisely projects, not unrelated projects.</p>
+        <h3>Clean event — keep datasets and registrations</h3>
+        <p className="muted">Restart this event after a rehearsal. Keep all datasets, uploaded source images, the current roster, teams and verified Supervisely memberships. Clear plans, jobs, annotations, reviews, scores, pizza/drink ticket activity, activities, check-ins and table assignments.</p>
       </div><AlertTriangle size={24} color="#a64634"/></div>
       <button className="btn secondary" disabled={resetBusy}
         onClick={()=>void loadResetPreview()}><RefreshCw size={15}/>
-        {resetPreview?"Refresh reset status":"Preview full reset"}</button>
+        {resetPreview?"Refresh clean status":"Preview event clean"}</button>
       {resetPreview&&<div className="full-reset-preview">
         <div className="full-reset-counts">
           <div><span>Current event</span><strong>{resetPreview.event_name}</strong></div>
-          <div><span>Local datasets to clear</span><strong>{resetPreview.datasets}</strong></div>
+          <div><span>Datasets to keep</span><strong>{resetPreview.datasets}</strong></div>
           <div><span>Jobs to clear</span><strong>{resetPreview.jobs}</strong></div>
           <div><span>Preserved teams</span><strong>{resetPreview.preserved_teams}</strong></div>
           <div><span>Preserved roster members</span><strong>{resetPreview.preserved_people}</strong></div>
@@ -241,26 +243,26 @@ export function SettingsScreen({auth}:{auth:Auth}) {
           <div><h4>Will be cleared</h4><ul>{resetPreview.cleared.map(x=><li key={x}>{x}</li>)}</ul></div>
           <div><h4>Will be preserved</h4><ul>{resetPreview.preserved.map(x=><li key={x}>{x}</li>)}</ul></div>
         </div>
-        <p className="muted small">Remote cleanup in workspace #{resetPreview.workspace_id??"—"} of team #{resetPreview.team_id??"—"}: permanently remove Nightjar labeling jobs for this event, then archive their Supervisely datasets and projects. Archived datasets/projects are hidden but recoverable; permanent purging requires Supervisely instance-root privileges. Team and joined members are never deleted. Local event data and files are cleared only after remote cleanup succeeds.</p>
+        <p className="muted small">Cleanup includes in-progress and correction jobs in this event's Nightjar projects in workspace #{resetPreview.workspace_id??"—"}. Their annotations are cleared while images, datasets and projects stay available. Local activity is cleared only after remote cleanup succeeds. Stop participant work before cleaning; do not delete jobs separately in Supervisely.</p>
         {resetPreview.operation&&<div className="job-plan-row">
-          <div><strong>Reset: {resetPreview.operation.status}</strong>
-            <span>{resetPreview.operation.error_code||"No reported error"} · {resetPreview.operation.attempts} worker attempts</span></div>
-          {resetPreview.operation.status==="attention"&&
+          <div><strong>{resetPreview.operation.preserve_datasets?"Clean":"Legacy full reset"}: {resetPreview.operation.status}</strong>
+            <span>{resetPreview.operation.error_code||resetPreview.operation.phase||"No reported error"} · {resetPreview.operation.attempts} worker attempts · {resetPreview.operation.cleared_annotations} image annotations cleared</span></div>
+          {resetPreview.operation.status==="attention"&&resetPreview.operation.preserve_datasets&&
             <button className="btn secondary" disabled={resetBusy}
-              onClick={()=>void retryFullReset()}>Retry cleanup</button>}
+              onClick={()=>void retryCleanEvent()}>Retry cleanup</button>}
         </div>}
         {resetPreview.event_status==="active"&&
           <div className="full-reset-confirm">
-            <label>Type <strong>{resetPreview.confirmation_phrase}</strong> to enable reset
+            <label>Type <strong>{resetPreview.confirmation_phrase}</strong> to enable clean
               <input value={resetPhrase} autoComplete="off"
                 onChange={e=>setResetPhrase(e.target.value)} />
             </label>
             <button className="btn danger-outline" disabled={resetBusy||
               resetPhrase!==resetPreview.confirmation_phrase}
-              onClick={()=>void requestFullReset()}><Trash2 size={16}/> Reset this event</button>
+              onClick={()=>void requestCleanEvent()}><Trash2 size={16}/> Clean event · keep datasets</button>
           </div>}
         {resetPreview.event_status==="resetting"&&
-          <p className="advisory">The event is locked while its native jobs are removed, its datasets/projects archived, and local data cleared. Keep the Supervisely worker running; refresh for status.</p>}
+          <p className="advisory">The event is locked during cleanup. Keep the workers running and refresh for progress. If cleanup fails, retry here; the local records remain until remote cleanup finishes.</p>}
       </div>}
     </section>}
     {organiser&&<EventManagement auth={auth}/>}

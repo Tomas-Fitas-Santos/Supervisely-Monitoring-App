@@ -1,9 +1,9 @@
-"""Organiser-only event reset. Remote job removal and archival precede local deletion.
+"""Organiser-only event cleanup. Remote cleanup precedes local activity deletion.
 
 This resets the selected event, never the Supervisely team/members or other
 Nightjar events. Existing roster identities, team pairs, monitor assignments,
-and Nightjar sign-ins stay in place; attendance, jobs, datasets, tickets,
-activities and operational histories are reset.
+and Nightjar sign-ins stay in place. The dataset-preserving clean also retains
+media and source mappings; the legacy full reset archives and deletes datasets.
 """
 from pathlib import Path
 
@@ -36,6 +36,16 @@ PRESERVED = frozenset({
     "events", "people", "competition_teams", "monitor_pair_members",
     "monitor_assignments", "audit_events", "native_operations", "staff_sessions",
 })
+DATASET_TABLES = frozenset({
+    "media_datasets", "media_assets", "media_videos", "native_source_media",
+    "mounted_source_files", "dataset_staged_files", "dataset_append_batches",
+    "dataset_append_files", "dataset_prepared_queues", "dataset_folder_classifications",
+    "dataset_movement_segments",
+})
+DATASET_OPERATIONS = frozenset({
+    "mirror_dataset", "index_mounted_dataset", "index_uploaded_dataset",
+    "sync_mounted_dataset", "append_dataset", "prepare_balanced",
+})
 
 
 def reset_operation(db: Session, event_id: str):
@@ -46,7 +56,7 @@ def reset_operation(db: Session, event_id: str):
     ))
 
 
-def reset_preview(db: Session, event: Event) -> dict:
+def reset_preview(db: Session, event: Event, preserve_datasets: bool = False) -> dict:
     datasets = list(db.scalars(select(MediaDataset).where(
         MediaDataset.event_id == event.id,
     )))
@@ -61,7 +71,7 @@ def reset_preview(db: Session, event: Event) -> dict:
         Person.event_id == event.id,
     )) or 0
     operation = reset_operation(db, event.id)
-    return {
+    result = {
         "event_id": event.id, "event_name": event.name,
         "event_status": event.status,
         "preserved_teams": preserved_teams, "preserved_people": preserved_people,
@@ -81,6 +91,9 @@ def reset_preview(db: Session, event: Event) -> dict:
         "operation": None if not operation else {
             "status": operation.status, "error_code": operation.error_code,
             "attempts": operation.attempts,
+            "preserve_datasets": bool((operation.payload or {}).get("preserve_datasets")),
+            "phase": (operation.payload or {}).get("phase"),
+            "cleared_annotations": (operation.payload or {}).get("cleared_annotations", 0),
         },
         "preserved": [
             "Supervisely team and all joined members",
@@ -96,19 +109,40 @@ def reset_preview(db: Session, event: Event) -> dict:
         ],
         "confirmation_phrase": "RESET " + event.name,
     }
+    result["preserve_datasets"] = preserve_datasets
+    if preserve_datasets:
+        result.update(
+            confirmation_phrase="CLEAN " + event.name,
+            remote_action="remove_jobs_clear_annotations_keep_images",
+            native_cleanup={"labeling_jobs": "removed permanently",
+                            "datasets": "preserved", "projects": "preserved"},
+            preserved=result["preserved"] + [
+                "All datasets, local media, mounted folders and source-image mappings",
+                "Supervisely source images and their projects/datasets",
+                "Dataset classification and prepared inventory",
+            ],
+            cleared=[
+                "All video/image plans, assignments and in-progress Supervisely jobs",
+                "Annotations, reviews, rankings, results and exports",
+                "Pizza/drink ticket activity, activities, attendance and table assignments",
+            ],
+        )
+    return result
 
 
 @router.get("/preview")
 def preview(
+    preserve_datasets: bool = False,
     ctx: AuthContext = Depends(requires("organiser")),
     db: Session = Depends(get_db),
 ):
-    return reset_preview(db, current_event(db, ctx))
+    return reset_preview(db, current_event(db, ctx), preserve_datasets)
 
 
 class ConfirmReset(BaseModel):
     model_config = ConfigDict(extra="forbid")
     confirmation: str
+    preserve_datasets: bool = False
 
 
 @router.post("/request", status_code=202)
@@ -118,10 +152,24 @@ def request_reset(
     db: Session = Depends(get_db),
 ):
     event = current_event(db, ctx, writable=True)
-    if payload.confirmation != "RESET " + event.name:
+    phrase = ("CLEAN " if payload.preserve_datasets else "RESET ") + event.name
+    if payload.confirmation != phrase:
         raise HTTPException(status_code=422, detail="Type the exact reset confirmation phrase.")
     from .dataset_indexing import require_idle_imports
     require_idle_imports(db, event.id)
+    if payload.preserve_datasets:
+        # Freeze a complete inventory, never discard an unfinished import.
+        from .models import DatasetAppendBatch
+        if (db.scalar(select(MediaDataset.id).where(
+                MediaDataset.event_id == event.id, MediaDataset.status != "ready"))
+                or db.scalar(select(DatasetAppendBatch.id).where(
+                    DatasetAppendBatch.event_id == event.id,
+                    DatasetAppendBatch.status.not_in(["committed", "discarded"])))
+                or db.scalar(select(NativeOperation.id).where(
+                    NativeOperation.event_id == event.id,
+                    NativeOperation.kind.in_(DATASET_OPERATIONS),
+                    NativeOperation.status.in_(["pending", "running", "attention"])))):
+            raise HTTPException(409, "Finish dataset imports, synchronization and mirroring before cleaning.")
     config = db.get(SuperviselyConfig, 1)
     if not config or not config.verified or not config.token_ciphertext:
         raise HTTPException(
@@ -145,17 +193,20 @@ def request_reset(
     operation.error_code = None
     operation.claimed_at = None
     operation.completed_at = None
+    operation.payload = {"preserve_datasets": payload.preserve_datasets, "phase": "waiting_for_workers"}
     db.add(operation)
     db.add(AuditEvent(
         staff_id=ctx.staff.id, event_id=event.id,
         action="event.reset.requested", target_type="event", target_id=event.id,
         details={"scope": "current_event", "remove_native_jobs": True,
-                 "archive_remote_datasets_and_projects": True},
+                 "archive_remote_datasets_and_projects": not payload.preserve_datasets,
+                 "preserve_datasets": payload.preserve_datasets},
     ))
     db.commit()
     return {"status": "pending", "operation_id": operation.id,
-            "message": "Worker removes native jobs, archives datasets and projects, "
-                       "then clears local event data."}
+            "message": ("Worker removes jobs and annotations, then clears event activity while preserving datasets."
+                        if payload.preserve_datasets else
+                        "Worker removes native jobs, archives datasets and projects, then clears local event data.")}
 
 
 @router.post("/retry", status_code=202)
@@ -199,13 +250,13 @@ def safe_dataset_paths(db: Session, event_id: str) -> list[Path]:
     return paths
 
 
-def clear_event_data(db: Session, event_id: str) -> None:
+def clear_event_data(db: Session, event_id: str, *, preserve_datasets: bool = False) -> None:
     """Delete dependents before parents, preserving all roster/identity tables."""
     # Stage records lack event_id; delete via dataset IDs before their parents.
     datasets = list(db.scalars(select(MediaDataset.id).where(
         MediaDataset.event_id == event_id,
     )))
-    if datasets:
+    if datasets and not preserve_datasets:
         stage = Base.metadata.tables["dataset_staged_files"]
         db.execute(delete(stage).where(stage.c.dataset_id.in_(datasets)))
         receipts = Base.metadata.tables["mounted_source_files"]
@@ -218,6 +269,8 @@ def clear_event_data(db: Session, event_id: str) -> None:
         db.execute(delete(append_files).where(append_files.c.batch_id.in_(batch_ids)))
     for table in reversed(Base.metadata.sorted_tables):
         if table.name in PRESERVED or table.name in {"dataset_staged_files", "dataset_append_files"}:
+            continue
+        if preserve_datasets and table.name in DATASET_TABLES:
             continue
         if "event_id" in table.c:
             db.execute(delete(table).where(table.c.event_id == event_id))

@@ -1597,7 +1597,9 @@ def process_event_reset(db: Session, api, config: SuperviselyConfig) -> dict | N
     """
     op = db.scalar(select(NativeOperation).where(
         NativeOperation.kind == "reset_event",
-        NativeOperation.status == "pending",
+        or_(NativeOperation.status == "pending", (
+            (NativeOperation.status == "running")
+            & NativeOperation.payload["preserve_datasets"].as_boolean().is_(True))),
     ).order_by(NativeOperation.created_at).with_for_update(skip_locked=True))
     if op is None:
         db.rollback()
@@ -1614,6 +1616,9 @@ def process_event_reset(db: Session, api, config: SuperviselyConfig) -> dict | N
     opid, event_id = op.id, event.id
     db.commit()
     try:
+        if (op.payload or {}).get("preserve_datasets"):
+            from .event_clean import clean_preserving_datasets
+            return clean_preserving_datasets(db, api, config, op)
         # Reset only the precise event, not the Supervisely team or workspace.
         workspace = api.workspace.get_info_by_id(config.workspace_id)
         if workspace is None or workspace.team_id != config.team_id:
@@ -1800,6 +1805,19 @@ _worker_clients = local()
 
 
 def worker_cycle(lane: str) -> bool:
+    """Drain in-flight SDK calls before reset; release automatically on crashes."""
+    from .event_clean import worker_reset_barrier
+    try:
+        with session_factory()() as guard_db:
+            engine = guard_db.get_bind()
+        with worker_reset_barrier(engine, reset=lane == "reset") as acquired:
+            return _worker_cycle(lane) if acquired else False
+    except Exception as exc:  # noqa: BLE001 - retry temporary lock/connection failures
+        logger.warning("Supervisely %s worker barrier failed (%s).", lane, type(exc).__name__)
+        return False
+
+
+def _worker_cycle(lane: str) -> bool:
     """Use independent sessions and SDK clients for each lane."""
     with session_factory()() as db:
         try:
