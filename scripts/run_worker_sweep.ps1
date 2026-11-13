@@ -2,12 +2,12 @@
 # NO PUBLIC SUPERVISELY API CALLS: internal fake Supervisely, separate PostgreSQL.
 [CmdletBinding()]
 param(
-  [ValidateRange(1, 4)][int[]]$Workers = @(1, 2, 3),
+  [ValidateRange(1, 16)][int[]]$Workers = @(1, 2, 3),
   [ValidateSet("publisher", "validation", "correction", "status")][string]$SweepRole = "publisher",
-  [ValidateRange(1, 4)][int]$PublisherBaseline = 2,
-  [ValidateRange(1, 4)][int]$Validators = 2,
-  [ValidateRange(1, 4)][int]$Correctors = 1,
-  [ValidateRange(1, 4)][int]$StatusWorkers = 1,
+  [ValidateRange(1, 16)][int]$PublisherBaseline = 2,
+  [ValidateRange(1, 16)][int]$Validators = 2,
+  [ValidateRange(1, 16)][int]$Correctors = 1,
+  [ValidateRange(1, 16)][int]$StatusWorkers = 1,
   [ValidateSet("initial", "turnaround")][string]$Phase = "turnaround",
   [ValidateRange(0.0, 1.0)][double]$IncompleteRate = 0.20,
   [ValidateRange(60, 7200)][int]$Seconds = 480,
@@ -148,6 +148,25 @@ try {
     $validatorsRun = if ($SweepRole -eq "validation") { $count } else { $Validators }
     $correctorsRun = if ($SweepRole -eq "correction") { $count } else { $Correctors }
     $statusRun = if ($SweepRole -eq "status") { $count } else { $StatusWorkers }
+    # Each benchmark container has a finite CPU/memory limit, but the host
+    # may be overcommitted at higher replica counts. Warn without falsifying
+    # the result: Docker stats and actual running replicas remain authoritative.
+    $allocatedCpus = 0.75 * ($publishers + $validatorsRun + $statusRun) +
+                     0.5 * $correctorsRun + 3.5
+    $allocatedMiB = 768 * ($publishers + $validatorsRun + $statusRun) +
+                    512 * $correctorsRun + 4096
+    $dockerCpus = & docker info --format '{{.NCPU}}' 2>$null
+    $dockerMemory = & docker info --format '{{.MemTotal}}' 2>$null
+    if ($LASTEXITCODE -ne 0) {
+      throw "Cannot inspect Docker resource capacity before the benchmark."
+    }
+    $dockerMemoryMiB = [double]$dockerMemory / 1MB
+    if ($allocatedCpus -gt [double]$dockerCpus) {
+      Write-Warning ("Requested containers have {0:N1} combined CPU limits but Docker exposes {1} CPUs. High worker counts may slow each other down." -f $allocatedCpus, $dockerCpus)
+    }
+    if ($allocatedMiB -gt 0.8 * $dockerMemoryMiB) {
+      Write-Warning ("Combined container memory limits are ~{0:N0} MiB, versus {1:N0} MiB available to Docker. Watch Docker memory pressure; those are limits, not actual usage." -f $allocatedMiB, $dockerMemoryMiB)
+    }
     $project = "nightjar-bench-300-$stamp-$Phase-p$publishers-v$validatorsRun-c$correctorsRun-s$statusRun"
     if (-not $project.StartsWith("nightjar-bench-300-")) {
       throw "Refusing to operate on a non-benchmark Docker project."
