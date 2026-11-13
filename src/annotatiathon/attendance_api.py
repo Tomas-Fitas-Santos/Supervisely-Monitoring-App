@@ -110,12 +110,7 @@ def change_team_table(
         raise HTTPException(status_code=404, detail="Active competition team not found.")
     before = team.table_number
     if before != payload.table_number:
-        if payload.table_number is not None and db.scalar(select(CompetitionTeam.id).where(
-            CompetitionTeam.event_id == event.id, CompetitionTeam.active.is_(True),
-            CompetitionTeam.id != team.id,
-            CompetitionTeam.table_number == payload.table_number,
-        ).limit(1)):
-            raise HTTPException(status_code=409, detail="This table is already assigned to another team.")
+        # A physical table can seat several teams; each keeps its own assignment.
         team.table_number = payload.table_number
         db.add(AuditEvent(
             staff_id=ctx.staff.id, event_id=event.id,

@@ -94,6 +94,42 @@ def test_check_in_without_table_then_assign_shared_table(reception, verify_parti
     assert all(p["check_in_at"] is None and p["table_number"] is None for p in new)
 
 
+def test_three_teams_can_share_table_and_move_independently(reception, verify_participants):
+    client, csrf, maker = reception
+    members = {}
+    teams = []
+    for name in ("Robins", "Ducks", "Owls"):
+        for index in range(2):
+            created = post(client, csrf, "/people", {
+                "name": f"{name} {index}", "email": f"{name.lower()}{index}@example.org",
+                "kind": "participant", "team_name": name,
+            })
+            assert created.status_code == 201, created.text
+            person = created.json()
+            members[person["id"]] = person["team_id"]
+            if person["team_id"] not in teams:
+                teams.append(person["team_id"])
+    verify_participants(maker, *members)
+    for team_id in teams:
+        assigned = post(client, csrf, f"/attendance/teams/{team_id}/table",
+                        {"table_number": 42}, "PUT")
+        assert assigned.status_code == 200, assigned.text
+    for person_id in members:
+        arrival = post(client, csrf, f"/attendance/{person_id}/check-in")
+        assert arrival.status_code == 200, arrival.text
+        assert arrival.json()["table_number"] == 42
+    for team_id, number in ((teams[0], 53), (teams[1], None)):
+        changed = post(client, csrf, f"/attendance/teams/{team_id}/table",
+                       {"table_number": number}, "PUT")
+        assert changed.status_code == 200, changed.text
+    expected = {teams[0]: 53, teams[1]: None, teams[2]: 42}
+    people = client.get("/api/v1/people").json()["items"]
+    assert all(p["table_number"] == expected[members[p["id"]]] for p in people)
+    assert all(p["check_in_at"] is not None for p in people)
+    listed = client.get("/api/v1/teams").json()["teams"]
+    assert {t["id"]: t["table_number"] for t in listed if t["id"] in expected} == expected
+
+
 def test_cannot_change_team_table_by_checking_in_partner(reception, verify_participants):
     client, csrf, maker = reception
     ids = []
