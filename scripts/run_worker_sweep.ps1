@@ -2,7 +2,9 @@
 # NO PUBLIC SUPERVISELY API CALLS: internal fake Supervisely, separate PostgreSQL.
 [CmdletBinding()]
 param(
-  [int[]]$Workers = @(1, 2, 3),
+  [ValidateRange(1, 4)][int[]]$Workers = @(1, 2, 3),
+  [ValidateSet("publisher", "validation", "correction", "status")][string]$SweepRole = "publisher",
+  [ValidateRange(1, 4)][int]$PublisherBaseline = 2,
   [ValidateRange(1, 4)][int]$Validators = 2,
   [ValidateRange(1, 4)][int]$Correctors = 1,
   [ValidateRange(1, 4)][int]$StatusWorkers = 1,
@@ -136,29 +138,35 @@ try {
   $rootOut = Join-Path $root (".benchmark-data\sweep-300-$stamp")
   New-Item -ItemType Directory -Force -Path $rootOut | Out-Null
   $results = @()
+  if (@($Workers | Select-Object -Unique).Count -ne $Workers.Count) {
+    throw "Specify distinct worker counts so test projects and results are unique."
+  }
   foreach ($count in $Workers) {
-    if ($count -lt 1 -or $count -gt 4) {
-      throw "Worker counts must be between 1 and 4 on the test machine."
-    }
-    $project = "nightjar-bench-300-$stamp-$Phase-p$count-v$Validators-c$Correctors-s$StatusWorkers"
+    # -Workers selects the varying count for the chosen role; all other
+    # roles retain their explicitly configured baseline replicas.
+    $publishers = if ($SweepRole -eq "publisher") { $count } else { $PublisherBaseline }
+    $validatorsRun = if ($SweepRole -eq "validation") { $count } else { $Validators }
+    $correctorsRun = if ($SweepRole -eq "correction") { $count } else { $Correctors }
+    $statusRun = if ($SweepRole -eq "status") { $count } else { $StatusWorkers }
+    $project = "nightjar-bench-300-$stamp-$Phase-p$publishers-v$validatorsRun-c$correctorsRun-s$statusRun"
     if (-not $project.StartsWith("nightjar-bench-300-")) {
       throw "Refusing to operate on a non-benchmark Docker project."
     }
     $compose = @("compose", "-p", $project, "-f", "compose.benchmark.yaml")
-    $out = Join-Path $rootOut "$Phase-publishers-$count-validators-$Validators-correctors-$Correctors-status-$StatusWorkers"
+    $out = Join-Path $rootOut "$Phase-publishers-$publishers-validators-$validatorsRun-correctors-$correctorsRun-status-$statusRun"
     New-Item -ItemType Directory -Force -Path $out | Out-Null
     $loadName = "$project-load"
     try {
-      Write-Host "Starting isolated benchmark: $Phase, $count publisher(s), $Validators validator(s), $Correctors corrector(s), $StatusWorkers status worker(s), $Scenario, $Seconds seconds"
-      & docker @compose up -d --no-build --scale "worker=$count" --scale "validation-worker=$Validators" --scale "correction-worker=$Correctors" --scale "status-worker=$StatusWorkers" web worker status-worker validation-worker correction-worker recovery-worker bulk-worker
+      Write-Host "Starting isolated benchmark: $Phase, $publishers publisher(s), $validatorsRun validator(s), $correctorsRun corrector(s), $statusRun status worker(s), $Scenario, $Seconds seconds"
+      & docker @compose up -d --no-build --scale "worker=$publishers" --scale "validation-worker=$validatorsRun" --scale "correction-worker=$correctorsRun" --scale "status-worker=$statusRun" web worker status-worker validation-worker correction-worker recovery-worker bulk-worker
       if ($LASTEXITCODE -ne 0) { throw "Benchmark environment failed to start." }
       # A capacity comparison is invalid if Compose silently starts fewer
       # replicas than requested. Confirm the actual live role counts.
       foreach ($role in @(
-        @{ Name = "worker"; Expected = $count },
-        @{ Name = "validation-worker"; Expected = $Validators },
-        @{ Name = "correction-worker"; Expected = $Correctors },
-        @{ Name = "status-worker"; Expected = $StatusWorkers }
+        @{ Name = "worker"; Expected = $publishers },
+        @{ Name = "validation-worker"; Expected = $validatorsRun },
+        @{ Name = "correction-worker"; Expected = $correctorsRun },
+        @{ Name = "status-worker"; Expected = $statusRun }
       )) {
         $actual = @(& docker ps --filter "label=com.docker.compose.project=$project" --filter "label=com.docker.compose.service=$($role.Name)" --format '{{.ID}}') | Where-Object { $_ }
         if ($actual.Count -ne $role.Expected) {
@@ -178,10 +186,10 @@ try {
       # Recheck after the one-off load is started; the pre-launch check alone
       # did not detect this regression in the 2026-11-12 benchmark.
       foreach ($role in @(
-        @{ Name = "worker"; Expected = $count },
-        @{ Name = "validation-worker"; Expected = $Validators },
-        @{ Name = "correction-worker"; Expected = $Correctors },
-        @{ Name = "status-worker"; Expected = $StatusWorkers }
+        @{ Name = "worker"; Expected = $publishers },
+        @{ Name = "validation-worker"; Expected = $validatorsRun },
+        @{ Name = "correction-worker"; Expected = $correctorsRun },
+        @{ Name = "status-worker"; Expected = $statusRun }
       )) {
         $actual = @(& docker ps --filter "label=com.docker.compose.project=$project" --filter "label=com.docker.compose.service=$($role.Name)" --format '{{.ID}}') | Where-Object { $_ }
         if ($actual.Count -ne $role.Expected) {
@@ -215,17 +223,17 @@ try {
           # A crashed/recreated replica would corrupt the scaling comparison.
           # Fail immediately rather than silently reporting less capacity.
           foreach ($role in @(
-            @{ Name = "worker"; Expected = $count },
-            @{ Name = "validation-worker"; Expected = $Validators },
-            @{ Name = "correction-worker"; Expected = $Correctors },
-            @{ Name = "status-worker"; Expected = $StatusWorkers }
+            @{ Name = "worker"; Expected = $publishers },
+            @{ Name = "validation-worker"; Expected = $validatorsRun },
+            @{ Name = "correction-worker"; Expected = $correctorsRun },
+            @{ Name = "status-worker"; Expected = $statusRun }
           )) {
             $active = @(& docker ps --filter "label=com.docker.compose.project=$project" --filter "label=com.docker.compose.service=$($role.Name)" --format '{{.ID}}') | Where-Object { $_ }
             if ($active.Count -ne $role.Expected) {
               throw "Benchmark worker count changed during load: expected $($role.Expected) $($role.Name), found $($active.Count). See service logs; results invalid."
             }
           }
-          Write-Host "Benchmark $count publisher(s), $Validators validator(s): load running, elapsed $elapsed seconds (workload target $Seconds seconds plus setup/export)."
+          Write-Host "Benchmark $SweepRole=$count ($publishers publisher(s), $validatorsRun validator(s), $correctorsRun corrector(s), $statusRun status worker(s)): load running, elapsed $elapsed seconds (workload target $Seconds seconds plus setup/export)."
           $lastProgress = $elapsed
         }
         Start-Sleep -Seconds 4
@@ -269,11 +277,13 @@ try {
         Write-Warning "Only $confirmed/300 original jobs confirmed within $Seconds seconds. Full 300-job release time is not yet measured; extend -Seconds."
       }
       $results += [PSCustomObject]@{
-        Publishers = $count
+        SweepRole = $SweepRole
+        SweepCount = $count
+        Publishers = $publishers
         Phase = $Phase
-        Validators = $Validators
-        Correctors = $Correctors
-        StatusWorkers = $StatusWorkers
+        Validators = $validatorsRun
+        Correctors = $correctorsRun
+        StatusWorkers = $statusRun
         IncompleteRate = $IncompleteRate
         Scenario = $Scenario
         AssumedPublishMs = $AssumedPublishMs
@@ -298,7 +308,7 @@ try {
         PeakRamMiB = [math]::Round([double]$report.resources.combined.max_sample_working_set_mib, 0)
         Results = $out
       }
-      Write-Host "Completed $count-worker benchmark; output: $out"
+      Write-Host "Completed $SweepRole=$count benchmark; output: $out"
     }
     finally {
       # Only project-specific test containers and TEST volumes are deleted.
@@ -306,7 +316,7 @@ try {
       & docker @compose down --volumes --remove-orphans | Out-Null
     }
   }
-  $results | Format-Table -AutoSize
+  $results | Sort-Object SweepCount | Format-Table -AutoSize
   $results | ConvertTo-Json -Depth 5 | Out-File (Join-Path $rootOut "comparison.json") -Encoding utf8
   Write-Host "Benchmark comparison saved: $rootOut\comparison.json"
   Write-Host "Choose per-role worker counts by complete job turnaround (p95/p99), 300-job drain time, backlog and errors; not CPU alone."
