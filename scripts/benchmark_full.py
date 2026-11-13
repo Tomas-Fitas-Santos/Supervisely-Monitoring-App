@@ -50,6 +50,16 @@ def is_correction_job_title(title: str) -> bool:
     )
 
 
+def filter_jobs_by_assignee(items: list[dict], filters: list[dict]) -> list[dict]:
+    """Match Supervisely jobs.list's top-level userId filter."""
+    assigned_to = next((
+        rule["value"] for rule in filters if rule.get("field") == "userId"
+    ), None)
+    if assigned_to is None:
+        return items
+    return [row for row in items if row.get("userId") == assigned_to]
+
+
 def certificates():
     from cryptography import x509
     from cryptography.hazmat.primitives import hashes, serialization
@@ -570,12 +580,7 @@ def simulate():
             # Supervisely's ASSIGNED_TO_ID maps to the top-level userId
             # field in jobs.list. Filtering the fake response by the same
             # field prevents unstable pagination during concurrent creates.
-            assignee_id = next((
-                rule["value"] for rule in body.get("filter", [])
-                if rule.get("field") == "userId"
-            ), None)
-            if assignee_id is not None:
-                items = [row for row in items if row.get("userId") == assignee_id]
+            items = filter_jobs_by_assignee(items, body.get("filter", []))
             return page(items, body)
         if method == "users.info":
             return {"teams": [{"id": 125980, "name": "Synthetic team", "role": "annotator", "roleId": 5}]}
