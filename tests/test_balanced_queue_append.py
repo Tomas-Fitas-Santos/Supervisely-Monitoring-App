@@ -15,14 +15,13 @@ from sqlalchemy.pool import StaticPool
 from test_dataset_workflows import act, teams
 
 from annotatiathon.app import app
-from annotatiathon.db import get_db
-
 from annotatiathon.balanced_queue import process_preparation_once
 from annotatiathon.dataset_append import process_append_once
+from annotatiathon.db import get_db
 from annotatiathon.models import (
     DEFAULT_EVENT_ID,
-    Base,
     BalancedVideoRun,
+    Base,
     CompetitionTeam,
     DatasetAppendBatch,
     Event,
