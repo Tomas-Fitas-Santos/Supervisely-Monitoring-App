@@ -6,6 +6,7 @@ concurrently, but each job/round is exclusively leased and completed once.
 Publisher/correction writes are deliberately NOT lease-retried.
 """
 import logging
+import os
 import threading
 from uuid import uuid4
 
@@ -257,7 +258,11 @@ def process_validation_once(db: Session, api, config) -> dict | None:
     except Exception as exc:  # noqa: BLE001 - retry safe read
         db.rollback()
         problem = exc
-        logger.warning("Validation task %s failed (%s)", task_id, type(exc).__name__)
+        if os.environ.get("BENCHMARK_ANNOTATORS") == "300":
+            logger.exception("Synthetic validation task %s failed", task_id)
+        else:
+            logger.warning("Validation task %s failed (%s)",
+                           task_id, type(exc).__name__)
     finally:
         stop.set()
         thread.join(timeout=2)
