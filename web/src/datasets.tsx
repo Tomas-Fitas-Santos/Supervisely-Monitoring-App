@@ -1,5 +1,6 @@
 import { RefreshButton } from "./refresh_button";
 import { confirmAction } from "./dialogs";
+import { AppendVideos } from "./dataset_append";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type React from "react";
 import {
@@ -14,6 +15,7 @@ import { beginDatasetTransfer, clearDatasetTransfer, getDatasetTransfer,
 type Dataset={id:string;name:string;upload_kind:"zip"|"folder";
   status:string;source_bytes:number;image_count:number;frame_count:number;
   video_count:number;created_at:number;last_activity_at:number;error_code:string|null;
+  inventory_revision:number;mirrored_revision:number;configuration_revision:number;
   native_project_id:number|null};
 type MirrorStatus={state:string;uploaded_frames:number;total_frames:number;
   ready_for_automatic_jobs:boolean;error_code:string|null;
@@ -253,7 +255,8 @@ export function DatasetScreen({auth}:{auth:Auth}) {
         {dataset&&<div className="dataset-detail"><h4>{dataset.name}</h4>
           <p className="muted small">{dataset.video_count} videos ·
             {dataset.frame_count} frames available for annotation</p>
-          <p className="muted small">Local status: {dataset.status} · Native project: {dataset.native_project_id||"Not created yet"}</p>
+          <p className="muted small">Local status: {dataset.status} · Native project: {dataset.native_project_id||"Not created yet"}
+            {" "}· Inventory revision {dataset.inventory_revision} · Mirrored revision {dataset.mirrored_revision}</p>
           {dataset.status==="ready"&&<div className="dataset-mirror-status">
             <strong>Supervisely media upload: {mirror?.ready_for_automatic_jobs?
               "Complete":"Not complete"}</strong>
@@ -288,6 +291,9 @@ export function DatasetScreen({auth}:{auth:Auth}) {
               to verify source-video identity and consecutive frame positions.
               Manual assignments can independently duplicate a video in their separate remote dataset.</p>}
           </div>}
+          {admin&&dataset.status==="ready"&&
+            <AppendVideos key={dataset.id} datasetId={dataset.id}
+              csrf={auth.csrf_token} onCommitted={refresh}/>}
           {videos.length>0&&<div className="settings-note">
             <div><label>Estimated storage · target frame count<input type="number" min={1} max={1000000000}
               value={projectedFrames} onChange={e=>setProjectedFrames(Math.min(1000000000,Math.max(1,Number(e.target.value)||1)))}/></label>
