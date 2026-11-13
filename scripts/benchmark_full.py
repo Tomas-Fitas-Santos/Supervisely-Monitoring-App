@@ -626,11 +626,31 @@ def database_summary():
 def import_dataset(client, call):
     archive = io.BytesIO()
     with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zipped:
-        for source in sorted((DATA / "event/dataset/media").glob("*.jpg")):
-            zipped.write(source, f"images/bird/{source.name}")
+        if PHASE == "full":
+            # 300 independent 30-frame videos, each intentionally sampled
+            # from sparse source indices. These *real JPEG bytes* traverse
+            # the API upload/finalize and Supervisely mirror worker paths.
+            from PIL import Image
+
+            for video in range(ANNOTATORS):
+                for frame in range(FRAMES):
+                    index = video * FRAMES + frame
+                    buffer = io.BytesIO()
+                    Image.new("RGB", (256, 256),
+                              (index % 251, (index // 251) % 251,
+                               (index // (251 * 251)) % 251)).save(
+                                  buffer, "JPEG", quality=65)
+                    zipped.writestr(
+                        f"Bird/video_{video:04d}/frame_{frame * 5 + 1:08d}.jpg",
+                        buffer.getvalue(),
+                    )
+        else:
+            for source in sorted((DATA / "event/dataset/media").glob("*.jpg")):
+                zipped.write(source, f"images/bird/{source.name}")
     content = archive.getvalue()
     response = call(client, "POST", "/api/v1/datasets/uploads", json={
-        "name": "Synthetic lifecycle import", "upload_kind": "zip"})
+        "name": "Synthetic lifecycle import", "upload_kind": "zip",
+        "extraction_policy": "all_frames"})
     response.raise_for_status()
     identifier = response.json()["id"]
     for offset in range(0, len(content), 8 * 1024**2):
@@ -643,7 +663,8 @@ def import_dataset(client, call):
     response = call(client, "POST", f"/api/v1/datasets/{identifier}/finalize")
     response.raise_for_status()
     return {"archive_bytes": len(content), "finalize_seconds": time.monotonic() - started,
-            "dataset": response.json()}
+            "dataset": response.json(),
+            "uploaded_images": ANNOTATORS * FRAMES if PHASE == "full" else FRAMES}
 
 
 def export_dataset(client, call):
