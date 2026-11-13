@@ -168,15 +168,22 @@ def upload_status(
             "received_bytes": found.received_bytes,
             "expected_bytes": found.expected_bytes,
         } if found else None)}
-    count, received, complete = db.execute(select(
-        func.count(), func.coalesce(func.sum(DatasetStagedFile.received_bytes), 0),
-        func.coalesce(func.sum(case(
-            (DatasetStagedFile.received_bytes == DatasetStagedFile.expected_bytes, 1),
-            else_=0,
-        )), 0),
-    ).where(scope)).one()
-    result = {"dataset": dataset_view(ds),
-              "files": count, "received_bytes": received, "complete_files": complete}
+    result = {"dataset": dataset_view(ds)}
+    # One summary on the first page is enough. Subsequent resume pages need
+    # only the next 1,000 paths, never repeated full-inventory aggregates.
+    if not include_files or after is None:
+        count, received, complete = db.execute(select(
+            func.count(), func.coalesce(func.sum(DatasetStagedFile.received_bytes), 0),
+            func.coalesce(func.sum(case(
+                (DatasetStagedFile.received_bytes == DatasetStagedFile.expected_bytes, 1),
+                else_=0,
+            )), 0),
+        ).where(scope)).one()
+        result.update({
+            "files": count,
+            "received_bytes": received,
+            "complete_files": complete,
+        })
     if include_files:
         query = select(DatasetStagedFile).where(scope)
         if after is not None:
