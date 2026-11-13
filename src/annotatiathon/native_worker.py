@@ -1305,21 +1305,22 @@ def process_correction_once(db: Session, api, config: SuperviselyConfig) -> dict
                 if not matches:
                     # SDK create(images_ids=...) uses the supported jobs.add method
                     # and does not invoke restart()'s failing users.info preflight.
-                    api.labeling_job.create(
-                        name=title,
-                        dataset_id=job.native_dataset_id,
-                        user_ids=[person.supervisely_user_id],
-                        images_ids=images_to_return,
-                        classes_to_label=[name for name, _geometry, _color, _description
-                                          in ANNOTATION_CLASSES],
-                        readme=(
-                            "INCOMPLETE SUBMISSION: finish these remaining images. "
-                            "For EACH image annotate exactly one bird bounding box (rectangle) "
-                            "and one left_eye, right_eye, beak and crown point. "
-                            "Use the *_occ variant for occluded landmarks. "
-                            "Previously complete images are already accepted."
-                        ),
-                    )
+                    with code_timing("correction.remote_create_subset_job", job_id=job.id):
+                        api.labeling_job.create(
+                            name=title,
+                            dataset_id=job.native_dataset_id,
+                            user_ids=[person.supervisely_user_id],
+                            images_ids=images_to_return,
+                            classes_to_label=[name for name, _geometry, _color, _description
+                                              in ANNOTATION_CLASSES],
+                            readme=(
+                                "INCOMPLETE SUBMISSION: finish these remaining images. "
+                                "For EACH image annotate exactly one bird bounding box (rectangle) "
+                                "and one left_eye, right_eye, beak and crown point. "
+                                "Use the *_occ variant for occluded landmarks. "
+                                "Previously complete images are already accepted."
+                            ),
+                        )
                     remote = api.labeling_job.get_list(
                         config.team_id, dataset_id=job.native_dataset_id,
                         show_disabled=True,
@@ -1701,13 +1702,15 @@ def worker_cycle(lane: str) -> bool:
                 if not reset_pending(db):
                     process_export_once(db, api)
             elif lane == "status":
-                result = sync_all(db, api, config, capture_snapshots=False)
+                with code_timing("status.total"):
+                    result = sync_all(db, api, config, capture_snapshots=False)
             elif lane == "validation":
                 from .validation_tasks import process_validation_once
                 result = process_validation_once(db, api, config)
             elif lane == "correction":
                 first = process_reassignment_once(db, api, config)
-                result = process_correction_once(db, api, config) or first
+                with code_timing("correction.total"):
+                    result = process_correction_once(db, api, config) or first
             elif lane == "recovery":
                 from .validation_tasks import recover_expired_validations
                 result = {"reclaimed_validation_tasks": recover_expired_validations(db)}
