@@ -1,3 +1,4 @@
+import { RefreshButton } from "./refresh_button";
 import { useTableSort } from "./table_sort";
 import { confirmAction } from "./dialogs";
 import { useCallback, useEffect, useState } from "react";
@@ -48,7 +49,7 @@ export function CloseoutScreen({auth}:{auth:Auth}) {
       setReport(result);setNativeExport(exportState);setRankings(teamRanks.items);
       setReviewCounts(counts);setError("");
     }
-    catch(e){setError((e as Error).message);}
+    catch(e){setError((e as Error).message);return false;}
   },[]);
   useEffect(()=>{void refresh();},[refresh]);
   useEffect(()=>{
@@ -88,8 +89,7 @@ export function CloseoutScreen({auth}:{auth:Auth}) {
     <div className="page-heading"><div><span className="eyebrow">EVENT OPERATIONS · TEAM RESULTS</span>
       <h2>Results & Rankings</h2>
       <p className="muted">Teams rank by estimated annotation points from the proportional review queue. Organisers can export records and close the event.</p>
-      </div><button className="btn secondary" onClick={()=>void refresh()}>
-        <RefreshCw size={15}/> Refresh</button></div>
+      </div><RefreshButton refresh={refresh}>Refresh</RefreshButton></div>
     {error&&<div role="alert" className="alert danger">{error}</div>}
     {notice&&<div role="status" className="alert success">{notice}</div>}
     {report&&<>

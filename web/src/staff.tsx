@@ -1,5 +1,6 @@
+import { RefreshButton } from "./refresh_button";
 import { useCallback, useEffect, useState } from "react";
-import { RefreshCw, ShieldCheck } from "lucide-react";
+import { ShieldCheck } from "lucide-react";
 import { api, type Auth } from "./api";
 
 type Approved = {
@@ -25,7 +26,7 @@ export function StaffScreen({auth}:{auth:Auth}) {
     try{
       const data=await api<{items:Approved[]}>("/staff/approved");
       setPeople(data.items);setError("");
-    }catch(e){setError((e as Error).message);}
+    }catch(e){setError((e as Error).message);return false;}
   },[]);
   useEffect(()=>{void refresh();},[refresh]);
   if(!auth.staff.roles.includes("admin"))return null;
@@ -39,8 +40,7 @@ export function StaffScreen({auth}:{auth:Auth}) {
       <h3>Approved Nightjar accounts</h3>
       <p className="muted">Live PostgreSQL account status and successful login history.
         Event Monitor and Participant roles are separate from staff permissions.</p>
-    </div><button className="btn secondary" onClick={()=>void refresh()}>
-      <RefreshCw size={15}/> Refresh login status</button></div>
+    </div><RefreshButton refresh={refresh}>Refresh login status</RefreshButton></div>
     {error&&<div role="alert" className="alert danger">{error}</div>}
     <div className="settings-row"><span>Registered, enabled and not locked</span>
       <strong>{ready} / {eligible.length}</strong></div>

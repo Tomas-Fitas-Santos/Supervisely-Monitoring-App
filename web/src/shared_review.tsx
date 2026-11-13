@@ -1,8 +1,9 @@
+import { RefreshButton } from "./refresh_button";
 import { useTableSort } from "./table_sort";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CheckCircle2, ChevronRight, ClipboardCheck, PauseCircle, PlayCircle,
-  RefreshCw, RotateCcw, ZoomIn, ZoomOut
+  RotateCcw, ZoomIn, ZoomOut
 } from "lucide-react";
 import { api, type Auth } from "./api";
 import { AnnotationFrame } from "./annotation_overlay";
@@ -33,6 +34,10 @@ const reasons:{value:Reason;label:string}[]=[
   {value:"wrong_placement",label:"Wrong keypoint placement"},
   {value:"sabotage",label:"Sabotage / no serious placement attempt"},
 ];
+const boxReasons=([
+  {value:"wrong_placement",label:"Placement mistake"},
+  {value:"sabotage",label:"Sabotage / no serious attempt"},
+] satisfies typeof reasons);
 const fmt=(n:number)=>new Intl.NumberFormat(undefined,{maximumFractionDigits:2}).format(n);
 const isLeaseConflict=(error:unknown)=>/claim expired|not owned by this claim|already completed/i
   .test((error as Error).message||"");
@@ -45,7 +50,6 @@ export function SharedReviewScreen({auth}:{auth:Auth}){
   const [rankings,setRankings]=useState<Ranking[]>([]);
   const rankingSort=useTableSort();
   const [verdicts,setVerdicts]=useState<Record<number,VerdictDraft>>({});
-  const [missingClasses,setMissingClasses]=useState<string[]>([]);
   const [zoom,setZoom]=useState(1);
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState("");
@@ -64,7 +68,7 @@ export function SharedReviewScreen({auth}:{auth:Auth}){
     const value=verdicts[index];
     if(!value||!shapeOf(obj))return false;
     if(value.correct)return true;
-    if(shapeOf(obj)==="rectangle")return true;
+    if(shapeOf(obj)==="rectangle")return value.reason==="wrong_placement"||value.reason==="sabotage";
     if(!value.reason)return false;
     return value.reason!=="wrong_class"||
       Boolean(value.corrected_class&&value.corrected_class!==obj.classTitle);
@@ -122,7 +126,7 @@ export function SharedReviewScreen({auth}:{auth:Auth}){
 
   function setActiveReview(next:ReviewClaim|null){
     activeClaimRef.current=next;
-    setClaim(next);setVerdicts({});setMissingClasses([]);setZoom(1);
+    setClaim(next);setVerdicts({});setZoom(1);
   }
 
   async function claimNext(){
@@ -180,7 +184,7 @@ export function SharedReviewScreen({auth}:{auth:Auth}){
               ...(v.reason==="wrong_class"?{corrected_class:v.corrected_class}:{})
             })};
         }),
-        missing_classes:missingClasses,action
+        action
       };
       const response=await api<{completed:boolean;review:ReviewClaim|null}>(
         "/review-queue/"+claim.review_id+"/complete","POST",payload,auth.csrf_token);
@@ -200,17 +204,17 @@ export function SharedReviewScreen({auth}:{auth:Auth}){
     finally{setBusy(false);}
   }
 
-  const pointClasses=(claim?.classes||[]).filter(c=>c.shape==="point");
   return <div className="page-body shared-review-workspace">
     <div className="page-heading">
       <div><span className="eyebrow">EVENT OPERATIONS · SHARED QUALITY REVIEW</span>
         <h2>Monitoring & Review</h2>
         <p className="muted">Review allocation follows each team's share of submitted frames. Each monitor receives a random available frame from the selected team, with exclusive claims.</p>
       </div>
-      <button className="btn secondary" disabled={busy}
-        onClick={()=>{void refreshStatus();if(tab==="rankings")void refreshRankings();}}>
-        <RefreshCw size={15}/> Refresh
-      </button>
+      <RefreshButton disabled={busy} onError={e=>setError((e as Error).message)}
+        refresh={async()=>{
+          setError("");
+          await Promise.all([refreshStatus(), ...(tab==="rankings"?[refreshRankings()]:[])]);
+        }}>Refresh</RefreshButton>
     </div>
 
     <nav className="workspace-subtabs" aria-label="Monitoring workspaces">
@@ -275,10 +279,10 @@ export function SharedReviewScreen({auth}:{auth:Auth}){
               <div><span className="eyebrow">INDIVIDUAL OBJECT REVIEW</span>
                 <h3>Review each annotation</h3>
                 <p className="muted">Use the legend above to show or hide each label class.
-                  Grade every annotation using the rows below; incorrect keypoints require a reason.</p>
+                  Grade every annotation using the rows below; incorrect annotations require a reason.</p>
               </div><strong>{graded} / {objects.length} graded</strong>
             </div>
-            {!objects.length&&<div className="settings-note">No annotated points or boxes in this submitted frame. Confirm any missing landmark classes below before saving.</div>}
+            {!objects.length&&<div className="settings-note">No annotated points or boxes in this submitted frame.</div>}
             <div className="shared-review-object-list">
               {objects.map((obj,index)=>{
                 const shape=shapeOf(obj),draft=verdicts[index];
@@ -300,14 +304,14 @@ export function SharedReviewScreen({auth}:{auth:Auth}){
                       Incorrect
                     </button>
                   </div>
-                  {draft?.correct===false&&shape==="point"&&
+                  {draft?.correct===false&&shape&&
                     <div className="shared-review-reason">
-                      <label>Why is the keypoint incorrect?
+                      <label>{shape==="rectangle"?"Why is the bounding box incorrect?":"Why is the keypoint incorrect?"}
                         <select value={draft.reason||""} onChange={e=>mark(index,{
                           correct:false,reason:e.target.value as Reason||null,corrected_class:""
                         })}>
                           <option value="">Choose reason…</option>
-                          {reasons.map(reason=><option key={reason.value} value={reason.value}>{reason.label}</option>)}
+                          {(shape==="rectangle"?boxReasons:reasons).map(reason=><option key={reason.value} value={reason.value}>{reason.label}</option>)}
                         </select>
                       </label>
                       {draft.reason==="wrong_class"&&<label>Correct keypoint class
@@ -318,24 +322,10 @@ export function SharedReviewScreen({auth}:{auth:Auth}){
                         </select>
                       </label>}
                     </div>}
-                  {draft?.correct===false&&shape==="rectangle"&&
-                    <span className="muted small">Bounding box counted as incorrect.</span>}
                   {!shape&&<span className="alert danger">Unsupported geometry; please report this annotation.</span>}
                 </div>;
               })}
             </div>
-            <details className="shared-review-missing">
-              <summary>Missing keypoints / classes ({missingClasses.length})</summary>
-              <p className="muted small">Optional: record landmark classes missing from this frame.
-                They are tracked separately from submitted incorrect objects.</p>
-              <div className="shared-review-missing-list">
-                {pointClasses.map(c=><label key={c.name}>
-                  <input type="checkbox" checked={missingClasses.includes(c.name)}
-                    onChange={e=>setMissingClasses(v=>e.target.checked?[...v,c.name]:v.filter(x=>x!==c.name))}/>
-                  {c.name}
-                </label>)}
-              </div>
-            </details>
             <div className="shared-review-completion">
               <button className="btn secondary" disabled={busy} onClick={()=>void release()}>
                 Release unreviewed frame
@@ -362,8 +352,8 @@ export function SharedReviewScreen({auth}:{auth:Auth}){
           Estimated points = eligible automatic-primary submitted frames × average reviewed prize points (0–5).
           Incorrect labels earn zero; the legacy weighted quality rubric does not affect prize ranks.
           Review allocation follows submission share, and frames are randomized within each team.</p>
-      </div><button className="btn secondary" onClick={()=>void refreshRankings()}>
-        <RefreshCw size={15}/> Update</button></div>
+      </div><RefreshButton refresh={async()=>{setError("");await refreshRankings();}}
+        onError={e=>setError((e as Error).message)}>Update</RefreshButton></div>
       <div className="table-scroll"><table className="data-table">
         <thead><tr>
             {rankingSort.header("rank","Rank")}
