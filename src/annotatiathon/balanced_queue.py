@@ -5,7 +5,7 @@ range, and claims fetch at most 30 immutable frame IDs from indexed PostgreSQL.
 """
 import json
 import os
-from collections import Counter, defaultdict
+from collections import Counter
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
@@ -20,7 +20,7 @@ from .models import (
     AuditEvent, BalancedVideoRun, DatasetAppendBatch,
     DatasetFolderClassification, DatasetPreparedQueue, Event, LabelingJob,
     LabelingPlan, MediaAsset, MediaDataset, MediaVideo, NativeOperation,
-    WorkPacket, ReviewSample, epoch, identifier,
+    WorkPacket, ReviewSample, epoch,
 )
 
 router = APIRouter(prefix="/api/v1", tags=["balanced automatic distribution"])

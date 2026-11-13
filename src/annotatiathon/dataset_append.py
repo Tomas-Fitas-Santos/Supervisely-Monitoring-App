@@ -11,7 +11,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .auth import AuthContext, requires
@@ -24,7 +24,7 @@ from .events_api import current_event
 from .db import get_db
 from .models import (
     AuditEvent, DatasetAppendBatch, DatasetAppendFile, DatasetPreparedQueue,
-    LabelingJob, LabelingPlan, MediaAsset, MediaVideo, NativeOperation, epoch,
+    LabelingJob, LabelingPlan, MediaAsset, MediaDataset, MediaVideo, NativeOperation, epoch,
 )
 from .native_media_pool import enqueue_mirror
 
