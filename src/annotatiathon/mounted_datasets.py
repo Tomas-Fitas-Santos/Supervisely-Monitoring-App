@@ -9,7 +9,7 @@ from pathlib import Path, PurePosixPath
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import insert, select
+from sqlalchemy import insert, select, update
 from sqlalchemy.orm import Session
 
 from .auth import AuthContext, requires
@@ -25,7 +25,16 @@ from .datasets_api import (
 )
 from .db import get_db
 from .events_api import current_event
-from .models import AuditEvent, MediaAsset, MediaDataset, MediaVideo, NativeOperation, epoch
+from .models import (
+    AuditEvent,
+    DatasetPreparedQueue,
+    MediaAsset,
+    MediaDataset,
+    MediaVideo,
+    MountedSourceFile,
+    NativeOperation,
+    epoch,
+)
 from .native_media_pool import enqueue_mirror
 
 logger = logging.getLogger(__name__)
@@ -177,27 +186,81 @@ def mounted_index_status(
                 if op and op.status == "running" and op.claimed_at else None}
 
 
-def index_mounted_dataset(db: Session, ds: MediaDataset, progress=None):
+def index_mounted_dataset(db: Session, ds: MediaDataset, progress=None, *, additions=False):
     """Index file metadata in one transaction; supplied image bytes remain mounted."""
     source = mounted_source(ds.source_folder)
     root = Path(ds.root_path)
     media_root = root / "media"
-    if any(media_root.iterdir()):
+    if not additions and any(media_root.iterdir()):
         raise ValueError("mounted_index_requires_clean_media_directory")
-    source_bytes = 0
-    frame_count = 0
-    image_count = 0
-    video_count = 0
+    source_bytes = ds.source_bytes if additions else 0
+    frame_count = ds.frame_count if additions else 0
+    image_count = ds.image_count if additions else 0
+    video_count = ds.video_count if additions else 0
+    before = (frame_count, image_count, video_count)
+    existing_videos = {v.video_group: v for v in db.scalars(select(MediaVideo).where(
+        MediaVideo.dataset_id == ds.id))} if additions else {}
+    existing_assets = {rel: (digest, size) for rel, digest, size in db.execute(select(
+        MediaAsset.relative_path, MediaAsset.sha256, MediaAsset.size_bytes,
+    ).where(MediaAsset.dataset_id == ds.id))} if additions else {}
+    receipts = {rel: (size, mtime, digest) for rel, size, mtime, digest in db.execute(select(
+        MountedSourceFile.relative_path, MountedSourceFile.size_bytes,
+        MountedSourceFile.mtime_ns, MountedSourceFile.sha256,
+    ).where(MountedSourceFile.dataset_id == ds.id))} if additions else {}
+    seen = set()
+    checked = {}
+    checked_directories = {source: source.stat().st_mtime_ns}
+    receipt_rows = []
     asset_rows = []
     settings = get_settings()
     from .frame_extraction import extract_full_video
     from .frame_import import index_supplied_frames
 
-    def count_file(path: Path) -> tuple[str, int]:
-        nonlocal source_bytes
+    def source_stat(path):
         if path.is_symlink() or not path.is_file() or not path.resolve().is_relative_to(source):
             raise ValueError("unsafe_source_file")
+        stat = path.stat()
+        return stat.st_size, stat.st_mtime_ns
+
+    def save_receipt(path, digest, stat):
+        relative = path.relative_to(source).as_posix()
+        receipt_rows.append({"dataset_id": ds.id, "relative_path": relative,
+            "sha256": digest, "size_bytes": stat[0], "mtime_ns": stat[1]})
+        if len(receipt_rows) >= 500:
+            db.execute(insert(MountedSourceFile), receipt_rows)
+            receipt_rows.clear()
+
+    def known_file(path, expected=None):
+        relative = path.relative_to(source).as_posix()
+        seen.add(relative)
+        stat = source_stat(path)
+        previous = receipts.get(relative)
+        expected_digest = previous[2] if previous else expected
+        if previous and stat == previous[:2]:
+            return
         digest, size = sha256_file(path)
+        if source_stat(path) != stat:
+            raise ValueError(f"source_file_changed_during_sync:{relative}")
+        if expected_digest is not None and digest != expected_digest:
+            raise ValueError(f"existing_source_file_changed:{relative}")
+        if previous:
+            db.execute(update(MountedSourceFile).where(
+                MountedSourceFile.dataset_id == ds.id,
+                MountedSourceFile.relative_path == relative,
+            ).values(size_bytes=size, mtime_ns=stat[1]))
+        else:
+            # Bootstrap pre-receipt imports using their committed media hashes.
+            save_receipt(path, digest, stat)
+
+    def count_file(path: Path) -> tuple[str, int]:
+        nonlocal source_bytes
+        relative = path.relative_to(source).as_posix()
+        stat = source_stat(path)
+        digest, size = sha256_file(path)
+        if source_stat(path) != stat:
+            raise ValueError(f"source_file_changed_during_sync:{relative}")
+        checked[relative] = stat
+        save_receipt(path, digest, stat)
         source_bytes += size
         if source_bytes > settings.max_dataset_bytes:
             raise ValueError("mounted_dataset_exceeds_source_size_limit")
@@ -241,6 +304,7 @@ def index_mounted_dataset(db: Session, ds: MediaDataset, progress=None):
         if species_dir.is_symlink() or not species_dir.is_dir():
             raise ValueError("dataset_must_contain_species_directories")
         species = str(safe_relative(species_dir.name))
+        checked_directories[species_dir] = species_dir.stat().st_mtime_ns
         if "/" in species:
             raise ValueError("invalid_species_folder")
         for entry in sorted(species_dir.iterdir()):
@@ -250,6 +314,12 @@ def index_mounted_dataset(db: Session, ds: MediaDataset, progress=None):
                 raise ValueError("source_symlinks_not_allowed")
             if entry.is_file() and entry.suffix.lower() in VIDEO_EXTENSIONS:
                 group = f"{species}/{entry.stem}"
+                if group in existing_videos:
+                    original = existing_videos[group]
+                    if not original.source_sha256 or original.extraction_policy.startswith("supplied"):
+                        raise ValueError(f"existing_video_layout_changed:{group}")
+                    known_file(entry, original.source_sha256)
+                    continue
                 name = str(safe_relative(entry.name))
                 video = MediaVideo(
                     event_id=ds.event_id, dataset_id=ds.id, video_group=group,
@@ -261,6 +331,12 @@ def index_mounted_dataset(db: Session, ds: MediaDataset, progress=None):
                 video.source_sha256 = digest
                 video.identity_notes = ["Original video is read-only on the mounted source volume."]
                 dest = media_root / "videos" / species / entry.stem
+                if additions and dest.exists():
+                    # Only this NEW group's uncommitted decoder output can remain after a crash.
+                    import shutil
+                    if dest.is_symlink() or not dest.resolve().is_relative_to(media_root.resolve()):
+                        raise ValueError("unsafe_new_video_output")
+                    shutil.rmtree(dest)
                 if ds.extraction_policy == "all_frames":
                     result = extract_full_video(entry, dest,
                         max_frames=settings.max_dataset_assets - frame_count - image_count)
@@ -282,10 +358,30 @@ def index_mounted_dataset(db: Session, ds: MediaDataset, progress=None):
                 video_count += 1
             elif entry.is_file() and entry.suffix.lower() in IMAGE_EXTENSIONS:
                 name = str(safe_relative(entry.name))
-                add_asset(entry, str(PurePosixPath("images", species, name)),
+                relative = str(PurePosixPath("images", species, name))
+                if relative in existing_assets:
+                    known_file(entry, existing_assets[relative][0])
+                    continue
+                add_asset(entry, relative,
                           species, None)
             elif entry.is_dir():
+                checked_directories[entry] = entry.stat().st_mtime_ns
                 title = str(safe_relative(entry.name))
+                group = f"{species}/{title}"
+                if group in existing_videos:
+                    if not existing_videos[group].extraction_policy.startswith("supplied"):
+                        raise ValueError(f"existing_video_layout_changed:{group}")
+                    for frame in sorted(entry.iterdir()):
+                        if frame.name.startswith("."):
+                            continue
+                        relative = str(PurePosixPath("videos", species, title, frame.name))
+                        if relative in existing_assets:
+                            known_file(frame, existing_assets[relative][0])
+                        elif frame.name == "frames.json":
+                            known_file(frame)
+                        elif frame.suffix.lower() in IMAGE_EXTENSIONS or frame.is_symlink():
+                            raise ValueError(f"existing_video_has_new_frames_use_new_video_folder:{group}")
+                    continue
                 video = MediaVideo(
                     event_id=ds.event_id, dataset_id=ds.id,
                     video_group=f"{species}/{title}",
@@ -300,6 +396,7 @@ def index_mounted_dataset(db: Session, ds: MediaDataset, progress=None):
                         raise ValueError("source_symlinks_not_allowed")
                     if frame.name == "frames.json":
                         manifest = frame
+                        count_file(frame)
                         continue
                     if frame.suffix.lower() not in IMAGE_EXTENSIONS:
                         continue
@@ -323,6 +420,22 @@ def index_mounted_dataset(db: Session, ds: MediaDataset, progress=None):
         raise ValueError("mounted_source_has_no_usable_frames")
     if asset_rows:
         db.execute(insert(MediaAsset), asset_rows)
+    if receipt_rows:
+        db.execute(insert(MountedSourceFile), receipt_rows)
+    if additions:
+        missing = set(receipts) - seen
+        # Older datasets without receipts still retain their original source identities.
+        missing.update(rel.split("/", 1)[1] for rel in existing_assets
+                       if rel.startswith(("videos/", "images/"))
+                       and (rel.split("/", 1)[1] not in seen)
+                       and not (media_root / rel).is_file())
+        if missing:
+            raise ValueError(f"existing_source_file_missing:{min(missing)}")
+    for relative, stat in checked.items():
+        if source_stat(source / relative) != stat:
+            raise ValueError(f"source_file_changed_during_sync:{relative}")
+    if any(path.stat().st_mtime_ns != modified for path, modified in checked_directories.items()):
+        raise ValueError("source_folder_changed_during_sync_finish_copying_then_retry")
     ds.source_bytes = source_bytes
     ds.frame_count = frame_count
     ds.image_count = image_count
@@ -332,7 +445,17 @@ def index_mounted_dataset(db: Session, ds: MediaDataset, progress=None):
     ds.status = "ready"
     ds.completed_at = epoch()
     ds.error_code = None
-    enqueue_mirror(db, ds)
+    changed = before != (frame_count, image_count, video_count)
+    if additions and changed:
+        ds.inventory_revision += 1
+        prepared = db.get(DatasetPreparedQueue, ds.id)
+        if prepared:
+            prepared.state = "stale"
+    if not additions or changed:
+        enqueue_mirror(db, ds)
+    return {"new_frames": frame_count - before[0], "new_images": image_count - before[1],
+            "new_videos": video_count - before[2], "existing_files": len(seen),
+            "inventory_revision": ds.inventory_revision}
 
 
 def process_mounted_index_once(db: Session) -> dict | None:
@@ -360,6 +483,9 @@ def run_indexer(*, once: bool = False, poll_seconds: int = 8) -> None:
                 # Preserve mounted indexing as the first local-only operation.
                 # An open index requires finishing before queue preparation.
                 result = process_mounted_index_once(db)
+                if result is None:
+                    from .mounted_sync import process_sync_once
+                    result = process_sync_once(db)
                 if result is None:
                     from .dataset_indexing import process_index_once
                     result = process_index_once(db)

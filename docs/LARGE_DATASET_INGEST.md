@@ -65,7 +65,8 @@ Supervisely credentials. The browser can close after queuing validation.
 The old synchronous finalization API remains available for existing clients and
 scripts. It rejects a dataset that already has a background import in progress.
 Existing ready datasets, media IDs, frame ordinals, checksum validation,
-Supervisely mappings, review URLs, and database schema remain compatible.
+Supervisely mappings, and review URLs remain compatible. An additive migration
+creates mounted-source receipts; existing imports remain usable without reimport.
 
 | Area | Integration behavior |
 | --- | --- |
@@ -85,7 +86,7 @@ fall back to copying. ZIPs require extraction space. Mounted source files are
 never deleted or rewritten by recovery; cleanup is limited to validated private
 derived directories.
 
-No database migration is needed. Current defaults allow 250,000 assets and
+Current defaults allow 250,000 assets and
 140,000,000,000 source bytes. ZIP expanded contents are also size-limited. Ensure
 space for archive plus extracted output, or original videos plus decoded frames.
 Keep large media outside OneDrive; actual host-volume performance must be
@@ -102,6 +103,43 @@ The dedicated mirror worker retains its existing 768 MiB container limit. The
 batch byte setting describes source-file bytes, not a guarantee of total SDK
 memory usage. Increase concurrency or batch limits only with measured throughput
 and memory evidence. Uploads still depend on host uplink and Supervisely limits.
+
+## Adding a mounted dataset in parts
+
+The selected folder is the dataset root. The app does not watch for writes.
+After copying **complete new videos or standalone images**, use **Sync additions**
+in the host-folder library. This queues a durable local scan and returns HTTP
+202; the browser may close. Synchronize all parts **before creating a labeling
+plan or assigning any jobs**. Assigned jobs, historical assignments, and planned
+or approved automatic pools prevent synchronization, preserving their source set.
+
+For existing source files, committed size and modification-time receipts avoid
+rereading unchanged bytes. A metadata change triggers checksum comparison;
+unchanged content updates its receipt, while replacements fail the scan. As with
+other metadata-based incremental tools, this assumes writers do not deliberately
+preserve both size and modification time while altering content. Imports predating
+the receipt migration bootstrap receipts by checking their committed media hashes
+on the first sync. New file hashes and source statistics are checked during the
+scan; directory changes also reject a scan that races a copy. Finish copying
+before clicking: a contiguous partial video cannot be distinguished from an
+intentional complete clip without a manifest or original source video.
+
+Sync never renumbers old frames or removes inventory. Missing existing files,
+replacements, and extra frames inside an already indexed video fail atomically.
+Put each complete new video under a new video name. Resolve the reported source
+problem and click the button again; existing committed IDs and remote bindings
+remain intact. The source folder must remain mounted throughout app use.
+
+A successful nonempty sync increments the inventory revision, invalidates
+previous balanced preparation, and queues only the missing Supervisely image
+bindings through the existing reconciled mirror. A no-change sync leaves the
+revision unchanged. The result displays new videos/frames/images and existing
+files skipped. Duplicate clicks share the same operation; PostgreSQL advisory
+ownership permits recovery after a crashed worker without concurrent indexing.
+
+The shared annotation-review queue now resolves mounted images through the same
+authorized source resolver as dataset previews. This fixes a previously private-
+media-only path that could return 404 for mounted review samples.
 
 ## Scale evidence and limits
 
@@ -125,11 +163,17 @@ access, anonymous denial, unchanged automatic publication behavior, and real
 PostgreSQL worker ownership and foreign-key lock concurrency. Sparse and virtual
 fixtures prove large-file addressing, not sustained multi-gigabyte transfer.
 
-Validation completed with **300 backend tests passing**, **8 browser upload/read
-tests passing**, the production TypeScript/Vite build passing, and Python lint
-passing. The disposable PostgreSQL database was migrated through the existing
-schema head. Lint ignored executable-bit checks because Docker's Windows bind
-mount presents source files as executable.
+Validation includes folder, ZIP, mounted, and incrementally synchronized mounted
+imports through manual, standard automatic, and balanced automatic distribution;
+partial submission, correction, accepted annotation preservation, review image
+delivery, review completion, and subsequent nonduplicating job allocation. All
+external operations in these tests use the isolated SDK test double, not the
+real Supervisely workspace. The PostgreSQL checks use a disposable migrated
+database. Lint ignores executable-bit checks because Docker's Windows bind mount
+presents source files as executable. The final local gates passed **323 backend
+tests**, **8 browser upload/read tests**, Python lint, and the production
+TypeScript/Vite build. These are regression checks; the SDK transport smoke and
+live deployment checks are separate operational gates.
 
 A real 100,000-image Supervisely transfer remains an operational verification
 step. This change does not upload a synthetic collection into the real workspace.

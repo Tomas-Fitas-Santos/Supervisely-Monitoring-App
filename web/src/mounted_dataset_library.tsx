@@ -18,6 +18,8 @@ type Mirror = {
 type Index = {state:string;error_code:string|null;attempts:number;
   pending_seconds:number|null;started_seconds_ago:number|null};
 type Sources = {mounted:boolean;folders:string[]};
+type Sync = {state:string;error:string|null;new_frames:number;new_images:number;
+  new_videos:number;existing_files:number};
 const readableBytes=(n:number)=>n>=1e9?(n/1e9).toFixed(2)+" GB":n>=1e6?
   (n/1e6).toFixed(1)+" MB":(n/1000).toFixed(1)+" KB";
 
@@ -30,6 +32,7 @@ export function MountedDatasetLibrary({auth}:{auth:Auth}){
   const [policy,setPolicy]=useState<"all_frames"|"sample_1fps">("all_frames");
   const [mirror,setMirror]=useState<Mirror|null>(null);
   const [index,setIndex]=useState<Index|null>(null);
+  const [sync,setSync]=useState<Sync|null>(null);
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState("");
   const [notice,setNotice]=useState("");
@@ -50,6 +53,7 @@ export function MountedDatasetLibrary({auth}:{auth:Auth}){
   useEffect(()=>{void refresh();void refreshSources();},[refresh,refreshSources]);
   const dataset=datasets.find(d=>d.id===selected);
   useEffect(()=>{
+    setSync(null);
     if(!selected){setMirror(null);setIndex(null);return;}
     let active=true;
     const update=async()=>{
@@ -57,8 +61,9 @@ export function MountedDatasetLibrary({auth}:{auth:Auth}){
         const results=await Promise.all([
           api<Mirror>("/datasets/"+selected+"/mirror-status"),
           api<Index>("/datasets/"+selected+"/mounted/status"),
+          api<Sync>("/datasets/"+selected+"/mounted/sync"),
         ]);
-        if(active){setMirror(results[0]);setIndex(results[1]);}
+        if(active){setMirror(results[0]);setIndex(results[1]);setSync(results[2]);}
       }catch{if(active){setMirror(null);setIndex(null);}}
     };
     void update();
@@ -100,6 +105,17 @@ export function MountedDatasetLibrary({auth}:{auth:Auth}){
     try{
       await api("/datasets/"+dataset.id+"/mirror/retry","POST",undefined,auth.csrf_token);
       setNotice("Supervisely upload queued for the worker.");
+    }catch(e){setError((e as Error).message);}
+    finally{setBusy(false);}
+  }
+  async function syncAdditions(){
+    if(!dataset)return;
+    setBusy(true);setError("");setNotice("");
+    try{
+      const result=await api<Sync>("/datasets/"+dataset.id+"/mounted/sync","POST",undefined,auth.csrf_token);
+      setSync(result);
+      setNotice("Synchronization queued. You can close the browser; new files will be indexed and uploaded to Supervisely in the background.");
+      await refresh();
     }catch(e){setError((e as Error).message);}
     finally{setBusy(false);}
   }
@@ -174,7 +190,7 @@ export function MountedDatasetLibrary({auth}:{auth:Auth}){
           </button>
         </form>
         <div className="settings-note" style={{marginTop:16}}>
-          <p>Leave the source folder unchanged and mounted during upload and event reviews.
+          <p>Keep existing source files unchanged and mounted during upload and event reviews.
             The separate Supervisely upload worker must be running with its Team/Workspace connection verified.
             No labeling jobs are created by linking the dataset.</p>
         </div>
@@ -193,7 +209,22 @@ export function MountedDatasetLibrary({auth}:{auth:Auth}){
           <h4>{dataset.name}</h4>
           <p className="muted small">{dataset.source_folder?"Source folder: "+dataset.source_folder+" · ":""}
             {dataset.video_count} videos · {dataset.frame_count} video frames · {dataset.image_count} images</p>
-          {dataset.status==="indexing"&&<div className="settings-note">
+          {dataset.upload_kind==="mounted"&&<div className="settings-note">
+            <button className="btn secondary" disabled={busy||dataset.status!=="ready"||["pending","running"].includes(sync?.state||"")}
+              onClick={()=>void syncAdditions()}><RefreshCw size={15}/> Sync additions</button>
+            <p className="muted small">Finish copying complete new video folders, raw videos, or standalone images, then synchronize.
+              Existing files are skipped. Add each video in full under a new name; existing videos cannot be extended or replaced.
+              Synchronize all parts before assigning jobs or creating a plan.</p>
+            {sync&&["pending","running"].includes(sync.state)&&<p role="status">
+              {sync.state==="pending"?"Waiting for the local indexer…":"Checking existing files and indexing additions…"}</p>}
+            {sync?.state==="running"&&dataset.index_progress&&<p className="muted small">
+              {dataset.index_progress.files.toLocaleString()} total files · {dataset.index_progress.checked_frames.toLocaleString()} new frames checked</p>}
+            {sync?.state==="done"&&<p role="status">Last sync: {sync.new_videos} new videos · {sync.new_frames} new frames · {sync.new_images} new images · {sync.existing_files} existing files skipped.</p>}
+            {sync?.state==="attention"&&<div className="alert danger" role="alert">
+              Synchronization stopped. Existing inventory is retained. {sync.error}
+            </div>}
+          </div>}
+          {dataset.status==="indexing"&&!["pending","running"].includes(sync?.state||"")&&<div className="settings-note">
             <strong>{index?.state==="pending"?"Waiting for local dataset indexer…":
               index?.state==="running"?"Indexing the mounted source folder…":
               "Checking the local indexing queue…"}</strong>

@@ -796,12 +796,21 @@ def import_dataset(client, call):
         response.raise_for_status()
     transfer_seconds = time.monotonic() - transfer_start
     started = time.monotonic()
-    response = call(client, "POST", f"/api/v1/datasets/{identifier}/finalize")
+    response = call(client, "POST", f"/api/v1/datasets/{identifier}/finalize?background=true")
     response.raise_for_status()
+    dataset = response.json()
+    deadline = time.monotonic() + 300
+    while dataset["status"] != "ready":
+        if dataset["status"] == "failed" or time.monotonic() >= deadline:
+            raise RuntimeError("Synthetic background import did not become ready")
+        time.sleep(1)
+        response = call(client, "GET", f"/api/v1/datasets/{identifier}/upload-status")
+        response.raise_for_status()
+        dataset = response.json()["dataset"]
     return {"archive_bytes": len(content), "build_zip_seconds": round(build_seconds, 3),
             "transfer_seconds": round(transfer_seconds, 3),
             "finalize_seconds": time.monotonic() - started,
-            "dataset": response.json(),
+            "dataset": dataset,
             "uploaded_images": (ANNOTATORS + FULL_FOLLOWUPS) * FRAMES
                 if PHASE == "full" else FRAMES}
 
@@ -1106,6 +1115,9 @@ def load(seconds, latency, fail_rate, profile_scale=1.0, timeout_rate=0.0,
                         review = claimed.json().get("review")
                         if not review:
                             break
+                        preview = call(client, "GET", review["image_url"])
+                        if preview is None or preview.status_code != 200 or not preview.content:
+                            raise RuntimeError("Synthetic monitor could not load the source image")
                         annotation = review["annotation"]
                         labels = annotation.get("objects", annotation.get("labels", []))
                         submitted = call(

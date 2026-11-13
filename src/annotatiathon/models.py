@@ -407,6 +407,16 @@ class MediaDataset(Base):
     mirrored_revision: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
 
 
+class MountedSourceFile(Base):
+    """Committed source receipts; unchanged files need only a stat on later syncs."""
+    __tablename__ = "mounted_source_files"
+    dataset_id: Mapped[str] = mapped_column(ForeignKey("media_datasets.id"), primary_key=True)
+    relative_path: Mapped[str] = mapped_column(Text, primary_key=True)
+    size_bytes: Mapped[int] = mapped_column(BigInteger)
+    mtime_ns: Mapped[int] = mapped_column(BigInteger)
+    sha256: Mapped[str] = mapped_column(String(64))
+
+
 class DatasetAppendBatch(Base):
     """Resumable isolated import; never replaces the dataset's prior videos."""
     __tablename__ = "dataset_append_batches"

@@ -16,6 +16,7 @@ from .labeling_api import router as labeling_router
 from .manual_jobs_api import router as manual_jobs_router
 from .monitoring_api import router as monitoring_router
 from .mounted_datasets import router as mounted_datasets_router
+from .mounted_sync import router as mounted_sync_router
 from .native_export_api import router as native_export_router
 from .native_operations_api import router as native_operations_router
 from .native_sync_api import router as native_router
@@ -59,6 +60,7 @@ app.include_router(datasets_router)
 app.include_router(dataset_append_router)
 app.include_router(balanced_queue_router)
 app.include_router(mounted_datasets_router)
+app.include_router(mounted_sync_router)
 app.include_router(labeling_router)
 app.include_router(manual_jobs_router)
 app.include_router(reviews_router)

@@ -328,9 +328,14 @@ def image(review_id: str, ctx: AuthContext = Depends(read_access), db: Session =
     event = current_event(db, ctx)
     sample = owned(db, event.id, review_id, ctx.staff.id)
     asset = db.get(MediaAsset, sample.media_id)
+    if asset is None or asset.event_id != event.id:
+        raise HTTPException(404, "Source image missing.")
     dataset = db.get(MediaDataset, asset.dataset_id)
-    root = (Path(dataset.root_path) / "media").resolve()
-    path = (root / asset.relative_path).resolve()
-    if not path.is_relative_to(root) or not path.is_file():
-        raise HTTPException(404, "Local image missing.")
+    if dataset is None or dataset.event_id != event.id:
+        raise HTTPException(404, "Source dataset missing.")
+    from .mounted_datasets import media_file
+    try:
+        path = media_file(dataset, asset.relative_path)
+    except (OSError, HTTPException) as exc:
+        raise HTTPException(404, "Source image missing.") from exc
     return FileResponse(path, headers={"Cache-Control": "private, no-store"})

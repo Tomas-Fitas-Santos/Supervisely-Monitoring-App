@@ -43,6 +43,14 @@ ZIP staging, or copying supplied JPEG/PNG frames into the Nightjar data director
 
 ## Runtime constraints
 
+To import in parts, finish copying complete new videos into the selected dataset
+root and click **Sync additions** in the host-folder library. Existing files are
+skipped using committed source receipts; changed files are checksum-checked.
+Use new video names, keep existing videos unchanged, and synchronize all parts
+before creating plans or assigning jobs. This is an explicit scan, not a folder
+watcher. Status and new/existing counts are visible in the app; a failed scan
+preserves the previous inventory. See [incremental sync details](LARGE_DATASET_INGEST.md#adding-a-mounted-dataset-in-parts).
+
 - A browser cannot grant a remote web server arbitrary filesystem access. This
   feature only works when the source folder is on, shared with, or mounted on
   the **Docker host**. Remote visitors cannot select their own PC folders.
@@ -59,8 +67,8 @@ ZIP staging, or copying supplied JPEG/PNG frames into the Nightjar data director
   Paths with traversal components and symlinked dataset folders are rejected.
 - A browser request **only queues** the import. Supervisely credentials are never
   exposed to the browser, and media are never transferred through Cloudflare.
-- Existing datasets and the previous chunk-upload API are retained for
-  compatibility, but the Dataset tab now uses the mounted-folder workflow.
+- Existing datasets and browser folder/ZIP uploads remain available alongside
+  the mounted-folder workflow.
 
 ## Troubleshooting
 

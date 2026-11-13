@@ -188,6 +188,7 @@ def test_full_lifecycle_uses_real_import_mirror_queue_and_review_actions():
     ):
         assert endpoint in fixture
     assert 'full_flow_summary(full_plan_id, full_dataset_id)' in fixture
+    assert '/finalize?background=true' in fixture
     assert '"mirrored_frames": media_bound' in fixture
     assert '"validated_frames": accepted' in fixture
     assert '"reviewed_frames": reviewed' in fixture

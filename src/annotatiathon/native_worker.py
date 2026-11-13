@@ -1812,6 +1812,9 @@ def worker_cycle(lane: str) -> bool:
             if lane in {"mirror", "bulk"} and os.environ.get("NIGHTJAR_DEDICATED_INDEXER") != "1":
                 from .mounted_datasets import process_mounted_index_once
                 indexed = process_mounted_index_once(db)
+                if indexed is None:
+                    from .mounted_sync import process_sync_once
+                    indexed = process_sync_once(db)
                 if indexed:
                     return True
                 from .dataset_indexing import process_index_once

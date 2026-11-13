@@ -208,6 +208,8 @@ def clear_event_data(db: Session, event_id: str) -> None:
     if datasets:
         stage = Base.metadata.tables["dataset_staged_files"]
         db.execute(delete(stage).where(stage.c.dataset_id.in_(datasets)))
+        receipts = Base.metadata.tables["mounted_source_files"]
+        db.execute(delete(receipts).where(receipts.c.dataset_id.in_(datasets)))
         # Append file progress has no event_id; remove it before its batch.
         append_batches = Base.metadata.tables["dataset_append_batches"]
         append_files = Base.metadata.tables["dataset_append_files"]
