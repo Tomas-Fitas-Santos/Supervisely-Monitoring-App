@@ -83,8 +83,8 @@ from .native_operations_api import (
 )
 from .pair_members import pair_members
 from .supervisely_client import NativeAPIError, require_connection
-from .worker_timing import enable as enable_worker_timing
 from .worker_timing import code_timing, milestone
+from .worker_timing import enable as enable_worker_timing
 
 logger = logging.getLogger(__name__)
 _checked_visual_projects: set[int] = set()
