@@ -41,16 +41,18 @@ AREAS = ("attendance", "invitations", "tickets", "roster", "activities", "assign
 
 
 def current_event(
-    db: Session, ctx: AuthContext, *, writable: bool = False
+    db: Session, ctx: AuthContext, *, writable: bool = False, allow_finalizing: bool = False
 ) -> Event:
     event_id = ctx.session.event_id or DEFAULT_EVENT_ID
     statement = select(Event).where(Event.id == event_id)
     if writable:
-        statement = statement.with_for_update()
+        statement = statement.with_for_update().execution_options(populate_existing=True)
     event = db.scalar(statement)
     if event is None:
         raise HTTPException(status_code=409, detail="Select an existing event first.")
-    if writable and event.status != "active":
+    if writable and event.status != "active" and not (
+        allow_finalizing and event.status == "finalizing"
+    ):
         raise HTTPException(status_code=409, detail="Archived events are read-only.")
     return event
 
@@ -59,6 +61,7 @@ def event_view(event: Event) -> dict:
     return {
         "id": event.id, "name": event.name, "status": event.status,
         "created_at": event.created_at, "archived_at": event.archived_at,
+        "closing_at": event.closing_at,
         "reset_from_id": event.reset_from_id,
         "start_at": event.start_at, "end_at": event.end_at,
         "timezone": "Europe/Lisbon",
@@ -208,6 +211,8 @@ def archive_event(
         raise HTTPException(status_code=404, detail="Event not found.")
     if payload.confirmation != event.name:
         raise HTTPException(status_code=422, detail="Type the exact event name.")
+    if event.status == "finalizing":
+        raise HTTPException(status_code=409, detail="Competition closeout is draining submissions.")
     if event.status != "archived":
         event.status = "archived"
         event.archived_at = epoch()
@@ -228,6 +233,8 @@ def reopen_event(
         raise HTTPException(status_code=404, detail="Event not found.")
     if payload.confirmation != event.name:
         raise HTTPException(status_code=422, detail="Type the exact event name.")
+    if event.closing_at is not None:
+        raise HTTPException(status_code=409, detail="Competition closeout cannot be reopened.")
     if event.status != "active":
         event.status = "active"
         event.archived_at = None

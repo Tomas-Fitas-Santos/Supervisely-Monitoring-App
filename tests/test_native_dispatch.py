@@ -250,8 +250,6 @@ class MockSDK:
         for key in ("left_eye", "left_eye_occ", "right_eye", "right_eye_occ",
                     "beak", "beak_occ", "crown", "crown_occ"):
             assert classes[key]["shape"] == "point"
-        assert "Nightjar video " not in name
-        assert " · " in name
         new_jobs = []
         for uid in user_ids:
             j = Obj(
@@ -566,7 +564,8 @@ def test_returned_pair_job_restarts_and_blocks_next_release(configured):
 
 
 
-def test_uncertain_native_create_is_reconciled_without_duplicates(configured):
+@pytest.mark.parametrize("legacy_remote_title", [False, True])
+def test_uncertain_native_create_is_reconciled_without_duplicates(configured, legacy_remote_title):
     http, maker, csrf, plan_id, sdk = configured
     launch(http, csrf, plan_id)
     sdk.fail_job_create_once = True
@@ -581,11 +580,21 @@ def test_uncertain_native_create_is_reconciled_without_duplicates(configured):
         ))
         opid = op.id
         assert op.status == "attention"
+        if legacy_remote_title:
+            from annotatiathon.native_names import labeling_job_name
+            from annotatiathon.native_worker import job_video_group
+
+            job = db.get(LabelingJob, op.target_id)
+            team = db.get(CompetitionTeam, job.team_id)
+            for remote in sdk.jobs:
+                remote.name = labeling_job_name(job, team, job_video_group(db, job), "Team pair")
     retry = call(http, csrf, "/native/operations/"+opid+"/retry")
     assert retry.status_code == 200, retry.text
     with maker() as db:
         assert process_once(db, sdk, db.get(SuperviselyConfig, 1))["status"] == "done"
         assert len(sdk.jobs) == 2
+        if not legacy_remote_title:
+            assert {job.name for job in sdk.jobs} == {"Job 001"}
         assert len(sdk.images[sdk.datasets[0].id]) == 3
         assert len(db.scalars(select(NativeJobBinding)).all()) == 2
 
@@ -1217,7 +1226,10 @@ def test_queue_priority_prefers_manual_high_priority(configured):
         assert op.target_id == higher_id
 
 
-def test_partial_submission_accepts_frames_once_and_reissues_only_missing(configured):
+@pytest.mark.parametrize("close_before_validation", [False, True])
+def test_partial_submission_accepts_frames_once_and_reissues_only_missing(
+    configured, close_before_validation,
+):
     """Partial native retries never create new logical competition jobs."""
     from annotatiathon.native_operations_api import queue_publish
 
@@ -1261,6 +1273,50 @@ def test_partial_submission_accepts_frames_once_and_reissues_only_missing(config
     sdk.labeling_job.restart = forbidden_restart
     original_native.status = "on_review"
     original_native.finished_images_count = 1
+    if close_before_validation:
+        from annotatiathon.closeout_api import finish_pending_closeouts
+        from annotatiathon.validation_tasks import process_validation_once
+
+        with maker() as db:
+            config = db.get(SuperviselyConfig, 1)
+            assert sync_all(db, sdk, config, capture_snapshots=False)["changed_jobs"] == 1
+        event_name = _http.get("/api/v1/closeout/report").json()["event_name"]
+        closed = call(_http, _csrf, "/closeout/finalize", {
+            "confirmation": "CLOSE " + event_name,
+        })
+        assert closed.status_code == 200, closed.text
+        assert closed.json()["status"] == "finalizing"
+        with maker.begin() as db:
+            task = db.scalar(select(NativeOperation).where(
+                NativeOperation.kind == "validate_submission",
+                NativeOperation.target_id == job_id,
+            ))
+            task.status = "attention"
+            task.error_code = "TimeoutError"
+            task_id = task.id
+        retry = call(_http, _csrf, f"/native/operations/{task_id}/retry")
+        assert retry.status_code == 200, retry.text
+
+        with maker() as db:
+            config = db.get(SuperviselyConfig, 1)
+            assert process_validation_once(db, sdk, config)["status"] == "done"
+            frames = list(db.scalars(select(ReviewSample).where(ReviewSample.job_id == job_id)))
+            assert [frame.media_id for frame in frames] == source_ids[:1]
+            assert frames[0].validated_complete
+            assert db.get(LabelingJob, job_id).correction_round == 0
+            assert db.scalar(select(NativeOperation).where(
+                NativeOperation.kind == "restart_job",
+                NativeOperation.target_id == job_id,
+            )) is None
+            assert process_once(db, sdk, config) is None
+            finish_pending_closeouts(db)
+        report = _http.get("/api/v1/closeout/report").json()
+        assert report["event_status"] == "archived"
+        assert report["verified_winner_available"] is False
+        assert report["review_fairness"]["total_available_frames"] == 1
+        assert len(sdk.jobs) == 1
+        return
+
     with maker() as db:
         assert sync_all(db, sdk, db.get(SuperviselyConfig, 1))["changed_jobs"] == 1
         job = db.get(LabelingJob, job_id)
@@ -1311,7 +1367,7 @@ def test_partial_submission_accepts_frames_once_and_reissues_only_missing(config
         corrected_native = next(n for n in sdk.jobs if n.id == binding.native_job_id)
         assert corrected_native.images_count == 1
         assert corrected_native.image_ids == [mapped[source_ids[1]]]
-        assert corrected_native.name.endswith(" (Incomplete #1)")
+        assert corrected_native.name == original_native.name + " · Incomplete"
         assert _http.get("/api/v1/review-queue/status").json()["pending"] >= 1
 
     sdk.labeling_job.get_annotations = full_annotations
@@ -1418,7 +1474,7 @@ def test_retry_old_users_info_404_correction_recovers_original_complete_frames(c
         followup = next(x for x in sdk.jobs if x.id == binding.native_job_id)
         assert followup.images_count == 1
         assert followup.image_ids == [mapped[original_ids[-1]]]
-        assert followup.name.endswith(" (Incomplete #1)")
+        assert followup.name.endswith(" · Incomplete")
         assert len(list(db.scalars(select(LabelingJob).where(
             LabelingJob.id == jid,
         )))) == 1

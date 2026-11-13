@@ -184,15 +184,6 @@ def test_review_and_csv_and_closeout_require_accepted_jobs(ctx):
     report = client.get("/api/v1/closeout/report").json()
     assert report["reviews"]["keypoint_score"] == 6
     assert report["labeling"]["jobs_needing_action"] > 0
-    assert act(client, csrf, "/closeout/finalize", {
-        "confirmation": "CLOSE Initial Event",
-    }).status_code == 409
-    with maker.begin() as db:
-        for job in db.scalars(select(LabelingJob).where(
-            LabelingJob.status == "queued"
-        )):
-            job.status = "completed"
-            job.review_status = "accepted"
     closed = act(client, csrf, "/closeout/finalize", {
         "confirmation": "CLOSE Initial Event",
     })

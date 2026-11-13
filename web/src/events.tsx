@@ -1,15 +1,16 @@
+import { RefreshButton } from "./refresh_button";
 import { confirmAction, promptText } from "./dialogs";
 import { formatLisbonInput, formatLisbonTime, parseLisbonTime } from "./event_time";
 import { useCallback, useEffect, useState } from "react";
 import type React from "react";
 import {
   AlertTriangle, Archive, CalendarDays, CheckCircle2, Download, Plus,
-  RefreshCw, RotateCcw, ShieldAlert
+  RotateCcw, ShieldAlert
 } from "lucide-react";
 import { api, type Auth } from "./api";
 
-type EventRecord = {id:string;name:string;status:"active"|"archived";
-  created_at:number;archived_at:number|null;reset_from_id:string|null;
+type EventRecord = {id:string;name:string;status:"active"|"finalizing"|"archived";
+  created_at:number;archived_at:number|null;closing_at?:number|null;reset_from_id:string|null;
   start_at?:number|null;end_at?:number|null;timezone?:string;};
 type EventList={items:EventRecord[];current_event_id:string};
 type ResetMode="selected"|"fresh";
@@ -173,16 +174,15 @@ export function EventManagement({auth}:{auth:Auth}) {
     <div className="panel-heading"><div><span className="eyebrow">EVENT DATA MANAGEMENT</span>
       <h3>Events, archives & resets</h3>
       <p className="muted">Each event has isolated people, teams, tickets and attendance. Staff accounts and shared Supervisely connection settings are kept separately.</p></div>
-      <button className="btn secondary" onClick={()=>void refresh()} disabled={busy}>
-        <RefreshCw size={15}/> Refresh</button></div>
+      <RefreshButton refresh={refresh} disabled={busy} onError={e=>setError((e as Error).message)}>Refresh</RefreshButton></div>
     {error&&<div className="alert danger" role="alert">{error}</div>}
     {notice&&<div className="alert success" role="status">{notice}</div>}
     <div className="event-detail-strip">
       <CalendarDays size={20}/>
       <div><strong>{selected?.name||"Loading event…"}</strong>
-        <span>{selected?.status==="archived"?"Archived · Read-only":"Active event"} · {data?.items.length??0} saved event(s)</span>
+        <span>{selected?.status==="archived"?"Archived · Read-only":selected?.status==="finalizing"?"Finalizing":"Active event"} · {data?.items.length??0} saved event(s)</span>
       </div>
-      {selected&&<button className={"btn "+(canReset?"secondary":"primary")}
+      {selected&&!selected.closing_at&&selected.status!=="finalizing"&&<button className={"btn "+(canReset?"secondary":"primary")}
         disabled={busy} onClick={()=>void archiveOrReopen(canReset?"archive":"reopen")}>
         {canReset?<><Archive size={14}/> Archive event</>:<><RotateCcw size={14}/> Reopen event</>}
       </button>}

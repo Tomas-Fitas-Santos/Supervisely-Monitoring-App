@@ -1,9 +1,10 @@
+import { RefreshButton } from "./refresh_button";
 import { confirmAction } from "./dialogs";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type React from "react";
 import {
   AlertTriangle, Archive, CheckCircle2, CloudUpload, FileArchive,
-  FolderOpen, HardDrive, Layers3, RefreshCw, RotateCcw, Trash2, PauseCircle
+  FolderOpen, HardDrive, Layers3, RotateCcw, Trash2, PauseCircle
 } from "lucide-react";
 import { api, type Auth } from "./api";
 import { beginDatasetTransfer, clearDatasetTransfer, getDatasetTransfer,
@@ -56,7 +57,7 @@ export function DatasetScreen({auth}:{auth:Auth}) {
       const result=await api<{items:Dataset[]}>("/datasets");
       setDatasets(result.items);
       setSelected(old=>result.items.some(d=>d.id===old)?old:(result.items[0]?.id||""));
-    }catch(e){setError((e as Error).message);}
+    }catch(e){setError((e as Error).message);return false;}
   },[]);
   useEffect(()=>{void refresh();},[refresh]);
   useEffect(()=>{if(transfer && !transfer.running)void refresh();},
@@ -184,8 +185,7 @@ export function DatasetScreen({auth}:{auth:Auth}) {
     <div className="page-heading"><div><span className="eyebrow">DATA · IMPORT & INVENTORY</span>
       <h2>Dataset Management</h2>
       <p className="muted">Upload bird videos organised by species. Nightjar keeps each video's frames together for labeling jobs.</p>
-    </div><button className="btn secondary" onClick={()=>void refresh()} disabled={busy}>
-      <RefreshCw size={15}/> Refresh</button></div>
+    </div><RefreshButton refresh={refresh} disabled={busy}>Refresh</RefreshButton></div>
     {error&&<div className="alert danger" role="alert">{error}</div>}
     {notice&&<div className="alert success" role="status">{notice}</div>}
     <div className="stat-grid compact">

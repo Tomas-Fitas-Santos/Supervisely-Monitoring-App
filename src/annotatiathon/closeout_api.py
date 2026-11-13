@@ -23,13 +23,14 @@ from .models import (
     LabelingJob,
     MediaAsset,
     MediaDataset,
+    NativeOperation,
     Person,
     ReviewSample,
     TicketLedgerEntry,
     epoch,
 )
 from .review_eligibility import eligible_frame_review
-from .scoring_api import correct_point_types
+from .scoring_api import correct_point_types, team_rankings
 
 router = APIRouter(prefix="/api/v1/closeout", tags=["event reports"])
 VIEWERS = ("organiser", "monitor", "observer")
@@ -102,54 +103,27 @@ def frame_review_fairness(db: Session, event_id: str) -> dict:
 
 def closeout_readiness(db: Session, event_id: str, fairness: dict) -> dict:
     """The API and organiser UI use one definitive pre-closeout gate."""
-    jobs = list(db.scalars(select(LabelingJob).where(
-        LabelingJob.event_id == event_id, LabelingJob.status != "cancelled",
-    )))
-    frame_counts = dict(db.execute(
-        select(ReviewSample.job_id, func.count(ReviewSample.id))
-        .join(LabelingJob, LabelingJob.id == ReviewSample.job_id)
-        .where(
-            ReviewSample.event_id == event_id,
-            eligible_frame_review(),
-        ).group_by(ReviewSample.job_id)
-    ).all())
-    blocking = []
-    unfinished = 0
-    official_modes = {"shared_primary", "shared_repeat", "manual_released", "manual_hold"}
-    official_frame_jobs = any(
-        job.assignee_person_id is not None and job.release_mode in official_modes
-        for job in jobs
-    )
-    for job in jobs:
-        if job.assignee_person_id is not None and job.release_mode in official_modes:
-            if job.status in {"on_review", "completed"}:
-                # A native submission already marked complete must be copied
-                # back as annotation JSON before the official result is frozen.
-                if frame_counts.get(job.id, 0) != job.frame_count:
-                    blocking.append(job.id)
-            else:
-                # Queued, in-progress, held and automatically returned
-                # incomplete jobs are not scored. They cannot block event end.
-                unfinished += 1
-        elif job.status != "completed" or job.review_status != "accepted":
-            blocking.append(job.id)
+    event = db.get(Event, event_id)
+    outstanding = db.scalar(select(func.count()).select_from(NativeOperation).where(
+        NativeOperation.event_id == event_id,
+        NativeOperation.kind == "validate_submission",
+        NativeOperation.status != "done",
+    ))
+    unfinished = db.scalar(select(func.count()).select_from(LabelingJob).where(
+        LabelingJob.event_id == event_id,
+        LabelingJob.status.in_(("queued", "publishing", "in_progress", "needs_correction")),
+    ))
     return {
-        "ready": not blocking and (
-            not official_frame_jobs or fairness["ready_for_winner"]
-        ),
-        "blocking_jobs": len(blocking),
+        "ready": event.status == "active",
+        "blocking_jobs": outstanding,
         "unfinished_unscored_jobs": unfinished,
         "verified_reviews_available": fairness["ready_for_winner"],
-        "official_frame_review_required": official_frame_jobs,
+        "official_frame_review_required": False,
         "message": (
-            f"{len(blocking)} submitted/legacy jobs still require synced annotation JSON or acceptance."
-            if blocking else
-            "Cannot finalize: no completed annotation reviews exist yet."
-            if official_frame_jobs and not fairness["ready_for_winner"] else
-            f"Finalization available. {unfinished} jobs still have unsubmitted or "
-            "incomplete frames. Those frames earn no points; any structurally "
-            "complete frames already accepted from these jobs retain their "
-            "review results. The competition uses the verified prize score."
+            "Close competition to finish queued submissions and freeze standings."
+            if event.status == "active" else
+            "Waiting for queued submissions." if event.status == "finalizing" else
+            "Competition closed."
         ),
     }
 
@@ -223,6 +197,7 @@ def event_report(db: Session, event_id: str) -> dict:
         },
         "review_fairness": fairness,
         "closeout_readiness": closeout_readiness(db, event_id, fairness),
+        "closeout": closeout_progress(db, event),
         "ticket_totals": dict(ledger_totals),
         "generated_at": epoch(),
     }
@@ -234,6 +209,12 @@ def report(
     db: Session = Depends(get_db),
 ):
     event = current_event(db, ctx)
+    if event.status == "archived":
+        snapshot = db.scalar(select(EventCloseout.snapshot_json).where(
+            EventCloseout.event_id == event.id,
+        ))
+        if snapshot is not None and "rankings" in snapshot:
+            return snapshot
     return event_report(db, event.id)
 
 
@@ -248,42 +229,83 @@ def finalize_event(
     ctx: AuthContext = Depends(requires("organiser", mutation=True)),
     db: Session = Depends(get_db),
 ):
-    event = current_event(db, ctx, writable=True)
+    event_id = current_event(db, ctx).id
+    event = lock_closeout_event(db, event_id)
     if payload.confirmation != "CLOSE " + event.name:
         raise HTTPException(status_code=422, detail="Type the exact event closeout phrase.")
-    existing = db.scalar(select(EventCloseout).where(
-        EventCloseout.event_id == event.id
-    ))
-    if existing:
+    if event.closing_at is not None:
+        return {"event_id": event.id, "status": event.status,
+                "closeout": closeout_progress(db, event)}
+    if event.status != "active":
         raise HTTPException(status_code=409, detail="This event is already closed.")
-    report_data = event_report(db, event.id)
-    readiness = report_data["closeout_readiness"]
-    if not readiness["ready"]:
-        raise HTTPException(status_code=409, detail=readiness["message"])
-    item = EventCloseout(
-        event_id=event.id, snapshot_json=report_data, closed_by=ctx.staff.id,
-    )
-    db.add(item)
+    event.status = "finalizing"
+    event.closing_at = epoch()
+    event.closing_by = ctx.staff.id
+    db.add(AuditEvent(
+        staff_id=ctx.staff.id, event_id=event.id, action="event.closeout.start",
+        target_type="event", target_id=event.id,
+    ))
+    db.flush()
+    snapshot = finish_closeout(db, event)
+    progress = closeout_progress(db, event)
+    db.commit()
+    return {"event_id": event.id, "status": event.status, "closeout": progress,
+            **({"report": snapshot} if snapshot is not None else {})}
+
+
+def lock_closeout_event(db: Session, event_id: str) -> Event:
+    return db.scalars(select(Event).where(Event.id == event_id)
+                      .with_for_update().execution_options(populate_existing=True)).one()
+
+
+def closeout_progress(db: Session, event: Event) -> dict:
+    counts = Counter()
+    issues = []
+    if event.closing_at is not None:
+        for op in db.scalars(select(NativeOperation).where(
+            NativeOperation.event_id == event.id,
+            NativeOperation.kind == "validate_submission",
+        ).order_by(NativeOperation.id)):
+            counts[op.status] += 1
+            if op.status not in {"pending", "running", "done"}:
+                issues.append({"operation_id": op.id, "job_id": op.target_id,
+                               "error_code": op.error_code})
+    return {"cutoff_at": event.closing_at, "pending": counts["pending"],
+            "running": counts["running"], "done": counts["done"], "issues": issues}
+
+
+def finish_closeout(db: Session, event: Event) -> dict | None:
+    """Freeze the result while holding the event lock shared by review writes."""
+    if event.status != "finalizing" or db.scalar(select(NativeOperation.id).where(
+        NativeOperation.event_id == event.id,
+        NativeOperation.kind == "validate_submission",
+        NativeOperation.status != "done",
+    ).limit(1)) is not None:
+        return None
     event.status = "archived"
     event.archived_at = epoch()
-    db.add(AuditEvent(
-        staff_id=ctx.staff.id, event_id=event.id,
-        action="event.closeout", target_type="event", target_id=event.id,
-        details={
-            "jobs": report_data["labeling"]["jobs"],
-            "frames_reviewed": sum(
-                item["reviewed_frames"]
-                for item in report_data["review_fairness"]["teams"]
-            ),
-            "review_fairness": report_data["review_fairness"],
-            "closeout_id": item.id,
-        },
+    db.flush()
+    snapshot = event_report(db, event.id)
+    rankings = team_rankings(db, event.id)
+    snapshot["rankings"] = rankings
+    snapshot["verified_winner_available"] = any(
+        row["rank"] == 1 for row in rankings["items"]
+    )
+    db.add(EventCloseout(
+        event_id=event.id, snapshot_json=snapshot, closed_by=event.closing_by,
     ))
-    db.commit()
-    return {
-        "event_id": event.id, "status": "archived",
-        "closeout_id": item.id, "report": report_data,
-    }
+    db.add(AuditEvent(
+        staff_id=event.closing_by, event_id=event.id, action="event.closeout",
+        target_type="event", target_id=event.id,
+    ))
+    return snapshot
+
+
+def finish_pending_closeouts(db: Session) -> None:
+    event_ids = list(db.scalars(select(Event.id).where(Event.status == "finalizing")))
+    for event_id in event_ids:
+        finish_closeout(db, lock_closeout_event(db, event_id))
+        db.commit()
 
 
 def cell(value) -> str:

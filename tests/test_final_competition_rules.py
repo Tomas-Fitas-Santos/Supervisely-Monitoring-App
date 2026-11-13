@@ -3,7 +3,7 @@
 from sqlalchemy import select
 from test_dataset_workflows import act, teams
 
-from annotatiathon.closeout_api import frame_review_fairness
+from annotatiathon.closeout_api import finish_pending_closeouts, frame_review_fairness
 from annotatiathon.models import (
     DEFAULT_EVENT_ID,
     CompetitionTeam,
@@ -11,6 +11,7 @@ from annotatiathon.models import (
     LabelingPlan,
     MediaAsset,
     MediaDataset,
+    NativeOperation,
     Person,
     ReviewSample,
     StaffAccount,
@@ -80,9 +81,7 @@ def test_unequal_current_round_frame_reviews_allow_final_closeout(dataset_ctx):
         assert fairness["ready_for_winner"]
         assert fairness["total_reviewed_frames"] == 2
         assert fairness["total_available_frames"] == 3
-    # A native job already marked submitted must have its JSON captured
-    # before finalization. A job that is still in progress is unscored and
-    # must not indefinitely prevent the organiser closing the event.
+    # Only committed validation tasks are admitted at the cutoff.
     with maker.begin() as db:
         submitted = db.scalar(select(LabelingJob).where(
             LabelingJob.event_id == DEFAULT_EVENT_ID,
@@ -97,27 +96,50 @@ def test_unequal_current_round_frame_reviews_allow_final_closeout(dataset_ctx):
         )
         db.add(unsynced)
         db.flush()
-        unsynced_id = unsynced.id
-    denied = act(client, csrf, "/closeout/finalize", {
+        operation = NativeOperation(
+            event_id=DEFAULT_EVENT_ID, kind="validate_submission",
+            target_id=unsynced.id, status="pending",
+        )
+        db.add(operation)
+        db.flush()
+        operation_id = operation.id
+    started = act(client, csrf, "/closeout/finalize", {
         "confirmation": "CLOSE Initial Event",
     })
-    assert denied.status_code == 409
-    assert "synced annotation JSON" in denied.json()["detail"]
+    assert started.status_code == 200, started.text
+    assert started.json()["status"] == "finalizing"
+    assert started.json()["closeout"]["pending"] == 1
+    repeated = act(client, csrf, "/closeout/finalize", {
+        "confirmation": "CLOSE Initial Event",
+    })
+    assert repeated.json() == started.json()
+    with maker() as db:
+        finish_pending_closeouts(db)
+    assert client.get("/api/v1/closeout/report").json()["event_status"] == "finalizing"
     with maker.begin() as db:
-        db.get(LabelingJob, unsynced_id).status = "in_progress"
-    successful = act(client, csrf, "/closeout/finalize", {
-        "confirmation": "CLOSE Initial Event",
-    })
-    assert successful.status_code == 200, successful.text
+        db.get(NativeOperation, operation_id).status = "attention"
+    progress = client.get("/api/v1/closeout/report").json()["closeout"]
+    assert progress["issues"][0]["operation_id"] == operation_id
+    with maker.begin() as db:
+        db.get(NativeOperation, operation_id).status = "done"
+    with maker() as db:
+        finish_pending_closeouts(db)
+    frozen = client.get("/api/v1/closeout/report").json()
+    assert frozen["event_status"] == "archived"
+    assert frozen["rankings"] == client.get("/api/v1/rankings/teams").json()
+    with maker.begin() as db:
+        db.scalar(select(CompetitionTeam).where(
+            CompetitionTeam.event_id == DEFAULT_EVENT_ID,
+        )).name = "Changed after the freeze"
+    assert client.get("/api/v1/rankings/teams").json() == frozen["rankings"]
     export = client.get("/api/v1/closeout/exports/frame_reviews")
     assert export.status_code == 200
     assert "correct_boxes" in export.text
     assert "verdicts_json" in export.text
     assert len(export.text.splitlines()) >= 4
-    coverage = successful.json()["report"]["review_fairness"]
+    coverage = frozen["review_fairness"]
     assert coverage["ready_for_winner"]
     assert coverage["total_reviewed_frames"] == 2
     assert sorted(item["reviewed_frames"] for item in coverage["teams"]) == [0, 1, 1]
-    assert successful.json()["report"]["labeling"]["jobs_accepted"] == 3
-    assert successful.json()["report"]["labeling"]["jobs_needing_action"] == 1
-    assert successful.json()["report"]["closeout_readiness"]["unfinished_unscored_jobs"] == 1
+    assert frozen["labeling"]["jobs_accepted"] == 3
+    assert frozen["labeling"]["jobs_needing_action"] == 1

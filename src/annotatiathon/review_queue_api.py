@@ -103,7 +103,7 @@ class Completion(Lease):
 
 
 def lock_event(db, ctx):
-    return current_event(db, ctx, writable=True)
+    return current_event(db, ctx, writable=True, allow_finalizing=True)
 
 
 def claim_view(db, sample):
@@ -269,13 +269,15 @@ def complete(review_id: str, payload: Completion,
                 else:
                     correct["visible_point"] += 1
         else:
+            if shape == "rectangle" and verdict.reason not in {"wrong_placement", "sabotage"}:
+                raise HTTPException(422, "Choose placement mistake or sabotage for an incorrect box.")
             if verdict.reason == "wrong_class":
                 if (classes.get(verdict.corrected_class) != shape
                         or verdict.corrected_class == obj.get("classTitle")):
                     raise HTTPException(422, "Choose a different class with the same geometry.")
             elif verdict.corrected_class or (shape == "point" and not verdict.reason):
                 raise HTTPException(422, "Invalid or missing correction reason.")
-            errors[verdict.reason or "incorrect_box"] += 1
+            errors[verdict.reason] += 1
     decision = {
         "verdicts": [item.model_dump() for item in payload.verdicts],
         "missing_classes": payload.missing_classes,
