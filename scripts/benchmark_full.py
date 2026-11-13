@@ -113,6 +113,11 @@ def seed(frames):
                 m.Person.kind == "participant",
             )):
                 person.check_in_at = m.epoch()
+                person.membership_status = "joined"
+                person.supervisely_role = "annotator"
+                person.native_verified_at = m.epoch()
+                if person.supervisely_user_id is None:
+                    raise RuntimeError("Synthetic annotator must have an assigned remote user ID")
             for previous in db.scalars(select(m.LabelingJob)):
                 previous.status = "completed"
                 previous.review_status = "accepted"
