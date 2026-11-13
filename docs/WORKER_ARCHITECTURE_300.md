@@ -108,12 +108,12 @@ Run the real Nightjar API workflow against an **internal fake Supervisely**
 ```powershell
 git pull --ff-only origin main
 
-# Baseline: 4 independent distributors, 2 validators,
-# 1 correction worker, 1 status worker.
-.\scripts\run_worker_sweep.ps1 -Phase full -SweepRole publisher -Workers 4 -Validators 2 -Correctors 1 -StatusWorkers 1 -Seconds 900 -Scenario burst -IncompleteRate 0.20
+# First acceptance candidate: 4 independent distributors,
+# 2 validators, 2 correction workers, 2 status workers.
+.\scripts\run_worker_sweep.ps1 -Phase full -SweepRole publisher -Workers 4 -Validators 2 -Correctors 2 -StatusWorkers 2 -Seconds 900 -Scenario burst -IncompleteRate 0.20
 
-# Hold 4 publishers fixed; measure whether validators 1/2/4 help.
-.\scripts\run_worker_sweep.ps1 -Phase full -SweepRole validation -Workers 1,2,4 -PublisherBaseline 4 -Correctors 1 -StatusWorkers 1 -Seconds 900 -Scenario burst -IncompleteRate 0.20
+# Only AFTER a passing baseline: hold publishers at 4, try 2 vs 4 validators.
+.\scripts\run_worker_sweep.ps1 -Phase full -SweepRole validation -Workers 2,4 -PublisherBaseline 4 -Correctors 2 -StatusWorkers 2 -Seconds 900 -Scenario burst -IncompleteRate 0.20
 ```
 
 The full-flow fixture creates **360 separate sampled source videos** with
@@ -143,6 +143,17 @@ Each run records:
   category only** (no query values or user data)
 - `resources`: time-sampled aggregate and per-service peak CPU cores
   and working-set MiB; `operation_kinds` and `operation_errors`
+- `pipeline-analysis.json`: a human-readable stage-by-stage summary of
+  queue delays, Python code hotspots, grouped SQL waits, plus CPU/RAM per role.
+  `python scripts/report_full_workflow.py <run-directory>` regenerates it
+  from a previously completed benchmark without restarting Docker.
+
+Validation execution and validation **queue waiting** are different metrics.
+When p95 validation itself is 0.4 s but p95 queue waiting is 50 s,
+adding validators may help if the database has capacity; don't optimize the
+frame-completeness predicate alone. Increasing worker counts is not a pass
+when new-job or correction operations remain in `attention`, and heavy
+SQL locks/connection errors can make 4 validators worse than 2.
 
 **A passing complete 300-person result requires** all 10,800 source frames
 mirrored and accepted, all 360 blocks assigned and native jobs confirmed,
