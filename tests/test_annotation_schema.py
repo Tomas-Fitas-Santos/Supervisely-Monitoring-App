@@ -3,6 +3,7 @@ import pytest
 
 from annotatiathon.annotation_schema import (
     ANNOTATION_CLASSES,
+    CLASS_HOTKEYS,
     AnnotationSchemaError,
     annotation_class_view,
     ensure_project_annotation_classes,
@@ -46,7 +47,7 @@ def test_merge_preserves_existing_classes_tags_ids_and_project_settings():
     assert classes["unrelated"]["id"] == 88
     assert classes["bird"]["id"] == 100
     assert classes["bird"]["hotkey"] == "b"
-    assert classes["bird"]["color"] == "#FFD600"
+    assert classes["bird"]["color"] == "#FFDF00"
     assert result["tags"] == current["tags"]
     assert result["projectSettings"] == current["projectSettings"]
     assert current["classes"][1]["color"] == "#000000"
@@ -70,7 +71,9 @@ def test_conflicting_project_class_shape_is_rejected_without_mutating_meta():
     assert original["classes"][0]["shape"] == "rectangle"
 
 
-def test_project_api_get_and_update_are_idempotent():
+@pytest.mark.parametrize("enable_hotkeys", [False, True])
+def test_project_api_get_and_update_are_idempotent(monkeypatch, enable_hotkeys):
+    monkeypatch.setenv("NIGHTJAR_SUPERVISELY_CLASS_HOTKEYS", str(int(enable_hotkeys)))
     class Project:
         def __init__(self):
             self.meta = {"classes": [], "tags": [], "projectType": "images"}
@@ -92,6 +95,9 @@ def test_project_api_get_and_update_are_idempotent():
     api = API()
     assert ensure_project_annotation_classes(api, 42)
     assert api.project.calls == 1
+    hotkeys = {row["title"]: row["hotkey"] for row in api.project.meta["classes"] if "hotkey" in row}
+    assert hotkeys == (CLASS_HOTKEYS if enable_hotkeys else {})
+    assert all(len(key) == 1 and key.isascii() and key.isalpha() for key in hotkeys.values())
     assert not ensure_project_annotation_classes(api, 42)
     assert api.project.calls == 1
 

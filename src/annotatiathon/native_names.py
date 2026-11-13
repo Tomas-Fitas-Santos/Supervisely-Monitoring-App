@@ -91,3 +91,12 @@ def labeling_job_name(job: LabelingJob, team: CompetitionTeam,
         f"{display(prefix, 158)} · {display(team.name, 24)}"
         f" · {display(assignee, 24)} [NJ:{job.id[:12]}]"
     )
+
+
+def numbered_job_name(number: int, *, correction_round: int = 0) -> str:
+    title = f"Job {number:03d}"
+    if correction_round:
+        title += " · Incomplete"
+        if correction_round > 1:
+            title += f" ({correction_round})"
+    return title

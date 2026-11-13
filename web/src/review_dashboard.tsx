@@ -1,6 +1,7 @@
+import { RefreshButton } from "./refresh_button";
 import { useTableSort } from "./table_sort";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { BarChart3, RefreshCw, ShieldCheck, Trophy } from "lucide-react";
+import { BarChart3, ShieldCheck, Trophy } from "lucide-react";
 import { api, type Auth } from "./api";
 
 export type TeamMetric={
@@ -39,7 +40,7 @@ export function TeamReviewOverview({auth,mode}:{auth:Auth;mode:"dashboard"|"rank
       setRankingPage(current=>Math.min(current,Math.max(0,Math.ceil(m.teams.length/25)-1)));
       setTeam(old=>m.teams.some(row=>row.team_id===old)?old:(m.teams[0]?.team_id||""));
       setError("");
-    }catch(e){setError((e as Error).message);}
+    }catch(e){setError((e as Error).message);return false;}
   },[]);
   useEffect(()=>{
     void refresh();
@@ -72,7 +73,7 @@ export function TeamReviewOverview({auth,mode}:{auth:Auth;mode:"dashboard"|"rank
         <p className="muted">{mode==="dashboard"?
           "Every monitor can inspect every team. Figures come from synchronized jobs and saved quality reviews.":
           "Live provisional leaderboard based on reviewed keypoints, completed jobs and reviewed frames. Ties share a rank."}</p></div>
-      <button className="btn secondary" onClick={()=>void refresh()}><RefreshCw size={15}/> Refresh</button>
+      <RefreshButton refresh={refresh}>Refresh</RefreshButton>
     </div>
     {error&&<div role="alert" className="alert danger">{error}</div>}
     {notice&&<div role="status" className="alert success">{notice}</div>}

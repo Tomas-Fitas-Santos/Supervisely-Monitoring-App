@@ -47,6 +47,7 @@ class Event(Base):
     archived_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
     start_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
     end_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_native_job_number: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     reset_from_id: Mapped[str | None] = mapped_column(
         ForeignKey("events.id"), nullable=True
     )
@@ -520,6 +521,7 @@ class LabelingJob(Base):
     __tablename__ = "labeling_jobs"
     __table_args__ = (
         UniqueConstraint("plan_id", "team_id", "sequence", name="uq_job_plan_team_seq"),
+        UniqueConstraint("event_id", "native_job_number", name="uq_event_native_job_number"),
         Index("ix_jobs_event_order", "event_id", "team_id", "sequence", "id"),
         Index("ix_jobs_media_membership", text("(media_ids::jsonb)"),
               postgresql_using="gin").ddl_if(dialect="postgresql"),
@@ -530,6 +532,7 @@ class LabelingJob(Base):
     plan_id: Mapped[str] = mapped_column(ForeignKey("labeling_plans.id"), index=True)
     team_id: Mapped[str] = mapped_column(ForeignKey("competition_teams.id"), index=True)
     sequence: Mapped[int] = mapped_column(Integer)
+    native_job_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
     assignee_person_id: Mapped[str | None] = mapped_column(
         ForeignKey("people.id"), nullable=True, index=True
     )

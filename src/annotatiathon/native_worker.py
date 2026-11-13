@@ -70,6 +70,7 @@ from .native_names import (
     labeling_job_name,
     legacy_dataset_name,
     legacy_project_name,
+    numbered_job_name,
     owned_project_event_id,
     project_name,
 )
@@ -380,6 +381,19 @@ def manual_media_dataset(api, dataset: MediaDataset, project_id: int) -> int:
     return ds.id
 
 
+def ensure_native_job_number(db: Session, job: LabelingJob) -> int:
+    if job.native_job_number is None:
+        event = db.scalars(select(Event).where(Event.id == job.event_id)
+                           .with_for_update().execution_options(populate_existing=True)).one()
+        db.refresh(job)
+        if job.native_job_number is None:
+            event.last_native_job_number += 1
+            job.native_job_number = event.last_native_job_number
+        # Persist the name before any request that can create a remote job.
+        db.commit()
+    return job.native_job_number
+
+
 def publish_job(db: Session, job: LabelingJob, api, config: SuperviselyConfig) -> dict:
     """Idempotent by deterministic project/dataset names and native user IDs."""
     if job.status not in {"queued", "publishing", "in_progress"}:
@@ -455,11 +469,13 @@ def publish_job(db: Session, job: LabelingJob, api, config: SuperviselyConfig) -
     )}
     source_parts = [parts_by_id[mid] for mid in job.media_ids if mid in parts_by_id
                     and parts_by_id[mid][0]]
-    expected_title = labeling_job_name(
+    legacy_title = labeling_job_name(
         job, team, job_video_group(db, job),
         people[0].name if job.assignee_person_id else "Team pair",
         source_parts=source_parts or None,
     )
+    expected_title = numbered_job_name(ensure_native_job_number(db, job))
+    accepted_titles = {expected_title, legacy_title}
     current = api.labeling_job.get_list(
         config.team_id, dataset_id=remote_ds_id, show_disabled=True,
     )
@@ -469,7 +485,7 @@ def publish_job(db: Session, job: LabelingJob, api, config: SuperviselyConfig) -
         NativeJobBinding.job_id == job.id,
     ))}
     for remote in current:
-        if remote.name != expected_title and remote.id not in bound_ids:
+        if remote.name not in accepted_titles and remote.id not in bound_ids:
             continue
         if remote.dataset_id != remote_ds_id:
             raise NativeWorkerError("native_dataset_mismatch")
@@ -497,7 +513,7 @@ def publish_job(db: Session, job: LabelingJob, api, config: SuperviselyConfig) -
         )
         by_user = defaultdict(list)
         for remote in current:
-            if remote.name == expected_title or remote.id in bound_ids:
+            if remote.name in accepted_titles or remote.id in bound_ids:
                 by_user[remote.assigned_to_id].append(remote)
     if set(by_user) != set(roster_ids) or any(len(rows) != 1 for rows in by_user.values()):
         raise NativeWorkerError("native_job_confirmation_failed")
@@ -1030,7 +1046,7 @@ def process_once(db: Session, api, config: SuperviselyConfig) -> dict | None:
     milestone("publish_started", job_id=job.id, operation_id=opid)
     try:
         details = publish_job(db, job, api, config)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - remote outcome may be uncertain
         db.rollback()
         failed = db.get(NativeOperation, opid)
         failed.status = "attention"
@@ -1044,14 +1060,8 @@ def process_once(db: Session, api, config: SuperviselyConfig) -> dict | None:
             details={"code": failed.error_code},
         ))
         db.commit()
-        if os.environ.get("BENCHMARK_ANNOTATORS") == "300":
-            # The benchmark uses synthetic IDs and an isolated fake SDK.
-            # Preserve the full traceback there to diagnose load-test
-            # failures without exposing production API payloads in logs.
-            logger.exception("Synthetic publish operation %s failed", opid)
-        else:
-            logger.warning("Native operation %s requires reconciliation (type %s)",
-                           opid, type(exc).__name__)
+        logger.warning("Native operation %s requires reconciliation (type %s)",
+                       opid, type(exc).__name__)
         return {"operation_id": opid, "status": "attention"}
     finished = db.get(NativeOperation, opid)
     finished.status = "done"
@@ -1193,13 +1203,17 @@ def process_correction_once(db: Session, api, config: SuperviselyConfig) -> dict
             updated = []
             for binding in bindings:
                 person = by_person[binding.person_id]
-                title = (
+                legacy_title = (
                     f"Nightjar correction {job.id} round {job.correction_round} "
                     f"member {binding.person_id}"
                 )
+                title = numbered_job_name(
+                    ensure_native_job_number(db, job), correction_round=job.correction_round,
+                )
+                accepted_titles = {title, legacy_title}
                 matches = [
                     row for row in remote
-                    if row.name == title
+                    if row.name in accepted_titles
                     and row.assigned_to_id == person.supervisely_user_id
                     and row.dataset_id == job.native_dataset_id
                 ]
@@ -1218,7 +1232,7 @@ def process_correction_once(db: Session, api, config: SuperviselyConfig) -> dict
                     )
                     matches = [
                         row for row in remote
-                        if row.name == title
+                        if row.name in accepted_titles
                         and row.assigned_to_id == person.supervisely_user_id
                         and row.dataset_id == job.native_dataset_id
                     ]
@@ -1284,10 +1298,14 @@ def process_correction_once(db: Session, api, config: SuperviselyConfig) -> dict
                 # Strip previous suffix when this is round 2 or later.
                 original_title = old_native.name.split(" (Incomplete #")[0]
                 suffix = f" (Incomplete #{job.correction_round})"
-                title = original_title[:255 - len(suffix)] + suffix
+                legacy_title = original_title[:255 - len(suffix)] + suffix
+                title = numbered_job_name(
+                    ensure_native_job_number(db, job), correction_round=job.correction_round,
+                )
+                accepted_titles = {title, legacy_title}
                 matches = [
                     row for row in remote
-                    if row.name == title and row.assigned_to_id == person.supervisely_user_id
+                    if row.name in accepted_titles and row.assigned_to_id == person.supervisely_user_id
                     and row.dataset_id == job.native_dataset_id
                 ]
                 if len(matches) > 1:
@@ -1316,7 +1334,7 @@ def process_correction_once(db: Session, api, config: SuperviselyConfig) -> dict
                     )
                     matches = [
                         row for row in remote
-                        if row.name == title
+                        if row.name in accepted_titles
                         and row.assigned_to_id == person.supervisely_user_id
                         and row.dataset_id == job.native_dataset_id
                     ]
@@ -1364,7 +1382,7 @@ def process_correction_once(db: Session, api, config: SuperviselyConfig) -> dict
         db.commit()
         milestone("correction_publish_confirmed", job_id=jobid, operation_id=opid)
         return {"operation_id": opid, "status": "done", "correction_round": job.correction_round}
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - native restart may succeed with lost response
         db.rollback()
         task = db.get(NativeOperation, opid)
         task.status = "attention"
@@ -1379,11 +1397,8 @@ def process_correction_once(db: Session, api, config: SuperviselyConfig) -> dict
             details={"error_code": task.error_code},
         ))
         db.commit()
-        if os.environ.get("BENCHMARK_ANNOTATORS") == "300":
-            logger.exception("Synthetic correction operation %s failed", opid)
-        else:
-            logger.warning("Correction operation %s requires reconciliation (%s)",
-                           opid, type(exc).__name__)
+        logger.warning("Correction operation %s requires reconciliation (%s)",
+                       opid, type(exc).__name__)
         return {"operation_id": opid, "status": "attention"}
 
 
