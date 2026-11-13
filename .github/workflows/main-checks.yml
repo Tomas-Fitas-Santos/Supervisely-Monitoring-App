@@ -136,3 +136,54 @@ jobs:
       - name: Stop disposable live-test containers without deleting volumes
         if: always()
         run: docker compose --env-file .env.live -f compose.live.yaml --profile native down || true
+  synthetic-full-lifecycle-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    permissions:
+      contents: read
+    env:
+      BENCHMARK_PHASE: full
+      BENCHMARK_ANNOTATORS: "4"
+      BENCHMARK_MONITORS: "2"
+      BENCHMARK_FRAMES: "30"
+      BENCHMARK_BURST: "1"
+      BENCHMARK_INCOMPLETE_RATE: "0.25"
+      BENCHMARK_SQL_TIMING: "1"
+      BENCHMARK_UPLOAD: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and launch isolated fake-Supervisely 4-person end-to-end smoke
+        run: |
+          docker compose -p nightjar-bench-smoke -f compose.benchmark.yaml up -d --build \
+            --scale worker=2 --scale validation-worker=2 \
+            --scale status-worker=1 --scale correction-worker=1 \
+            web worker status-worker validation-worker correction-worker recovery-worker bulk-worker
+      - name: Exercise actual upload, SDK mirror, plan, jobs, partial corrections and monitor reviews
+        run: |
+          docker compose -p nightjar-bench-smoke -f compose.benchmark.yaml run -T --no-deps \
+            load python /bench/benchmark_full.py load --seconds 120 --latency 0.02 \
+            --assumed-publish-ms 100
+          docker compose -p nightjar-bench-smoke -f compose.benchmark.yaml \
+            exec -T api /usr/local/bin/nightjar-entrypoint python - <<'PY'
+          import json
+          from pathlib import Path
+          result = json.loads(Path("/data/results/result.json").read_text())
+          flow = result["full_flow"]
+          assert flow["source_frames"] == 150, flow
+          assert flow["mirrored_frames"] == 150, flow
+          assert flow["source_blocks"] == 5, flow
+          assert flow["source_blocks_allocated"] == 5, flow
+          assert flow["jobs_with_native_bindings"] >= 5, flow
+          assert flow["validated_frames"] == 150, flow
+          assert flow["reviewed_frames"] > 0, flow
+          assert flow["operation_kinds"].get("restart_job:done", 0) >= 1, flow
+          assert not result["database"]["operation_errors"], result["database"]
+          print("SYNTHETIC_FULL_LIFECYCLE_SMOKE_OK")
+          PY
+      - name: Print isolated simulator and worker errors
+        if: failure()
+        run: |
+          docker compose -p nightjar-bench-smoke -f compose.benchmark.yaml logs --tail=250 || true
+      - name: Remove only the isolated synthetic containers and volumes
+        if: always()
+        run: docker compose -p nightjar-bench-smoke -f compose.benchmark.yaml down --volumes --remove-orphans || true
