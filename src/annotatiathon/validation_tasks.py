@@ -298,9 +298,10 @@ def process_validation_once(db: Session, api, config) -> dict | None:
                     assignment_db, *assignment_candidate,
                     include_repeats=False,
                 )
-                if next_job is not None:
-                    next_assignment_id = next_job.id
+                candidate_id = next_job.id if next_job is not None else None
                 assignment_db.commit()
+                # Only report the successor after its transaction is durable.
+                next_assignment_id = candidate_id
         except Exception:
             logger.exception(
                 "Successor allocation deferred to status worker for job %s",
