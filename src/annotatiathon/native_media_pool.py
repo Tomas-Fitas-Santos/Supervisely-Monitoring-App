@@ -41,10 +41,21 @@ def enqueue_mirror(db: Session, ds: MediaDataset) -> NativeOperation:
         NativeOperation.target_id == ds.id,
     ))
     if existing is not None:
+        previous_revision = (existing.payload or {}).get("inventory_revision", 1)
+        if previous_revision != ds.inventory_revision:
+            # Never equate a completed OLD revision with newly appended media.
+            # A running mirror must finish and detect this change itself.
+            existing.payload = {"inventory_revision": ds.inventory_revision}
+            existing.completed_at = None
+            if existing.status != "running":
+                existing.status = "pending"
+                existing.error_code = None
+                existing.claimed_at = None
         return existing
     op = NativeOperation(
         event_id=ds.event_id, kind="mirror_dataset", target_id=ds.id,
         status="pending", priority=200,
+        payload={"inventory_revision": ds.inventory_revision},
     )
     db.add(op)
     db.flush()
@@ -68,8 +79,11 @@ def mirror_status(db: Session, ds: MediaDataset) -> dict:
     )
     return {
         "state": state, "uploaded_frames": uploaded, "total_frames": total,
+        "inventory_revision": ds.inventory_revision,
+        "mirrored_revision": ds.mirrored_revision,
         "ready_for_automatic_jobs": (
             ds.native_dataset_id is not None and state == "done"
+            and ds.mirrored_revision == ds.inventory_revision
             and total > 0 and uploaded == total
         ), "error_code": operation.error_code if operation else None,
         "attempts": operation.attempts if operation else 0,

@@ -305,10 +305,12 @@ def process_mirror_once(db: Session, api, config: SuperviselyConfig) -> dict | N
     op.attempts += 1
     opid, dsid = op.id, op.target_id
     db.commit()
+    started_revision = None
     try:
         ds = db.get(MediaDataset, dsid)
         if ds is None:
             raise MirrorError("source_dataset_not_found")
+        started_revision = ds.inventory_revision
         result = mirror_dataset(db, api, config, ds)
     except Exception as exc:  # noqa: BLE001 - uncertain writes stay retryable
         db.rollback()
@@ -322,9 +324,24 @@ def process_mirror_once(db: Session, api, config: SuperviselyConfig) -> dict | N
         logger.warning("Supervisely source mirror %s needs reconciliation (%s)",
                        opid, type(exc).__name__)
         return {"status": "attention", "operation_id": opid}
+    # Serialize with commits of appended batches. A mirror that began on an
+    # old revision must NEVER advertise the new pool as mirrored.
+    current = db.scalar(select(MediaDataset).where(
+        MediaDataset.id == dsid,
+    ).with_for_update().execution_options(populate_existing=True))
     finished = db.get(NativeOperation, opid)
+    if current.inventory_revision != started_revision:
+        finished.status = "pending"
+        finished.completed_at = None
+        finished.claimed_at = None
+        finished.payload = {"inventory_revision": current.inventory_revision}
+        finished.error_code = None
+        db.commit()
+        return {"status": "pending_new_revision", "operation_id": opid}
+    current.mirrored_revision = started_revision
     finished.status = "done"
     finished.completed_at = epoch()
+    finished.payload = {"inventory_revision": started_revision}
     finished.error_code = None
     db.commit()
     return {"status": "done", "operation_id": opid, **result}
