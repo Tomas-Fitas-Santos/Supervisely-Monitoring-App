@@ -55,10 +55,10 @@ export function AppendVideos({datasetId,csrf,onCommitted}:{
 
   async function sendBatch(batch:Batch){
     const signal=controller.current!.signal;
-    setStage("Checking selected file metadata…");
+    setStage("Checking selected file metadataâ€¦");
     const {sources,total}=await validateDatasetSources(files,batch.upload_kind,signal,
       count=>setStage(`Checking file metadata: ${count} / ${files.length}`));
-    setStage("Checking saved upload progress…");
+    setStage("Checking saved upload progressâ€¦");
     const previous=new Map<string,Receipt>();
     let after:string|null=null;
     do {
@@ -86,7 +86,7 @@ export function AppendVideos({datasetId,csrf,onCommitted}:{
         },onProgress:bytes=>{done+=bytes;setProgress({done,total});}});
       count++;
     }
-    setStage("Starting local indexing…");
+    setStage("Starting local indexingâ€¦");
     await api(`/datasets/${datasetId}/append-batches/${batch.id}/finish`,
       "POST",undefined,csrf,signal);
     setNotice("Batch uploaded. Local indexing will commit complete videos into the existing dataset.");
@@ -97,7 +97,7 @@ export function AppendVideos({datasetId,csrf,onCommitted}:{
   async function upload(){
     if(running||!files.length)return;
     setRunning(true);setError("");setNotice("");
-    controller.current=new AbortController();setStage("Preparing append upload…");
+    controller.current=new AbortController();setStage("Preparing append uploadâ€¦");
     try{
       const reuse=active?.status==="uploading"?active:null;
       if(reuse&&reuse.upload_kind!==kind)

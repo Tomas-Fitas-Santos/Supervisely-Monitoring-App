@@ -124,7 +124,7 @@ export function DatasetScreen({auth}:{auth:Auth}) {
       preparation.current=new AbortController();
       await validateDatasetSources(files,mode,preparation.current.signal,
         count=>setPreparing(`Checking file metadata: ${count} / ${files.length}`));
-      setPreparing("Creating upload record�");
+      setPreparing("Creating upload record…");
       created=await uploadApi<Dataset>("/datasets/uploads","POST",{
         name:name.trim()||(mode==="folder"?
           (files[0].webkitRelativePath.split("/")[0]||files[0].name):
@@ -298,7 +298,7 @@ export function DatasetScreen({auth}:{auth:Auth}) {
                 onClick={()=>void retryMirror()}><RotateCcw size={15}/> Retry Supervisely upload</button>}
             {mirror?.ready_for_automatic_jobs&&<p className="muted small">
               All frames are mirrored. Before automatic 30-frame job distribution,
-              use Job Distribution → Automatic distribution → Check source frames
+              use Job Distribution â†’ Automatic distribution â†’ Check source frames
               to verify source-video identity and consecutive frame positions.
               Manual assignments can independently duplicate a video in their separate remote dataset.</p>}
           </div>}
