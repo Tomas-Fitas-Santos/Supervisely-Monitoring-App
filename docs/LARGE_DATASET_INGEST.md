@@ -176,8 +176,13 @@ real Supervisely workspace. The PostgreSQL checks use a disposable migrated
 database. Lint ignores executable-bit checks because Docker's Windows bind mount
 presents source files as executable. The final local gates passed **324 backend
 tests**, **8 browser upload/read tests**, Python lint, and the production
-TypeScript/Vite build. These are regression checks; the SDK transport smoke and
-live deployment checks are separate operational gates.
+TypeScript/Vite build. A separate isolated production-container HTTP/SDK smoke
+used Supervisely SDK 6.74.56 against the internal simulator: 150 source images
+mirrored, five unique 30-frame jobs allocated, all 150 frames validated, one
+correction operation completed, and 92 frame reviews completed with image GETs.
+All 447 application requests returned 200/201/202; there were no operation errors.
+This validates SDK transport and lifecycle integration, not real Supervisely
+service throughput or a 100,000-image network transfer.
 
 A real 100,000-image Supervisely transfer remains an operational verification
 step. This change does not upload a synthetic collection into the real workspace.
