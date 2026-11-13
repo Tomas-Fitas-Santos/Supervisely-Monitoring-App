@@ -768,3 +768,9 @@ input,select{border:1px solid #dfe5ed;border-radius:9px;background:white;padding
   .shared-review-split{display:flex;flex-direction:column;gap:12px;min-width:0}
   .shared-review-image-column{min-width:0}
 }
+
+@keyframes refresh-icon-spin { to { transform: rotate(360deg); } }
+.refresh-icon-spinning { animation: refresh-icon-spin .8s linear infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .refresh-icon-spinning { animation: none; }
+}

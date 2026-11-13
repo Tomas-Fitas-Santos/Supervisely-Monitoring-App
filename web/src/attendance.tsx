@@ -1,3 +1,4 @@
+import { RefreshButton } from "./refresh_button";
 import { useCallback, useEffect, useState } from "react";
 import { formatLisbonTime } from "./event_time";
 import type React from "react";
@@ -38,7 +39,7 @@ export function AttendanceScreen({auth}:{auth:Auth}) {
         api<TeamResponse>("/teams")
       ]);
       setPeople(roster);setSummary(counts);setTeams(grouped.teams.filter(t=>t.type==="competition"));setError("");
-    }catch(e){setError((e as Error).message);}
+    }catch(e){setError((e as Error).message);return false;}
   },[search,page,filter,sortQuery]);
 
   useEffect(()=>{
@@ -115,8 +116,7 @@ export function AttendanceScreen({auth}:{auth:Auth}) {
       <h2>Attendance & Check-in</h2>
       <p className="muted">Check in verified participants with one click. Assign team tables separately.</p>
     </div><div className="heading-actions">
-      <button className="btn secondary" onClick={()=>void refresh()}>
-        <RefreshCw size={15}/> Refresh check-in list</button>
+      <RefreshButton refresh={refresh}>Refresh check-in list</RefreshButton>
       {organiser&&<button className="btn secondary" onClick={()=>void syncNative()}>
         <RefreshCw size={15}/> Sync Supervisely membership</button>}
     </div></div>

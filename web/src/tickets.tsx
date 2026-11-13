@@ -1,7 +1,8 @@
+import { RefreshButton } from "./refresh_button";
 import { confirmAction } from "./dialogs";
 import { useCallback, useEffect, useState } from "react";
 import type React from "react";
-import { AlertTriangle, ClipboardCheck, Gift, RefreshCw, Ticket } from "lucide-react";
+import { AlertTriangle, ClipboardCheck, Gift, Ticket } from "lucide-react";
 import { api, type Auth, type Person, type PeopleResponse } from "./api";
 import { useTableSort } from "./table_sort";
 
@@ -47,7 +48,7 @@ export function TicketsScreen({auth}:{auth:Auth}) {
         all=[...all,...result.items];total=result.total;page++;
       }while(all.length<total && page<=26);
       setPeople(all);setError("");
-    }catch(e){setError((e as Error).message);}
+    }catch(e){setError((e as Error).message);return false;}
   },[]);
   useEffect(()=>{
     void refresh();
@@ -119,7 +120,7 @@ export function TicketsScreen({auth}:{auth:Auth}) {
     <div className="page-heading"><div><span className="eyebrow">EVENT OPERATIONS · DISTRIBUTION</span>
       <h2>Tickets & Rewards</h2>
       <p className="muted">Hand out tickets and see how many each person has received.</p>
-      </div><button className="btn secondary" onClick={()=>void refresh()}><RefreshCw size={15}/> Refresh</button></div>
+      </div><RefreshButton refresh={refresh}>Refresh</RefreshButton></div>
     {error&&<div className="alert danger" role="alert">{error}</div>}
     {notice&&<div className="alert success" role="status">{notice}</div>}
     <nav className="workspace-subtabs" aria-label="Tickets and rewards sections">

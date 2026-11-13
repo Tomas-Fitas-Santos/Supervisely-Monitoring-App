@@ -1,3 +1,4 @@
+import { RefreshButton } from "./refresh_button";
 import { confirmAction } from "./dialogs";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
@@ -97,7 +98,7 @@ export function CompetitionScreen({auth,view="progress"}:{
       setDataset(old=>ds.items.some(item=>item.id===old&&item.status==="ready")?old:
         (ds.items.find(item=>item.status==="ready")?.id||""));
       setChosen(old=>js.items.some(item=>item.id===old)?old:(js.items[0]?.id||""));
-    }catch(e){setError((e as Error).message);}
+    }catch(e){setError((e as Error).message);return false;}
   },[]);
 
   const refreshOptions=useCallback(async()=>{
@@ -106,7 +107,7 @@ export function CompetitionScreen({auth,view="progress"}:{
       const next=await api<ManualOptions>("/labeling/manual/options?dataset_id="+encodeURIComponent(dataset));
       setOptions(next);
       setTeamId(old=>next.teams.some(t=>t.id===old)?old:(next.teams[0]?.id||""));
-    }catch(e){setError((e as Error).message);}
+    }catch(e){setError((e as Error).message);return false;}
   },[dataset]);
   useEffect(()=>{void refresh();},[refresh]);
   useEffect(()=>{
@@ -299,8 +300,11 @@ export function CompetitionScreen({auth,view="progress"}:{
       <p className="muted">{view==="setup"?
         "Create and publish jobs using the manual or automatic distribution tools.":
         "Follow the publishing queue, annotation progress and submissions."}</p>
-    </div><button className="btn secondary" onClick={()=>{void refresh();void refreshOptions();}}>
-      <RefreshCw size={15}/> Refresh status</button></div>
+    </div><RefreshButton refresh={async()=>{
+      setError("");
+      const results=await Promise.all([refresh(),refreshOptions()]);
+      return results.every(result=>result!==false);
+    }}>Refresh status</RefreshButton></div>
     {error&&<div role="alert" className="alert danger">{error}</div>}
     {notice&&<div role="status" className="alert success">{notice}</div>}
     <nav className="workspace-subtabs" aria-label="Competition and jobs sections">

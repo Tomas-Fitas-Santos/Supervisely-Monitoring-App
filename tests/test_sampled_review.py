@@ -1,6 +1,7 @@
 """Exercise the sampled review routers before production route registration."""
 import json
 
+import pytest
 import test_dataset_workflows
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -16,7 +17,8 @@ from annotatiathon.scoring_api import router as scoring_router
 dataset_ctx = test_dataset_workflows.ctx
 
 
-def test_sample_claim_scoring_and_retry(dataset_ctx, tmp_path):
+@pytest.mark.parametrize("box_reason", [None, "wrong_placement", "sabotage"])
+def test_sample_claim_scoring_and_retry(dataset_ctx, tmp_path, box_reason):
     client, maker, csrf = dataset_ctx
     dataset_id = ingest(client, csrf)
     teams(client, csrf)
@@ -70,6 +72,16 @@ def test_sample_claim_scoring_and_retry(dataset_ctx, tmp_path):
             {"object_index": 1, "correct": False, "reason": "wrong_class",
              "corrected_class": "crown"},
         ]}
+        if box_reason:
+            payload["verdicts"][0] = {"object_index": 0, "correct": False}
+            assert act(http, csrf, f"/review-queue/{review_id}/complete", payload).status_code == 422
+            payload["verdicts"][0]["reason"] = box_reason
+            completed = act(http, csrf, f"/review-queue/{review_id}/complete", payload)
+            assert completed.status_code == 200, completed.text
+            row = http.get("/api/v1/rankings/teams").json()["items"][0]
+            assert row["errors"] == {"wrong_class": 1, box_reason: 1}
+            assert row["average_frame_points"] == 0
+            return
         for _ in range(2):
             completed = act(http, csrf, f"/review-queue/{review_id}/complete", payload)
             assert completed.status_code == 200, completed.text
