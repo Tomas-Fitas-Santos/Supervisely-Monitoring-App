@@ -9,12 +9,14 @@ import { api, refreshSuperviselyRoster, type Auth, type Team, type TeamResponse 
 
 type Dataset={id:string;name:string;status:string;image_count:number;
   frame_count:number;video_count:number};
-type PlanMode="legacy"|"shared_30_v1";
+type PlanMode="legacy"|"shared_30_v1"|"balanced_30_v1";
 type Plan={id:string;dataset_id:string;status:string;jobs_per_team:number;mode:PlanMode;
   redundancy:number;video_limit:number|null};
 type Created={job_count:number;assets:number;min_frames_per_team:number;max_frames_per_team:number}
   |{primary_blocks:number;unique_frames:number;short_tails:number;repeat_frames:number;
-    mixed_video_blocks:number;short_final_frames:number};
+    mixed_video_blocks:number;short_final_frames:number}
+  |{eligible_frames:number;eligible_videos:number;final_short_frames:number;
+    exclusions:Record<string,number>;groups:{group:string;frames:number;videos:number;species:number}[]};
 type Binding={person_id:string;person_name:string;native_job_id:number;
   native_status:string;last_synced_at:number|null};
 type Job={id:string;plan_id:string;team_id:string;team_name:string;
@@ -42,6 +44,15 @@ type AnnotationClass={name:string;shape:"rectangle"|"point";color:string;descrip
 type AssigneeOption={id:string;name:string;team_name:string;team_id:string;native_ready:boolean};
 type MirrorStatus={state:string;uploaded_frames:number;total_frames:number;
   ready_for_automatic_jobs:boolean;error_code:string|null};
+type BalancedPreparation={dataset_id:string;status:string;current:boolean;
+  inventory_ready:boolean;inventory_revision:number;configuration_revision:number;
+  summary:null|{eligible_frames:number;eligible_videos:number;final_short_frames:number;
+    exclusions:Record<string,number>;excluded_examples:{video:string;reason:string}[];
+    groups:{group:string;frames:number;videos:number;species:number}[]}};
+type BalancedProgress={groups:{group:string;planned:number;assigned:number;
+  validated:number;usable:number;videos_complete:number}[];
+  unfinished_videos:{video:string;missing:number;validated:number}[];
+  extra_unfinished:number};
 type SharedReadiness={dataset_id:string;source_ready:boolean;mirror_ready:boolean;
   ready_for_distribution:boolean;source_frames:number;source_videos:number;
   primary_jobs:number;issues:string[];extra_issues:number};
@@ -76,6 +87,8 @@ export function CompetitionScreen({auth,view="progress"}:{
   const [mirror,setMirror]=useState<MirrorStatus|null>(null);
   const [readiness,setReadiness]=useState<SharedReadiness|null>(null);
   const [readinessError,setReadinessError]=useState("");
+  const [balanced,setBalanced]=useState<BalancedPreparation|null>(null);
+  const [balanceProgress,setBalanceProgress]=useState<Record<string,BalancedProgress>>({});
   const [drafts,setDrafts]=useState<Draft[]>([]);
   const [dispatch,setDispatch]=useState<"hold"|"publish">("publish");
   const [filter,setFilter]=useState<"all"|"review"|"active"|"held">("all");
@@ -157,6 +170,46 @@ export function CompetitionScreen({auth,view="progress"}:{
       .catch(e=>{if(active)setReadinessError((e as Error).message);});
     return ()=>{active=false;};
   },[dataset,planMode,section]);
+  useEffect(()=>{
+    if(!dataset||planMode!=="balanced_30_v1"||section!=="automatic"){
+      setBalanced(null);return;
+    }
+    let alive=true;
+    const fetchStatus=async()=>{
+      try{
+        const value=await api<BalancedPreparation>(
+          "/datasets/"+dataset+"/balanced-preparation");
+        if(alive)setBalanced(value);
+      }catch(e){if(alive)setError((e as Error).message);}
+    };
+    void fetchStatus();
+    const timer=window.setInterval(()=>{
+      if(!document.hidden)void fetchStatus();
+    },5000);
+    return()=>{alive=false;window.clearInterval(timer);};
+  },[dataset,planMode,section]);
+
+  async function prepareBalanced(){
+    if(!dataset)return;
+    setBusy(true);setError("");setNotice("");
+    try{
+      await api("/datasets/"+dataset+"/balanced-preparation",
+        "POST",undefined,auth.csrf_token);
+      setNotice("Local morphology-balanced preparation queued. No jobs have been published.");
+      setBalanced(await api<BalancedPreparation>(
+        "/datasets/"+dataset+"/balanced-preparation"));
+    }catch(e){setError((e as Error).message);}
+    finally{setBusy(false);}
+  }
+
+  async function refreshBalancedProgress(planId:string){
+    try{
+      const data=await api<BalancedProgress>(
+        "/labeling/plans/"+planId+"/balanced-progress");
+      setBalanceProgress(prev=>({...prev,[planId]:data}));
+    }catch(e){setError((e as Error).message);}
+  }
+
   async function checkReadiness(){
     if(!dataset)return;
     try {
@@ -203,14 +256,16 @@ export function CompetitionScreen({auth,view="progress"}:{
   async function generate(){
     setBusy(true);setError("");setNotice("");
     try {
-      const response=await api<Created>("/labeling/plans","POST",planMode==="shared_30_v1"?{
+      const response=await api<Created>("/labeling/plans","POST",planMode!=="legacy"?{
         dataset_id:dataset,mode:planMode,
       }:{
         dataset_id:dataset,jobs_per_team:jobsPerTeam,redundancy:1,
         video_limit:videoLimit.trim()?Number(videoLimit):null,
       },auth.csrf_token);
       setCreated(response);
-      setNotice("primary_blocks" in response?
+      setNotice("eligible_videos" in response?
+        response.eligible_videos+" whole videos prepared for balanced individual jobs. Nothing was published yet.":
+        "primary_blocks" in response?
         response.primary_blocks+" primary blocks planned. Nothing was published yet.":
         response.job_count+" individual jobs planned. Nothing was published yet.");
       await refresh();
@@ -222,7 +277,9 @@ export function CompetitionScreen({auth,view="progress"}:{
     setBusy(true);setError("");setNotice("");
     try {
       await api("/labeling/plans/"+plan.id+"/approve","POST",undefined,auth.csrf_token);
-      setNotice(plan.mode==="shared_30_v1"?
+      setNotice(plan.mode==="balanced_30_v1"?
+        "Balanced queue approved at its prepared revision. Launch to allocate 30-frame jobs to eligible individuals.":
+        plan.mode==="shared_30_v1"?
         "Shared queue approved. Launch it to let the worker assign available blocks.":
         "Plan approved. Launch it to release one video to each available annotator.");
       await refresh();
@@ -546,10 +603,13 @@ export function CompetitionScreen({auth,view="progress"}:{
         </select></label>
         <label>Distribution mode<select value={planMode} onChange={e=>setPlanMode(e.target.value as PlanMode)}>
           <option value="shared_30_v1">Shared 30-image queue</option>
+          <option value="balanced_30_v1">Morphology-balanced 30-frame queue</option>
           <option value="legacy">Whole videos</option>
         </select></label>
       </div>
-      <p className="muted small">{planMode==="shared_30_v1"?
+      <p className="muted small">{planMode==="balanced_30_v1"?
+        "Prepare once from complete source videos, with no roster required. Assign 30 frames per individual job, prioritising unfinished videos and least-covered morphology groups. Launch only after the full dataset is mirrored.":
+        planMode==="shared_30_v1"?
         "Allocate 30 frames in uploaded dataset order across the ordered videos. The uploaded frames in each video are sorted by frame number, even if sampled. Only the final dataset job may have fewer than 30 frames. The next job releases after a complete submission.":
         "Assign whole videos to eligible teams. Each video goes to one annotator across the event."}</p>
       {planMode==="legacy"&&<div className="form-grid triple">
@@ -582,11 +642,50 @@ export function CompetitionScreen({auth,view="progress"}:{
           </ul>}
         </div>}
       </div>}
+      {planMode==="balanced_30_v1"&&dataset&&<div className="settings-note">
+        <div className="panel-heading"><strong>Prepared morphology pool</strong>
+          <button className="btn secondary" type="button"
+            disabled={busy||!balanced?.inventory_ready}
+            onClick={()=>void prepareBalanced()}><RefreshCw size={14}/>
+            {balanced?.status==="prepared"?"Prepare latest revision":"Prepare queue"}
+          </button>
+        </div>
+        <p className="muted small">Preparation: {balanced?.status??"Checking…"} ·
+          Inventory revision {balanced?.inventory_revision??"?"} ·
+          {balanced?.inventory_ready?"Local inventory ready":"Finish uploading/indexing first"}
+        </p>
+        {balanced?.summary&&<div>
+          <p>{balanced.summary.eligible_frames} eligible full-density frames across
+            {" "}{balanced.summary.eligible_videos} complete videos; only the final job may be shorter than 30.</p>
+          <div className="table-scroll"><table className="data-table">
+            <thead><tr><th>Morphology group</th><th>Frames</th><th>Videos</th></tr></thead>
+            <tbody>{balanced.summary.groups.map(g=><tr key={g.group}>
+              <td>{g.group}</td><td>{g.frames.toLocaleString()}</td>
+              <td>{g.videos}</td></tr>)}</tbody>
+          </table></div>
+          {Object.keys(balanced.summary.exclusions).length>0&&
+            <p className="alert warning">Excluded footage:
+              {Object.entries(balanced.summary.exclusions).map(([k,v])=>
+                " "+k+": "+v+" videos;")}
+              {" "}Use Dataset Coverage to classify unknown species. Inferred or
+              incomplete frame ordinals cannot enter this balanced pool.</p>}
+        </div>}
+      </div>}
       <button className="btn secondary" disabled={busy||!dataset||
         plans.some(p=>p.status==="approved")||
-        (planMode==="shared_30_v1"&&Boolean(readiness&&!readiness.source_ready))}
-        onClick={()=>void generate()}><UsersRound size={15}/>{planMode==="shared_30_v1"?"Create shared queue draft":"Generate draft plan"}</button>
-      {created&&<div className="job-plan-summary">{"primary_blocks" in created?<>
+        (planMode==="shared_30_v1"&&Boolean(readiness&&!readiness.source_ready))||
+        (planMode==="balanced_30_v1"&&
+         (!balanced?.current||balanced.status!=="prepared"||
+          !balanced.summary?.eligible_videos))}
+        onClick={()=>void generate()}><UsersRound size={15}/>{planMode==="balanced_30_v1"?
+          "Create balanced queue draft":planMode==="shared_30_v1"?
+          "Create shared queue draft":"Generate draft plan"}</button>
+      {created&&<div className="job-plan-summary">{"eligible_videos" in created?<>
+        <strong>{created.eligible_videos} video runs prepared</strong>
+        <p>{created.eligible_frames.toLocaleString()} frames available;
+          projected final short job {created.final_short_frames} frames
+          (if all video runs are allocated).</p>
+      </>:"primary_blocks" in created?<>
         <strong>{created.primary_blocks} primary blocks planned</strong>
         <p>{created.unique_frames} unique source frames · {created.mixed_video_blocks} mixed-video jobs · {created.short_tails?created.short_final_frames+" frames in final short job":"all jobs contain 30 frames"} · {created.repeat_frames} repeat-eligible frames</p>
       </>:<>
@@ -595,20 +694,37 @@ export function CompetitionScreen({auth,view="progress"}:{
       </>}</div>}
       <div className="job-plan-history"><h4>Plans in this event</h4>
         {plans.map(plan=><div className="job-plan-row" key={plan.id}>
-          <div><strong>{plan.mode==="shared_30_v1"?"Shared 30-image queue":
+          <div><strong>{plan.mode==="balanced_30_v1"?"Morphology-balanced 30-frame queue":
+            plan.mode==="shared_30_v1"?"Shared 30-image queue":
             plan.jobs_per_team===0?"Manual assignments":"Whole-video plan"} · {plan.status}</strong>
             <span>{datasets.find(item=>item.id===plan.dataset_id)?.name||plan.dataset_id}</span>
-            <span>{plan.mode==="shared_30_v1"?"30 frames per job; crosses video boundaries when necessary":plan.jobs_per_team===0?"Jobs added as needed":
+            <span>{plan.mode==="balanced_30_v1"?
+              "Prepared complete videos; balanced 30-frame individual jobs":
+              plan.mode==="shared_30_v1"?"30 frames per job; crosses video boundaries when necessary":plan.jobs_per_team===0?"Jobs added as needed":
               plan.jobs_per_team+" maximum jobs/team · "+(plan.redundancy===1?"No overlap":"Legacy overlap plan")}</span></div>
           {plan.status==="planned"&&<button className="btn secondary" disabled={busy}
             onClick={()=>void approve(plan)}><ClipboardCheck size={15}/> Approve</button>}
           {plan.status==="approved"&&<button className="btn primary" disabled={busy}
             onClick={()=>void nativeAction("/native/launch",
-              plan.mode==="shared_30_v1"?
-                "Launch this shared queue? The worker will assign available blocks to eligible annotators.":
+              plan.mode!=="legacy"?
+                "Launch this prepared queue? Workers will assign individual jobs only to eligible annotators.":
                 "Launch this plan? The worker creates one native job per individual annotator.",
               {plan_id:plan.id})}><PlayCircle size={15}/> Launch plan</button>}
-          {plan.status==="running"&&(plan.mode==="shared_30_v1"||plan.jobs_per_team!==0)&&<button className="btn secondary"
+          {plan.mode==="balanced_30_v1"&&plan.status==="running"&&
+            <button className="btn secondary" disabled={busy}
+              onClick={()=>void refreshBalancedProgress(plan.id)}>
+              <RefreshCw size={15}/> Video coverage</button>}
+          {plan.mode==="balanced_30_v1"&&balanceProgress[plan.id]&&
+            <div className="settings-note">
+              <p>Validated frames:
+                {" "}{balanceProgress[plan.id].groups.reduce((sum,g)=>sum+g.validated,0).toLocaleString()} ·
+                Usable complete-video frames:
+                {" "}{balanceProgress[plan.id].groups.reduce((sum,g)=>sum+g.usable,0).toLocaleString()}
+              </p>
+              <a href={"/api/v1/labeling/plans/"+plan.id+"/balanced-manifest.jsonl"}
+                target="_blank" rel="noreferrer">Export complete-video manifest</a>
+            </div>}
+          {plan.status==="running"&&(plan.mode!=="legacy"||plan.jobs_per_team!==0)&&<button className="btn secondary"
             disabled={busy} onClick={()=>void nativeAction(
               "/native/plans/"+plan.id+"/pause","Pause automatic releases?")}>Pause releases</button>}
           {plan.status==="paused"&&<button className="btn primary" disabled={busy}
