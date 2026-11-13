@@ -251,7 +251,7 @@ def test_postgres_multiple_validators_claim_only_one_round():
     engine.dispose()
 
 
-def test_validated_shared_submission_enqueues_next_block_in_same_commit(monkeypatch):
+def test_validated_shared_submission_enqueues_next_block_after_commit(monkeypatch):
     """A finished packet releases exactly one next job without a second status pass."""
     from annotatiathon import native_worker
 
@@ -318,5 +318,40 @@ def test_validated_shared_submission_enqueues_next_block_in_same_commit(monkeypa
             # No duplicate successor can be queued by repeated validation.
             assert process_validation_once(db, SimpleNamespace(), None) is None
             assert len(list(db.scalars(select(m.LabelingJob)))) == 2
+    finally:
+        engine.dispose()
+
+
+
+def test_successful_validation_survives_successor_allocation_failure(monkeypatch):
+    """A competing allocator must not undo a committed frame validation."""
+    from annotatiathon import native_worker, work_queue
+
+    engine = setup_queue()
+    try:
+        with Session(engine) as db:
+            plan = db.get(m.LabelingPlan, "plan")
+            plan.queue_seed = "benchmark-queue"
+            db.add(m.WorkPacket(job_id="job", event_id="event", person_id="person"))
+            assert enqueue_validation(db, db.get(m.LabelingJob, "job"))
+            db.commit()
+
+        def fake_capture(db, _api, job):
+            db.get(m.WorkPacket, job.id).submitted_at = m.epoch()
+            job.annotation_snapshot_round = job.correction_round
+            job.annotation_snapshot_frames = job.frame_count
+            return True
+
+        def simulate_deadlock(*_args, **_kwargs):
+            raise RuntimeError("synthetic successor claim deadlock")
+
+        monkeypatch.setattr(native_worker, "capture_job_annotations", fake_capture)
+        monkeypatch.setattr(work_queue, "claim_primary_block", simulate_deadlock)
+        with Session(engine) as db:
+            result = process_validation_once(db, SimpleNamespace(), None)
+            assert result["status"] == "done"
+            assert db.get(m.WorkPacket, "job").submitted_at is not None
+            task = db.scalar(select(m.NativeOperation))
+            assert task.status == "done"
     finally:
         engine.dispose()
