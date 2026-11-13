@@ -512,8 +512,12 @@ def publish_job(db: Session, job: LabelingJob, api, config: SuperviselyConfig) -
         people[0].name if job.assignee_person_id else "Team pair",
         source_parts=source_parts or None,
     )
-    expected_title = numbered_job_name(ensure_native_job_number(db, job))
-    accepted_titles = {expected_title, legacy_title}
+    # Restore descriptive video / part / team / assignee names for NEW jobs.
+    # Keep numbered names as an exact reconciliation fallback for jobs
+    # created before the rollback; never publish duplicates to rename them.
+    expected_title = legacy_title
+    numbered_title = numbered_job_name(ensure_native_job_number(db, job))
+    accepted_titles = {expected_title, numbered_title}
     with code_timing("publish.remote_list_jobs", job_id=job.id):
         current = list_assigned_native_jobs(
             api, config.team_id, remote_ds_id, roster_ids,
@@ -1286,10 +1290,11 @@ def process_correction_once(db: Session, api, config: SuperviselyConfig) -> dict
                     f"Nightjar correction {job.id} round {job.correction_round} "
                     f"member {binding.person_id}"
                 )
-                title = numbered_job_name(
+                title = legacy_title
+                numbered_title = numbered_job_name(
                     ensure_native_job_number(db, job), correction_round=job.correction_round,
                 )
-                accepted_titles = {title, legacy_title}
+                accepted_titles = {title, numbered_title}
                 matches = [
                     row for row in remote
                     if row.name in accepted_titles
@@ -1380,10 +1385,11 @@ def process_correction_once(db: Session, api, config: SuperviselyConfig) -> dict
                 original_title = old_native.name.split(" (Incomplete #")[0]
                 suffix = f" (Incomplete #{job.correction_round})"
                 legacy_title = original_title[:255 - len(suffix)] + suffix
-                title = numbered_job_name(
+                title = legacy_title
+                numbered_title = numbered_job_name(
                     ensure_native_job_number(db, job), correction_round=job.correction_round,
                 )
-                accepted_titles = {title, legacy_title}
+                accepted_titles = {title, numbered_title}
                 matches = [
                     row for row in remote
                     if row.name in accepted_titles and row.assigned_to_id == person.supervisely_user_id
