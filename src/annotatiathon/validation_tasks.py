@@ -255,7 +255,7 @@ def process_validation_once(db: Session, api, config) -> dict | None:
                 if next_job is not None:
                     next_assignment_id = next_job.id
         completed = True
-    except Exception as exc:  # noqa: BLE001 - retry safe read
+    except Exception as exc:
         db.rollback()
         problem = exc
         if os.environ.get("BENCHMARK_ANNOTATORS") == "300":
