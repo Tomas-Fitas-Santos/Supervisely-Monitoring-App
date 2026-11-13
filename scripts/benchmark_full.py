@@ -950,6 +950,43 @@ def load(seconds, latency, fail_rate, profile_scale=1.0, timeout_rate=0.0,
             response.raise_for_status()
             phases["launch"] = {"seconds": round(time.monotonic() - launch_start, 3),
                                 "status": response.json()["status"]}
+        # Fail before a long 300-person simulation if synthetic roster identity,
+        # team eligibility, or the launched queue is unexpectedly unusable.
+        from annotatiathon import models as m
+        from annotatiathon.db import session_factory
+        from annotatiathon.native_operations_api import native_identity_assignable
+        from annotatiathon.pair_members import pair_members
+
+        with session_factory()() as db:
+            active = db.get(m.LabelingPlan, full_plan_id)
+            teams = list(db.scalars(select(m.CompetitionTeam).where(
+                m.CompetitionTeam.event_id == "event",
+                m.CompetitionTeam.active.is_(True),
+            )))
+            ready_people = []
+            roster_counts = {}
+            for team in teams:
+                members, kind = pair_members(db, "event", team.id)
+                roster_counts[team.id] = {
+                    "kind": kind,
+                    "members": len(members),
+                    "checked_in": sum(p.check_in_at is not None for p in members),
+                    "native_verified": sum(native_identity_assignable(p) for p in members),
+                }
+                ready_people.extend(p.id for p in members
+                                    if p.check_in_at is not None
+                                    and native_identity_assignable(p))
+            phases["launch"]["eligible_participants"] = len(ready_people)
+            phases["launch"]["active_teams"] = len(teams)
+            phases["launch"]["queued_blocks"] = db.scalar(select(func.count(m.WorkBlock.id)).where(
+                m.WorkBlock.plan_id == full_plan_id,
+                m.WorkBlock.job_id.is_(None),
+            ))
+            if active.status != "running" or len(ready_people) != ANNOTATORS:
+                raise RuntimeError(
+                    "Full-lifecycle queue not eligible after launch: "
+                    f"plan={active.status}, eligible={len(ready_people)}, "
+                    f"expected={ANNOTATORS}, rosters={roster_counts}")
     if PHASE == "initial":
         # Release 300 real worker operations at one deterministic instant,
         # after the load/controller clocks have started.
