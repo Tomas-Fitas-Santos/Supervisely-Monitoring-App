@@ -133,14 +133,25 @@ Compare dimensions independently rather than testing every combination:
 # Full turnaround, including 20% incomplete submissions.
 .\scripts\run_worker_sweep.ps1 -Phase turnaround -Workers 1,2,3 -Validators 2 -Seconds 480 -Scenario burst -IncompleteRate 0.20
 
-# Isolate validation capacity while holding other roles fixed.
-.\scripts\run_worker_sweep.ps1 -Phase turnaround -Workers 2 -Validators 1 -Seconds 480
-.\scripts\run_worker_sweep.ps1 -Phase turnaround -Workers 2 -Validators 4 -Seconds 480
+# Sweep validation workers 1/2/4 while publishing stays at 2.
+.\scripts\run_worker_sweep.ps1 -Phase turnaround -SweepRole validation -Workers 1,2,4 -PublisherBaseline 2 -Seconds 480
 
-# Isolate correction and status scheduler capacity separately.
-.\scripts\run_worker_sweep.ps1 -Phase turnaround -Workers 2 -Validators 2 -Correctors 2 -Seconds 480
-.\scripts\run_worker_sweep.ps1 -Phase turnaround -Workers 2 -Validators 2 -StatusWorkers 2 -Seconds 480
+# Sweep correction workers 1/2/4, holding publisher and validators at 2.
+.\scripts\run_worker_sweep.ps1 -Phase turnaround -SweepRole correction -Workers 1,2,4 -PublisherBaseline 2 -Validators 2 -Seconds 480
+
+# Sweep status workers 1/2/4 with all other roles fixed.
+.\scripts\run_worker_sweep.ps1 -Phase turnaround -SweepRole status -Workers 1,2,4 -PublisherBaseline 2 -Validators 2 -Seconds 480
 ```
+
+The `-Workers` list is applied to the role selected with `-SweepRole`
+(`publisher` by default). Other roles use their baseline parameters
+(`-PublisherBaseline`, `-Validators`, `-Correctors`,
+`-StatusWorkers`). Every count is constrained to **1–4**.
+Each worker-count variant has its own Compose project and data volumes;
+the launcher verifies the requested replica counts before and after
+load startup, and periodically while the workload runs. If Compose
+silently reduces a role's replicas, the run fails rather than producing
+invalid worker-sizing data.
 
 Review `summary.json` for `publication_cohort`,
 `submission_detection`, and `worker_timing.stage_lags`. These
