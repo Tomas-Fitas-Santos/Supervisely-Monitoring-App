@@ -7,11 +7,11 @@ which cover SDK HTTP requests and the application's own sync REST adapter.
 Use NIGHTJAR_WORKER_TIMING_FILE=/data/metrics/supervisely-timing.jsonl in
 the existing SINGLE live worker; do not run extra live publishers for timing.
 """
-from contextlib import contextmanager
 import json
 import os
 import re
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from threading import Lock
 from urllib.parse import urlsplit
