@@ -28,12 +28,12 @@ and scoring paths. Image batches never pretend to be source videos.
 
 ## Handoff rules
 
-The worker starts the armed image plan once the running video plan has
-structurally validated submissions covering **every distinct video frame**,
-with no open primary work packets. Assignment exhaustion or clicking Submit
-in Supervisely is insufficient. Partial submissions remain in correction;
-accepted frames and their reviews are retained. Monitor review does not need
-to finish before images begin.
+These are two separate queues, one per dataset and plan. The worker starts
+the armed image plan once **every primary video job has been assigned**.
+The next eligible annotator can receive an image job in the same worker poll.
+Assigned videos can still be in progress, awaiting submission, in correction,
+or under review. Their existing validation, correction, review, and scoring
+continue independently; neither dataset nor plan is merged or recreated.
 
 Activation also requires an active event and a complete image mirror. A
 paused video plan does not trigger activation. The transition is transactional,
@@ -55,7 +55,9 @@ Tests cover ZIP video imports followed by mounted unclassified images, both
 video queue modes, waiting before video approval, complete and partial
 submissions, image correction jobs, authorised image previews, monitor review
 and scoring, missing mirrors, cancellation, duplicate claims, and concurrent
-PostgreSQL activation/allocation. All remote writes in these tests use the SDK
+PostgreSQL activation/allocation. A synthetic 50,447-frame test checks the last
+video assignment and next image assignment without submitting the last video.
+All remote writes in these tests use the SDK
 test double; real event data is not used for mutations.
 
 A read-only production audit can verify remote IDs, names, dimensions, and

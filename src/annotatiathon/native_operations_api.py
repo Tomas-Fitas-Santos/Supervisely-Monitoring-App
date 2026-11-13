@@ -184,7 +184,7 @@ def launch_event(
         return {"status": plan.status, "plan_id": plan.id, "first_jobs": 0,
                 "after_plan_id": plan.after_plan_id,
                 "pending_operations": 0, "remote_writes_queued": False,
-                "note": ("Image plan armed. Waiting until every video frame passes submission validation."
+                "note": ("Image plan armed. Waiting until all video jobs have been assigned."
                          if plan.status == "waiting" else
                          "The worker will claim available blocks on its next poll.")}
     jobs = list(db.scalars(select(LabelingJob).where(

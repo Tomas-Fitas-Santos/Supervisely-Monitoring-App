@@ -1,4 +1,4 @@
-"""Durable video-first sequencing, gated on complete validated submissions."""
+"""Separate dataset queues with video assignments taking priority over images."""
 from fastapi import HTTPException
 from sqlalchemy import func, select
 
@@ -6,13 +6,9 @@ from .models import (
     AuditEvent,
     BalancedVideoRun,
     Event,
-    LabelingJob,
     LabelingPlan,
-    MediaAsset,
     MediaDataset,
-    ReviewSample,
     WorkBlock,
-    WorkPacket,
 )
 from .native_media_pool import mirror_status
 
@@ -43,31 +39,48 @@ def video_predecessor(db, event_id, dataset_id, plan_id):
     return parent
 
 
-def video_submissions_complete(db, parent):
-    """Never use queue exhaustion or remote Submit alone as the handoff signal."""
-    if parent.status != "running":
+def video_queue_exhausted(db, parent):
+    """Assigned video work may remain in progress, correction, or review."""
+    if parent.status != "running" or parent.allocation_mode not in VIDEO_MODES:
         return False
-    total = db.scalar(select(func.count(MediaAsset.id)).where(
-        MediaAsset.dataset_id == parent.dataset_id, MediaAsset.kind == "video_frame",
-    )) or 0
-    if not total:
+    source = db.get(MediaDataset, parent.dataset_id)
+    if source is None or not source.frame_count:
         return False
-    if db.scalar(select(LabelingJob.id).outerjoin(
-        WorkPacket, WorkPacket.job_id == LabelingJob.id,
-    ).where(
-        LabelingJob.plan_id == parent.id, LabelingJob.release_mode == "shared_primary",
-        WorkPacket.submitted_at.is_(None),
-    ).limit(1)):
-        return False
-    # Distinct source IDs prevent duplicate submissions from counting as coverage.
-    accepted = db.scalar(select(func.count(func.distinct(ReviewSample.media_id))).join(
-        LabelingJob, LabelingJob.id == ReviewSample.job_id,
-    ).join(MediaAsset, MediaAsset.id == ReviewSample.media_id).where(
-        LabelingJob.plan_id == parent.id, LabelingJob.release_mode == "shared_primary",
-        ReviewSample.validated_complete.is_(True),
-        MediaAsset.dataset_id == parent.dataset_id, MediaAsset.kind == "video_frame",
-    )) or 0
-    return accepted == total
+    if parent.allocation_mode == "balanced_30_v1":
+        rows = BalancedVideoRun
+        remaining = rows.next_offset < rows.frame_count
+    else:
+        rows = WorkBlock
+        remaining = rows.job_id.is_(None)
+    total = db.scalar(select(func.sum(rows.frame_count)).where(rows.plan_id == parent.id)) or 0
+    return total == source.frame_count and db.scalar(select(rows.id).where(
+        rows.plan_id == parent.id, remaining,
+    ).limit(1)) is None
+
+
+def activate_following_plan(db, parent):
+    """Caller holds the parent plan lock, before any annotator/team locks.
+
+    No commit: the caller atomically activates and optionally claims image work.
+    This permits the next free annotator to cross queues in the same worker poll.
+    """
+    child = db.scalar(select(LabelingPlan).where(
+        LabelingPlan.after_plan_id == parent.id,
+        LabelingPlan.status.in_(["waiting", "running"]),
+    ).with_for_update().execution_options(populate_existing=True))
+    if child is None or child.event_id != parent.event_id or not video_queue_exhausted(db, parent):
+        return None
+    if child.status == "waiting":
+        dataset = db.get(MediaDataset, child.dataset_id)
+        if (dataset is None or dataset.status != "ready"
+                or not mirror_status(db, dataset)["ready_for_automatic_jobs"]):
+            return None
+        child.status = "running"
+        db.add(AuditEvent(event_id=child.event_id, action="labeling.plan.sequence.start",
+                          target_type="labeling_plan", target_id=child.id,
+                          details={"after_plan_id": parent.id, "trigger": "video_queue_exhausted"}))
+        db.flush()
+    return child
 
 
 def activate_waiting_plans(db):
@@ -88,19 +101,6 @@ def activate_waiting_plans(db):
         parent = db.scalar(select(LabelingPlan).where(
             LabelingPlan.id == candidate.after_plan_id,
         ).with_for_update().execution_options(populate_existing=True))
-        plan = db.scalar(select(LabelingPlan).where(LabelingPlan.id == plan_id)
-                         .with_for_update().execution_options(populate_existing=True))
-        if (plan.status != "waiting" or parent is None
-                or parent.event_id != plan.event_id or not video_submissions_complete(db, parent)):
-            db.rollback()
-            continue
-        dataset = db.get(MediaDataset, plan.dataset_id)
-        if (dataset is None or dataset.status != "ready"
-                or not mirror_status(db, dataset)["ready_for_automatic_jobs"]):
-            db.rollback()
-            continue
-        plan.status = "running"
-        db.add(AuditEvent(event_id=plan.event_id, action="labeling.plan.sequence.start",
-                          target_type="labeling_plan", target_id=plan.id,
-                          details={"after_plan_id": parent.id}))
+        if parent is not None:
+            activate_following_plan(db, parent)
         db.commit()

@@ -89,6 +89,11 @@ def claim_primary_block(
     ).with_for_update(of=LabelingPlan))
     if plan is None:
         return None
+    if not include_repeats and plan.allocation_mode in {"shared_30_v1", "balanced_30_v1"}:
+        from .plan_sequence import activate_following_plan
+        following = activate_following_plan(db, plan)
+        if following is not None:
+            return claim_primary_block(db, following.id, team_id, person_id)
     team = db.scalar(select(CompetitionTeam).where(
         CompetitionTeam.id == team_id, CompetitionTeam.event_id == plan.event_id,
         CompetitionTeam.active.is_(True),

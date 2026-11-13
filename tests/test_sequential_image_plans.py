@@ -77,7 +77,7 @@ def setup_sequence(workflow, tmp_path, mode="shared_30_v1", approve_video=True):
 
 
 @pytest.mark.parametrize("mode", ["shared_30_v1", "balanced_30_v1"])
-def test_zip_videos_then_mounted_images_after_validated_submissions(workflow, tmp_path, mode, monkeypatch):
+def test_zip_videos_then_mounted_images_after_video_queue_exhaustion(workflow, tmp_path, mode, monkeypatch):
     http, maker, csrf, _, sdk = workflow
     parent, child, _videos, images, person, team, raw = setup_sequence(workflow, tmp_path, mode)
     uploaded = len(sdk.upload_history)
@@ -89,13 +89,16 @@ def test_zip_videos_then_mounted_images_after_validated_submissions(workflow, tm
     with maker() as db:
         assert db.get(m.LabelingPlan, parent).status == "approved"
     assert native.call(http, csrf, "/native/launch", {"plan_id": parent}).status_code == 200
+    # Keep the image mirror unavailable while the video queue is assigned.
+    with maker.begin() as db:
+        db.get(m.MediaDataset, images).mirrored_revision = 0
     for expected_size in (30, 30, 5):
         with maker() as db:
             job = claim_primary_block(db, parent, team, person)
             assert job is not None and job.frame_count == expected_size
             db.commit()
             assert process_once(db, sdk, db.get(m.SuperviselyConfig, 1))["status"] == "done"
-            # A remote Submit flag alone must not unlock the image plan.
+            # Neither submissions nor queue exhaustion bypass image mirror readiness.
             job.status = "on_review"
             job.submitted_at = 1
             db.commit()
@@ -173,6 +176,42 @@ def test_zip_videos_then_mounted_images_after_validated_submissions(workflow, tm
     assert (ranking["reviewed_frames"], ranking["correct_boxes"], ranking["correct_keypoints"]) == (1, 1, 4)
     # Inventory is frozen while either automatic plan can assign jobs.
     assert native.call(http, csrf, f"/datasets/{images}/mounted/sync").status_code == 409
+
+
+@pytest.mark.parametrize("mode", ["shared_30_v1", "balanced_30_v1"])
+def test_next_free_annotator_gets_images_before_last_video_submission(workflow, tmp_path, mode):
+    http, maker, csrf, _, sdk = workflow
+    parent, child, videos, images, person, team, _ = setup_sequence(workflow, tmp_path, mode)
+    assert native.call(http, csrf, "/native/launch", {"plan_id": parent}).status_code == 200
+    with maker.begin() as db:
+        other = db.scalar(select(m.Person).where(m.Person.id != person, m.Person.team_id == team))
+        assert other is not None
+        other.check_in_at = 1
+        other_id = other.id
+    for _ in range(2):
+        with maker() as db:
+            job = claim_primary_block(db, parent, team, person)
+            assert job.dataset_id == videos and job.frame_count == 30
+            db.commit()
+            assert process_once(db, sdk, db.get(m.SuperviselyConfig, 1))["status"] == "done"
+            assert capture_frame_submission(db, sdk, job)["pending"] == []
+            db.commit()
+            activate_waiting_plans(db)
+            assert db.get(m.LabelingPlan, child).status == "waiting"
+    with maker() as db:
+        last_video = claim_primary_block(db, parent, team, person)
+        assert last_video.dataset_id == videos and last_video.frame_count == 5
+        db.commit()
+        # No submission/validation of the final video and no extra worker poll.
+        image_job = claim_primary_block(db, parent, team, other_id)
+        assert image_job is not None and image_job.dataset_id == images
+        assert image_job.plan_id == child and image_job.frame_count == 30
+        assert db.get(m.WorkPacket, last_video.id).submitted_at is None
+        assert claim_primary_block(db, parent, team, person) is None
+        assert claim_primary_block(db, child, team, other_id) is None
+        db.commit()
+        assert db.get(m.LabelingPlan, parent).status == "running"
+        assert db.get(m.LabelingPlan, child).status == "running"
 
 
 def test_sequence_guards_and_cancel_only_unstarted_image_plan(workflow, tmp_path):

@@ -281,7 +281,7 @@ export function CompetitionScreen({auth,view="progress"}:{
     try {
       await api("/labeling/plans/"+plan.id+"/approve","POST",undefined,auth.csrf_token);
       setNotice(plan.mode==="images_30_v1"?
-        "Image queue approved. Arm it to wait for all video submissions, or launch if it has no preceding plan.":
+        "Image queue approved. Arm it to wait until all video jobs are assigned, or launch if it has no preceding plan.":
         plan.mode==="balanced_30_v1"?
         "Balanced queue approved at its prepared revision. Launch to allocate 30-frame jobs to eligible individuals.":
         plan.mode==="shared_30_v1"?
@@ -635,7 +635,7 @@ export function CompetitionScreen({auth,view="progress"}:{
           </option>)}
       </select></label>}
       <p className="muted small">{planMode==="images_30_v1"?
-        "Use a separate standalone-image dataset, uploaded or mounted. Jobs contain up to 30 images. When linked to a video plan, images wait until every video frame passes submission validation; monitor review may continue. Approve and arm this plan to enable the automatic handoff.":
+        "Use a separate standalone-image dataset, uploaded or mounted. Jobs contain up to 30 images. Once all video jobs are assigned, the next free annotator receives an image job. Video submissions, corrections and review continue independently. Approve and arm this plan to enable the automatic handoff.":
         planMode==="balanced_30_v1"?
         "Prepare once from complete source videos, with no roster required. Assign 30 frames per individual job, prioritising unfinished videos and least-covered morphology groups. Launch only after the full dataset is mirrored.":
         planMode==="shared_30_v1"?
@@ -735,9 +735,9 @@ export function CompetitionScreen({auth,view="progress"}:{
             plan.mode==="shared_30_v1"?"Shared 30-image queue":
             plan.jobs_per_team===0?"Manual assignments":"Whole-video plan"} · {plan.status}</strong>
             <span>{datasets.find(item=>item.id===plan.dataset_id)?.name||plan.dataset_id}</span>
-            {plan.after_plan_id&&<span>Starts after all validated video submissions from {datasets.find(d=>
+            {plan.after_plan_id&&<span>Starts after all video jobs are assigned from {datasets.find(d=>
               d.id===plans.find(p=>p.id===plan.after_plan_id)?.dataset_id)?.name||"the linked video plan"}.
-              {plan.status==="waiting"&&" Armed · waiting for video submissions."}</span>}
+              {plan.status==="waiting"&&" Armed · waiting for video assignments."}</span>}
             <span>{plan.mode==="balanced_30_v1"?
               "Prepared complete videos; balanced 30-frame individual jobs":
               plan.mode==="images_30_v1"?"Up to 30 standalone images per job":
@@ -751,7 +751,7 @@ export function CompetitionScreen({auth,view="progress"}:{
               onClick={()=>void cancelBalanced(plan.id)}>Cancel plan</button>}
           {plan.status==="approved"&&<button className="btn primary" disabled={busy}
             onClick={()=>void nativeAction("/native/launch",
-              plan.after_plan_id?"Arm this image queue? It will start automatically only after every video frame passes submission validation.":
+              plan.after_plan_id?"Arm this image queue? It will start automatically once all video jobs are assigned. Existing video work continues independently.":
               plan.mode!=="legacy"?
                 "Launch this prepared queue? Workers will assign individual jobs only to eligible annotators.":
                 "Launch this plan? The worker creates one native job per individual annotator.",

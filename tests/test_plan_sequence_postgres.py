@@ -65,6 +65,8 @@ def test_concurrent_handoff_and_image_claims():
         db.add(m.WorkBlock(event_id=event, plan_id=child, video_id=None, ordinal=2, frame_count=1,
             media_ids=image_ids[30:], repeat_media_ids=[]))
         db.flush()
+        db.add(m.WorkBlock(event_id=event, plan_id=parent, video_id=video, ordinal=1,
+            frame_count=1, media_ids=[frame], repeat_media_ids=[], job_id=source_job))
         db.add(m.WorkPacket(event_id=event, job_id=source_job, person_id=people[0], submitted_at=1))
         db.add(m.ReviewSample(event_id=event, job_id=source_job, team_id=team, media_id=frame,
             correction_round=0, validated_complete=True, snapshot={}))
