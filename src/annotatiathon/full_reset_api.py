@@ -206,8 +206,14 @@ def clear_event_data(db: Session, event_id: str) -> None:
     if datasets:
         stage = Base.metadata.tables["dataset_staged_files"]
         db.execute(delete(stage).where(stage.c.dataset_id.in_(datasets)))
+        # Append file progress has no event_id; remove it before its batch.
+        append_batches = Base.metadata.tables["dataset_append_batches"]
+        append_files = Base.metadata.tables["dataset_append_files"]
+        batch_ids = select(append_batches.c.id).where(
+            append_batches.c.dataset_id.in_(datasets))
+        db.execute(delete(append_files).where(append_files.c.batch_id.in_(batch_ids)))
     for table in reversed(Base.metadata.sorted_tables):
-        if table.name in PRESERVED or table.name == "dataset_staged_files":
+        if table.name in PRESERVED or table.name in {"dataset_staged_files", "dataset_append_files"}:
             continue
         if "event_id" in table.c:
             db.execute(delete(table).where(table.c.event_id == event_id))
