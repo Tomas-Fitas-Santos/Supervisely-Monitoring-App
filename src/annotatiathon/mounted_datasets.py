@@ -389,6 +389,9 @@ def run_indexer(*, once: bool = False, poll_seconds: int = 8) -> None:
                 from .dataset_append import process_append_once
                 result = process_append_once(db)
                 if result is None:
+                    from .balanced_queue import process_preparation_once
+                    result = process_preparation_once(db)
+                if result is None:
                     result = process_mounted_index_once(db)
             if result is not None:
                 logger.info(

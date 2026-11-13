@@ -9,6 +9,7 @@ from .coverage_api import router as coverage_router
 from .database import database_is_ready
 from .datasets_api import router as datasets_router
 from .dataset_append import router as dataset_append_router
+from .balanced_queue import router as balanced_queue_router
 from .events_api import router as events_router
 from .full_reset_api import router as full_reset_router
 from .labeling_api import router as labeling_router
@@ -56,6 +57,7 @@ app.include_router(native_export_router)
 app.include_router(monitoring_router)
 app.include_router(datasets_router)
 app.include_router(dataset_append_router)
+app.include_router(balanced_queue_router)
 app.include_router(mounted_datasets_router)
 app.include_router(labeling_router)
 app.include_router(manual_jobs_router)

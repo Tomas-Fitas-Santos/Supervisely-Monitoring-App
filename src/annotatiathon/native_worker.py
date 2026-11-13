@@ -1800,6 +1800,9 @@ def worker_cycle(lane: str) -> bool:
                 from .dataset_append import process_append_once
                 if process_append_once(db) is not None:
                     return True
+                from .balanced_queue import process_preparation_once
+                if process_preparation_once(db) is not None:
+                    return True
             config = db.get(SuperviselyConfig, 1)
             if (config is None or not config.verified or config.team_id is None
                     or config.workspace_id is None):

@@ -170,6 +170,9 @@ def launch_event(
                 detail="Complete the full dataset replication to Supervisely "
                        "before launching automatic jobs.",
             ) from exc
+    if plan.allocation_mode == "balanced_30_v1":
+        from .balanced_queue import validate_prepared_plan
+        validate_prepared_plan(db, plan)
     if plan.queue_seed:
         plan.status = "running"
         db.add(AuditEvent(staff_id=ctx.staff.id, event_id=event.id, action="labeling.plan.launch",

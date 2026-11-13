@@ -110,6 +110,10 @@ def claim_primary_block(
     # The exclusive plan lock serializes claims. Event is only an eligibility
     # check here: also locking it creates Event/Plan lock-order deadlocks
     # against validation and status reconciliation transactions.
+    if plan.allocation_mode == "balanced_30_v1":
+        from .balanced_queue import allocate_balanced_claim
+        event = db.get(Event, plan.event_id)
+        return allocate_balanced_claim(db, plan, event, team.id, person.id)
     # New plans store
     # dataset-wide ordinals; sorting by anchor-video name also preserves the
     # order of pre-upgrade plans whose ordinals restarted for each video.

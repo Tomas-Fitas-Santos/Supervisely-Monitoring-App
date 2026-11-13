@@ -47,7 +47,7 @@ def list_annotation_classes(
 class PlanInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     dataset_id: str
-    mode: Literal["legacy", "shared_30_v1"] = "legacy"
+    mode: Literal["legacy", "shared_30_v1", "balanced_30_v1"] = "legacy"
     jobs_per_team: int = Field(default=4, ge=1, le=100)
     redundancy: int = Field(default=1, ge=1, le=1)
     video_limit: int | None = Field(default=None, ge=0, le=100000)
@@ -308,7 +308,7 @@ def create_plan(
     # assignee in an eligible team (see work_queue.claim_primary_block).
     # Legacy whole-video planning creates per-person jobs immediately, so
     # it continues to require at least one valid team with members.
-    if payload.mode != "shared_30_v1":
+    if payload.mode not in {"shared_30_v1", "balanced_30_v1"}:
         if not teams:
             raise HTTPException(status_code=422, detail="Import competition teams first.")
         for team in teams:
@@ -331,6 +331,36 @@ def create_plan(
         LabelingJob.dataset_id == dataset.id,
     )))
     reserved = {mid for job in prior_jobs for mid in job.media_ids}
+    if payload.mode == "balanced_30_v1":
+        # Preparation is explicit, local and revision-fenced. Rosters and
+        # native credentials are only required at actual job distribution.
+        from .balanced_queue import install_prepared_runs
+        if prior_jobs or db.scalar(select(LabelingPlan.id).where(
+            LabelingPlan.dataset_id == dataset.id,
+            LabelingPlan.status.in_(["approved", "running", "paused"]),
+        ).limit(1)):
+            raise HTTPException(409, "Dataset already has assignments or an active plan.")
+        plan = LabelingPlan(
+            event_id=event.id, dataset_id=dataset.id, jobs_per_team=0,
+            redundancy=1, created_by=ctx.staff.id, queue_seed=identifier(),
+            allocation_mode="balanced_30_v1",
+            prepared_revision=dataset.inventory_revision,
+        )
+        db.add(plan)
+        db.flush()
+        count = install_prepared_runs(db, plan, dataset)
+        from .models import DatasetPreparedQueue
+        prepared = db.get(DatasetPreparedQueue, dataset.id)
+        db.add(AuditEvent(
+            staff_id=ctx.staff.id, event_id=event.id,
+            action="balanced.plan.create", target_type="labeling_plan",
+            target_id=plan.id,
+            details={"inventory_revision": dataset.inventory_revision, "videos": count},
+        ))
+        db.commit()
+        return {"plan_id": plan.id, "status": plan.status,
+                "mode": payload.mode, "prepared_revision": plan.prepared_revision,
+                **prepared.summary}
     if payload.mode == "shared_30_v1":
         if reserved or payload.video_limit is not None:
             raise HTTPException(status_code=409, detail="Use an unassigned dataset without a video limit for the shared queue.")
@@ -389,7 +419,8 @@ def create_plan(
             stream.extend((video_id, asset.id) for asset in source_frames)
 
         plan = LabelingPlan(event_id=event.id, dataset_id=dataset.id, jobs_per_team=0,
-                            redundancy=1, created_by=ctx.staff.id, queue_seed=identifier())
+                            redundancy=1, created_by=ctx.staff.id, queue_seed=identifier(),
+                            allocation_mode="shared_30_v1")
         db.add(plan)
         db.flush()
         blocks = []
@@ -490,7 +521,8 @@ def list_plans(
     ).order_by(LabelingPlan.created_at.desc())).all()
     return {"items": [{
         "id": p.id, "dataset_id": p.dataset_id, "status": p.status,
-        "mode": "shared_30_v1" if p.queue_seed else "legacy",
+        "mode": (p.allocation_mode if p.allocation_mode == "balanced_30_v1"
+                 else "shared_30_v1" if p.queue_seed else "legacy"),
         "jobs_per_team": p.jobs_per_team, "redundancy": p.redundancy,
         "video_limit": p.video_limit, "created_at": p.created_at,
         "approved_at": p.approved_at,
@@ -527,6 +559,9 @@ def approve_plan(
     dataset = get_dataset(db, event.id, plan.dataset_id)
     if dataset.status != "ready":
         raise HTTPException(status_code=409, detail="Dataset is not ready.")
+    if plan.allocation_mode == "balanced_30_v1":
+        from .balanced_queue import validate_prepared_plan
+        validate_prepared_plan(db, plan)
     plan.status = "approved"
     plan.approved_at = epoch()
     db.add(AuditEvent(

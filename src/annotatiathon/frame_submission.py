@@ -168,6 +168,11 @@ def capture_frame_submission(db: Session, api, job: LabelingJob, *,
         accepted.append(media_id)
     with code_timing("validation.persist_accepted_frames", job_id=job.id):
         db.flush()
+        if accepted:
+            # The same transaction protects ReviewSample and accepted-video
+            # progress. Lost validation leases roll both changes back.
+            from .balanced_queue import record_balanced_acceptance
+            record_balanced_acceptance(db, job, accepted)
         pending = pending_ids(db, job)
     job.annotation_snapshot_round = round_number
     job.annotation_snapshot_frames = job.frame_count - len(pending)

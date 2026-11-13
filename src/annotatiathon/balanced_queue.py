@@ -315,7 +315,6 @@ def allocate_balanced_claim(db: Session, plan: LabelingPlan, event: Event,
             opened_species[(row.morphology_group, row.source_folder)] += 1
     selected = []
     slots = 30
-    sequence = []
     tails = sorted(
         (row for row in runs if 0 < row.next_offset < row.frame_count),
         key=lambda row: (row.frame_count - row.next_offset,
@@ -328,7 +327,9 @@ def allocate_balanced_claim(db: Session, plan: LabelingPlan, event: Event,
         selected.append((row, row.next_offset, count))
         slots -= count
     while slots and not sealed:
-        unopened = [row for row in runs if row.next_offset == 0]
+        selected_ids = {row.id for row, _, _ in selected}
+        unopened = [row for row in runs if row.next_offset == 0
+                    and row.id not in selected_ids]
         if not unopened:
             break
         row = min(unopened, key=lambda x: (
@@ -342,30 +343,11 @@ def allocate_balanced_claim(db: Session, plan: LabelingPlan, event: Event,
         slots -= count
         projected[row.morphology_group] += row.frame_count
         opened_species[(row.morphology_group, row.source_folder)] += 1
-        # Mark it unavailable to this selection without touching its cursor
-        # until the complete assignment is verified and ready to commit.
-        unopened.remove(row)
-        if slots and not any(other.next_offset == 0 and
-                             other.id not in {r.id for r, _, _ in selected}
-                             for other in runs):
-            break
-        # Exclusion of already chosen rows is applied in the next iteration.
-        # The cursor is updated only after frame lookup succeeds.
-        if slots:
-            next_candidate = [other for other in runs if other.next_offset == 0
-                              and other.id not in {r.id for r, _, _ in selected}]
-            if not next_candidate:
-                break
-            # Replace the next pass's candidate source with the filtered list.
-            # (Any remaining rows of this batch have unique video IDs.)
-            # Unopened selection is recomputed at the top.
     if not selected:
         return None
     # Under the finish-window seal, a short tail is permitted only when all
     # eligible unassigned frames have been exhausted, never because one video
     # lacks 30 frames.
-    if slots and (not sealed and len(selected) == 0):
-        return None
     frame_ids = []
     morph = Counter()
     for row, offset, size in selected:
@@ -497,7 +479,7 @@ def balanced_manifest(
                     continue
                 assets = session.execute(select(
                     MediaAsset.id, MediaAsset.frame_index, MediaAsset.sha256,
-                    ReviewSample.id, ReviewSample.snapshot, LabelingJob.review_status,
+                    ReviewSample.id, LabelingJob.review_status,
                 ).join(
                     ReviewSample, ReviewSample.media_id == MediaAsset.id,
                 ).join(
@@ -507,7 +489,7 @@ def balanced_manifest(
                     LabelingJob.plan_id == plan_id,
                     ReviewSample.validated_complete.is_(True),
                 ).order_by(MediaAsset.frame_index).execution_options(yield_per=200))
-                for asset_id, ordinal, sha, snapshot_id, _snapshot, review_status in assets:
+                for asset_id, ordinal, sha, snapshot_id, review_status in assets:
                     yield json.dumps({
                         "type": "frame", "source_video": run.video_group,
                         "group": run.morphology_group, "species": run.source_folder,
