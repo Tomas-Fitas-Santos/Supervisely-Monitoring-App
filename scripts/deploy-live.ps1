@@ -36,20 +36,30 @@ try {
   & docker compose @compose config --quiet
   Check-LastExit "Compose configuration validation"
 
-  # Remember whether the native worker was active before deployment. Previously
-  # this script ALWAYS stopped it and silently left it stopped unless the
-  # organiser passed -StartWorker, stranding queued dataset mirrors.
-  $workerWasRunning = $false
-  $runningWorkerIds = @(& docker compose @compose --profile native ps --status running -q worker)
-  Check-LastExit "Checking current Supervisely worker state"
-  $workerWasRunning = @($runningWorkerIds | Where-Object { $_ }).Count -gt 0
-  $mirrorIds = @(& docker compose @compose --profile native ps --status running -q mirror-worker)
-  Check-LastExit "Checking current Supervisely mirror state"
-  $mirrorWasRunning = @($mirrorIds | Where-Object { $_ }).Count -gt 0
+  # Fixed production fleet. Preserve whether ANY SDK lane was previously
+  # active; never restart only the old all-in-one worker after deployment.
+  $nativeCounts = [ordered]@{
+    "worker" = 4
+    "validation-worker" = 3
+    "correction-worker" = 3
+    "status-worker" = 1
+    "recovery-worker" = 1
+    "bulk-worker" = 1
+    "mirror-worker" = 1
+  }
+  $nativeServices = @($nativeCounts.Keys)
+  $nativeWasRunning = $false
+  foreach ($service in $nativeServices) {
+    $runningIds = @(& docker compose @compose --profile native ps --status running -q $service)
+    Check-LastExit "Checking $service state"
+    if (@($runningIds | Where-Object { $_ }).Count -gt 0) {
+      $nativeWasRunning = $true
+    }
+  }
 
-  # Pause native writes before the consistent PostgreSQL backup and upgrade.
-  & docker compose @compose --profile native stop worker mirror-worker api web indexer
-  Check-LastExit "Stopping web/API/native worker"
+  # Pause every SDK lane before the consistent PostgreSQL backup and upgrade.
+  & docker compose @compose --profile native stop @nativeServices api web indexer
+  Check-LastExit "Stopping web/API/native worker fleet"
   & docker compose @compose up -d --wait db
   Check-LastExit "Starting existing PostgreSQL service"
 
@@ -89,31 +99,29 @@ try {
   Write-Host ""
   Write-Host "Nightjar web/API is healthy on port $healthPort. Mounted dataset indexer is enabled."
 
-  # The SDK upload lane has its own container so large media transfers
-  # do not occupy the publisher/status/validation worker. Preserve running
-  # state on upgrade, and start both with -StartWorker after verification.
-  if ($StartWorker -or $workerWasRunning) {
-    & docker compose @compose --profile native up -d --build worker
-    Check-LastExit "Starting native job worker"
-    $jobIds = @(& docker compose @compose --profile native ps --status running -q worker)
-    Check-LastExit "Checking native job worker"
-    if (@($jobIds | Where-Object { $_ }).Count -eq 0) {
-      throw "Supervisely job worker is not running; inspect its logs."
+  # Start every role from the same rebuilt code. --no-deps prevents
+  # re-running the migration or recreating the persistent PostgreSQL service.
+  if ($StartWorker -or $nativeWasRunning) {
+    $scales = @("--scale", "worker=4",
+                "--scale", "validation-worker=3",
+                "--scale", "correction-worker=3")
+    & docker compose @compose --profile native up -d --build --no-deps @scales @nativeServices
+    Check-LastExit "Starting dedicated production SDK worker fleet"
+    foreach ($service in $nativeServices) {
+      $runningIds = @(& docker compose @compose --profile native ps --status running -q $service)
+      Check-LastExit "Checking $service"
+      $actual = @($runningIds | Where-Object { $_ }).Count
+      $expected = $nativeCounts[$service]
+      if ($actual -ne $expected) {
+        throw "Expected $expected running $service container(s); found $actual. Database and jobs were not deleted."
+      }
+      Write-Host "$service : $actual running"
     }
+    Write-Host "Production native topology active: 4 publishers, 3 validators, 3 correctors, 1 status, 1 recovery, 1 bulk, 1 mirror."
   }
-  if ($StartWorker -or $workerWasRunning -or $mirrorWasRunning) {
-    & docker compose @compose --profile native up -d --build mirror-worker
-    Check-LastExit "Starting dedicated source upload worker"
-    $uploadIds = @(& docker compose @compose --profile native ps --status running -q mirror-worker)
-    Check-LastExit "Checking dedicated source upload worker"
-    if (@($uploadIds | Where-Object { $_ }).Count -eq 0) {
-      throw "Supervisely upload worker is not running; inspect mirror-worker logs."
-    }
-    Write-Host "Media uploads and native job processing now run in separate containers."
-  }
-  if (-not ($StartWorker -or $workerWasRunning -or $mirrorWasRunning)) {
-    Write-Host "SDK workers were stopped and remain stopped; verified integration is required before starting them."
-    Write-Host "docker compose --env-file .env.live -f compose.live.yaml --profile native up -d worker mirror-worker"
+  else {
+    Write-Host "SDK workers remain stopped. Start after verifying shared Supervisely Team/Workspace credentials:"
+    Write-Host ".\\scripts\\deploy-live.ps1 -StartWorker"
   }
 }
 finally {
