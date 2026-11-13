@@ -166,7 +166,8 @@ def test_full_lifecycle_uses_real_import_mirror_queue_and_review_actions():
     compose = (root / "compose.benchmark.yaml").read_text(encoding="utf-8")
     assert '{"initial", "turnaround", "full"}' in fixture
     assert 'if PHASE == "full":' in fixture
-    assert 'range(ANNOTATORS + 60)' in fixture
+    assert 'FULL_FOLLOWUPS = max(1, ANNOTATORS // 5)' in fixture
+    assert 'range(ANNOTATORS + FULL_FOLLOWUPS)' in fixture
     assert 'frame_{frame * 5 + 1:08d}.jpg' in fixture
     for endpoint in (
         "/api/v1/datasets/uploads",
