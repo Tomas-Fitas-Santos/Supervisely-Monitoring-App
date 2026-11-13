@@ -184,7 +184,7 @@ def test_full_lifecycle_uses_real_import_mirror_queue_and_review_actions():
     assert 'BENCHMARK_SQL_TIMING' in runner
     assert 'BENCHMARK_SQL_TIMING:' in compose
     assert '$flow.mirrored_frames -ne $flow.source_frames' in runner
-    assert '$flow.jobs_with_native_bindings -lt 300' in runner
+    assert '$flow.jobs_with_native_bindings -lt 360' in runner
 
 
 def test_code_hotspots_and_sql_query_timing_are_exposed_in_summary():
