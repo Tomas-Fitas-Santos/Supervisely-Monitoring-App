@@ -1,6 +1,7 @@
+import { RefreshButton } from "./refresh_button";
 import { confirmAction } from "./dialogs";
 import { useCallback, useEffect, useState } from "react";
-import { CheckCircle2, RefreshCw, ShieldCheck, UsersRound } from "lucide-react";
+import { CheckCircle2, ShieldCheck, UsersRound } from "lucide-react";
 import { api, type Auth } from "./api";
 
 type Assignment={
@@ -78,8 +79,7 @@ export function MonitorAssignmentsPanel({auth,onApplied}:{
     <div className="monitor-panel-actions"><button className="btn secondary"
       onClick={()=>{setOpen(x=>!x);setPlan(null);}}>
       {open?"Close assignments":"Manage monitor assignments"}</button>
-      {open&&<button className="btn secondary" disabled={busy}
-        onClick={()=>void refresh()}><RefreshCw size={15}/> Refresh</button>}
+      {open&&<RefreshButton refresh={refresh} disabled={busy} onError={e=>setError((e as Error).message)}>Refresh</RefreshButton>}
     </div>
     {error&&<div role="alert" className="alert danger">{error}</div>}
     {notice&&<div role="status" className="alert success">{notice}</div>}
