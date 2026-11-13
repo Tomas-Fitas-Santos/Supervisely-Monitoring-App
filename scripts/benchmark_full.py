@@ -121,6 +121,14 @@ def seed(frames):
             for previous in db.scalars(select(m.LabelingJob)):
                 previous.status = "completed"
                 previous.review_status = "accepted"
+            # The previous turnaround fixture deliberately leaves one
+            # WorkPacket open per participant. For a genuinely fresh queue
+            # these synthetic historical packets must be closed, otherwise
+            # claim_primary_block correctly refuses every new assignment.
+            for packet in db.scalars(select(m.WorkPacket).where(
+                m.WorkPacket.submitted_at.is_(None),
+            )):
+                packet.submitted_at = m.epoch()
         if PHASE == "initial":
             # No queue is released before the timed burst. The load process
             # atomically activates the plan and enqueues exactly 300 jobs.
