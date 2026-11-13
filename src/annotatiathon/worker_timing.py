@@ -7,6 +7,7 @@ which cover SDK HTTP requests and the application's own sync REST adapter.
 Use NIGHTJAR_WORKER_TIMING_FILE=/data/metrics/supervisely-timing.jsonl in
 the existing SINGLE live worker; do not run extra live publishers for timing.
 """
+from contextlib import contextmanager
 import json
 import os
 import re
@@ -67,6 +68,26 @@ def milestone(stage: str, *, job_id: str | None = None,
     if frame_count is not None:
         record["frame_count"] = frame_count
     _write(record)
+
+
+@contextmanager
+def code_timing(name: str, *, job_id: str | None = None):
+    """Wall time of one named Python code path (including waits and I/O).
+
+    Only static names chosen in code are emitted. Never record arguments,
+    exceptions, file paths or any raw submission/credential data.
+    """
+    start = time.perf_counter()
+    try:
+        yield
+    finally:
+        if _output is not None:
+            row = {"kind": "code", "unix_ms": round(time.time() * 1000),
+                   "name": name,
+                   "duration_ms": round((time.perf_counter() - start) * 1000, 3)}
+            if job_id is not None:
+                row["job_id"] = job_id
+            _write(row)
 
 
 def enable(path: str | os.PathLike[str]) -> None:
