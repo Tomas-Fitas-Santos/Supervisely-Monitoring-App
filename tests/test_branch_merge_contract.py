@@ -3,8 +3,8 @@
 These ensure the older closeout feature cannot accidentally replace modern
 annotation review, 300-participant worker logic or the live Alembic chain.
 """
-from pathlib import Path
 import re
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
