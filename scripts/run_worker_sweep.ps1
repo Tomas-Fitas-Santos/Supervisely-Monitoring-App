@@ -275,6 +275,8 @@ try {
       }
       & python scripts/analyze_full_benchmark.py $out
       if ($LASTEXITCODE -ne 0) { throw "Benchmark result analysis failed." }
+      & python scripts/report_full_workflow.py $out
+      if ($LASTEXITCODE -ne 0) { throw "Benchmark pipeline diagnostic report failed." }
       $report = Get-Content (Join-Path $out "summary.json") -Raw | ConvertFrom-Json
       $errors = if ($null -eq $report.http_errors) { 0 } else { @($report.http_errors).Count }
       $published = [int]$report.workload.simulator.published
