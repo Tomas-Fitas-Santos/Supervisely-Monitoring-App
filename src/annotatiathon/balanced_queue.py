@@ -319,38 +319,21 @@ def allocate_balanced_claim(db: Session, plan: LabelingPlan, event: Event,
     """Called ONLY after team, individual, open-packet and plan row locks."""
     from .native_operations_api import queue_publish
 
-    runs = list(db.scalars(select(BalancedVideoRun).where(
-        BalancedVideoRun.plan_id == plan.id,
-    ).order_by(BalancedVideoRun.selection_order, BalancedVideoRun.id)))
-    if not runs:
-        return None
+    run = BalancedVideoRun
     finish_window = int(os.environ.get("NIGHTJAR_BALANCED_FINISH_WINDOW_SECONDS", "3600"))
     sealed = event.end_at is not None and epoch() >= event.end_at - max(finish_window, 0)
-    remaining_total = sum(row.frame_count - row.next_offset for row in runs)
-    if not remaining_total:
-        return None
-
-    # Started, unfinished tails have priority. Unopened groups are chosen by
-    # projected COMPLETE-video supply so scarce groups get dispatched first.
     soft_target = max(1, int(os.getenv("NIGHTJAR_BALANCED_UNFINISHED_SOFT_TARGET", "16")))
-    unfinished_before = sum(
-        0 < row.next_offset and row.accepted_count < row.frame_count
-        for row in runs
-    )
-    projected = Counter()
-    opened_species = Counter()
-    for row in runs:
-        if row.next_offset:
-            projected[row.morphology_group] += row.frame_count
-            opened_species[(row.morphology_group, row.source_folder)] += 1
+    unfinished_before = db.scalar(select(func.count()).select_from(run).where(
+        run.plan_id == plan.id, run.next_offset > 0, run.accepted_count < run.frame_count,
+    ))
     selected = []
     slots = 30
-    tails = sorted(
-        (row for row in runs if 0 < row.next_offset < row.frame_count),
-        key=lambda row: (row.frame_count - row.accepted_count,
-                         row.frame_count - row.next_offset,
-                         row.selection_order, row.id),
-    )
+    # Every run contributes at least one frame: 30 rows suffice even when all
+    # remaining tails contain one frame. The partial index supplies this order.
+    tails = db.scalars(select(run).where(
+        run.plan_id == plan.id, run.next_offset > 0, run.next_offset < run.frame_count,
+    ).order_by(run.frame_count - run.accepted_count,
+               run.frame_count - run.next_offset, run.selection_order, run.id).limit(30))
     for row in tails:
         if not slots:
             break
@@ -358,22 +341,39 @@ def allocate_balanced_claim(db: Session, plan: LabelingPlan, event: Event,
         selected.append((row, row.next_offset, count))
         slots -= count
     while slots and not sealed:
-        selected_ids = {row.id for row, _, _ in selected}
-        unopened = [row for row in runs if row.next_offset == 0
-                    and row.id not in selected_ids]
-        if not unopened:
+        selected_ids = [row.id for row, _, _ in selected]
+        # Include newly selected videos in projected COMPLETE-video supply,
+        # without advancing cursors before frame identity validation succeeds.
+        # Aggregation and ranking stay in SQL; only one candidate is hydrated.
+        opened = select(
+            run.morphology_group.label("morphology_group"),
+            run.source_folder.label("source_folder"),
+            func.sum(run.frame_count).label("frames"),
+            func.count().label("videos"),
+        ).where(run.plan_id == plan.id, or_(
+            run.next_offset > 0, run.id.in_(selected_ids),
+        )).group_by(run.morphology_group, run.source_folder).cte("opened")
+        groups = select(
+            opened.c.morphology_group,
+            func.sum(opened.c.frames).label("frames"),
+        ).group_by(opened.c.morphology_group).subquery()
+        row = db.scalar(select(run).outerjoin(
+            groups, groups.c.morphology_group == run.morphology_group,
+        ).outerjoin(opened, (
+            (opened.c.morphology_group == run.morphology_group)
+            & (opened.c.source_folder == run.source_folder)
+        )).where(
+            run.plan_id == plan.id, run.next_offset == 0,
+            run.id.not_in(selected_ids),
+        ).order_by(
+            func.coalesce(groups.c.frames, 0), func.coalesce(opened.c.videos, 0),
+            run.morphology_group, run.source_folder, run.selection_order, run.id,
+        ).limit(1))
+        if row is None:
             break
-        row = min(unopened, key=lambda x: (
-            projected[x.morphology_group],
-            opened_species[(x.morphology_group, x.source_folder)],
-            x.morphology_group, x.source_folder,
-            x.selection_order, x.id,
-        ))
         count = min(slots, row.frame_count)
         selected.append((row, 0, count))
         slots -= count
-        projected[row.morphology_group] += row.frame_count
-        opened_species[(row.morphology_group, row.source_folder)] += 1
     if not selected:
         return None
     # Under the finish-window seal, a short tail is permitted only when all
@@ -415,9 +415,9 @@ def allocate_balanced_claim(db: Session, plan: LabelingPlan, event: Event,
     db.add(job)
     db.flush()
     db.add(WorkPacket(job_id=job.id, event_id=plan.event_id, person_id=person_id))
-    unfinished_after = sum(
-        0 < row.next_offset and row.accepted_count < row.frame_count
-        for row in runs
+    unfinished_after = unfinished_before + sum(
+        offset == 0 and row.accepted_count < row.frame_count
+        for row, offset, _ in selected
     )
     if unfinished_after > soft_target and unfinished_after > unfinished_before:
         db.add(AuditEvent(
