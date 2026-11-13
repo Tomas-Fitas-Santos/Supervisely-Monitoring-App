@@ -283,3 +283,21 @@ def test_full_workflow_diagnostic_report_marks_failures_and_identifies_slowest_s
     assert module.explain(summary)["fully_accepted"] is True
     summary["workload"]["full_flow"]["operation_kinds"]["publish_job:done"] = 299
     assert module.explain(summary)["fully_accepted"] is False
+
+
+
+def test_full_simulator_recognizes_actual_correction_names():
+    import importlib.util
+    from pathlib import Path
+
+    script = Path(__file__).resolve().parents[1] / "scripts" / "benchmark_full.py"
+    spec = importlib.util.spec_from_file_location("nightjar_benchmark_corrections", script)
+    assert spec is not None and spec.loader is not None
+    bench = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bench)
+
+    assert bench.is_correction_job_title("Job 001 · Incomplete")
+    assert bench.is_correction_job_title("Job 001 · Incomplete (3)")
+    assert bench.is_correction_job_title("Job 001 (Incomplete #3)")
+    assert not bench.is_correction_job_title("Job 001")
+    assert not bench.is_correction_job_title("Bird video · Incomplete plumage")
