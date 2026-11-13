@@ -15,7 +15,6 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .frame_completion import frame_completion_errors
-from .worker_timing import code_timing
 from .models import (
     LabelingJob,
     MediaAsset,
@@ -26,6 +25,7 @@ from .models import (
     WorkPacket,
     epoch,
 )
+from .worker_timing import code_timing
 
 
 class FrameSubmissionError(ValueError):
