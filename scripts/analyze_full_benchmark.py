@@ -126,26 +126,33 @@ def summarize(directory):
                         received[0] - started if received else None),
                 "one_hundred_fiftieth_confirmed_ms": (
                     original_confirms[149] - origin if len(original_confirms) >= 150 else None
-                ) if phase == "initial" else None,
+                ) if phase == "initial" else (
+                    received[149] - started if phase == "full"
+                    and len(received) >= 150 else None
+                ),
                 "two_hundred_ninetieth_confirmed_ms": (
                     original_confirms[289] - origin if len(original_confirms) >= 290 else None
                 ) if phase == "initial" else (
                     received[289] - started if len(received) >= 290 else None),
                 "three_hundredth_confirmed_ms": (
                     original_confirms[299] - origin if len(original_confirms) >= 300 else None
-                ) if phase == "initial" else None,
+                ) if phase == "initial" else (
+                    received[299] - started if phase == "full"
+                    and len(received) >= 300 else None
+                ),
                 "last_observed_confirmed_ms": (
                     original_confirms[-1] - origin if original_confirms else None
                 ) if phase == "initial" else (received[-1] - started if received else None),
             }
-            if phase == "initial":
-                cohort["remaining_unpublished"] = max(0, 300 - len(original_confirms))
+            if phase in {"initial", "full"}:
+                count = len(original_confirms) if phase == "initial" else len(received)
+                cohort["remaining_unpublished"] = max(0, 300 - count)
                 cohort["confirmed_per_minute_observed"] = round(
-                    60000 * len(original_confirms) /
+                    60000 * count /
                     max(1, cohort["last_observed_confirmed_ms"] or 1), 2
                 )
             result["publication_cohort"] = cohort
-            if phase == "turnaround":
+            if phase in {"turnaround", "full"}:
                 # Compare actual worker detection milestones against the
                 # simulator's burst/stagger submission clock.
                 detection = []
