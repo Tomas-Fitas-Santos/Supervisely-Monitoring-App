@@ -177,7 +177,7 @@ def enable(path: str | os.PathLike[str]) -> None:
             if started is None:
                 return
             command = statement.lstrip().split(None, 1)[0].upper() if statement.strip() else "OTHER"
-            match = re.search(r"(?i)\\b(?:FROM|UPDATE|INTO|JOIN)\\s+([a-z_][a-z_0-9]*)", statement)
+            match = re.search(r"(?i)\b(?:FROM|UPDATE|INTO|JOIN)\s+([a-z_][a-z_0-9]*)", statement)
             table = match.group(1).lower() if match else "other"
             _write({"kind": "sql", "unix_ms": round(time.time() * 1000),
                     "name": f"{command}.{table}",
