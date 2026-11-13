@@ -78,3 +78,24 @@ On 2026-11-13, all 354 backend tests passed against disposable SQLite fixtures
 and migrated PostgreSQL, including the 50,447-frame sequence handoff. Ruff and
 the production TypeScript/Vite build also passed. This verification did not
 deploy the clean feature or execute it on the Official Event.
+
+## Live deployment — 2026-11-13
+
+Application commit `94298b5` was subsequently deployed with the user's approval.
+The public tunnel passed readiness and served the new clean interface; the
+authenticated Settings preview showed dataset preservation and left execution
+disabled until the confirmation phrase is entered. All 14 native workers resumed.
+No clean/reset operation was executed.
+
+Before deployment, a fresh full database backup was restored into an isolated
+PostgreSQL container and the Official Event's checksums matched. An independent
+copy of all 50,447 original files (5,530,757,688 bytes) was made outside app media
+storage; every copied file's SHA-256 matched its original. The original connection
+and encryption configuration was also backed up privately.
+
+After deployment, the Official Event's dataset, 50,447 assets/source mappings,
+existing plan and 1,682 blocks retained their exact checksums. All 259 roster
+records and 126 teams remained; 100 participants' verification/update timestamps
+refreshed during live operation, with no other participant fields changed.
+The verified local recovery copy is on the same computer, and does not back up
+Supervisely's remote annotation/job state or protect against loss of that disk.
