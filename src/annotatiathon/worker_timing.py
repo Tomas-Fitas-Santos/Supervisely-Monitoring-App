@@ -162,5 +162,28 @@ def enable(path: str | os.PathLike[str]) -> None:
 
     requests.sessions.Session.send = request_send
     httpx.Client.send = httpx_send
+    if os.environ.get("BENCHMARK_SQL_TIMING") == "1":
+        # Synthetic only. The SQL text and bound values are NEVER logged.
+        # Cursor execution spans include server-side lock/query waiting.
+        from sqlalchemy import event
+
+        from .database import engine
+
+        def sql_start(conn, cursor, statement, parameters, context, executemany):
+            conn.info["_nightjar_query_start"] = time.perf_counter()
+
+        def sql_finish(conn, cursor, statement, parameters, context, executemany):
+            started = conn.info.pop("_nightjar_query_start", None)
+            if started is None:
+                return
+            command = statement.lstrip().split(None, 1)[0].upper() if statement.strip() else "OTHER"
+            match = re.search(r"(?i)\\b(?:FROM|UPDATE|INTO|JOIN)\\s+([a-z_][a-z_0-9]*)", statement)
+            table = match.group(1).lower() if match else "other"
+            _write({"kind": "sql", "unix_ms": round(time.time() * 1000),
+                    "name": f"{command}.{table}",
+                    "duration_ms": round((time.perf_counter() - started) * 1000, 3)})
+
+        event.listen(engine(), "before_cursor_execute", sql_start)
+        event.listen(engine(), "after_cursor_execute", sql_finish)
     _installed = True
     milestone("timing_enabled")
