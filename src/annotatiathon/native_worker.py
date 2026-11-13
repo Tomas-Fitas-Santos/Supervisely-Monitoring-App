@@ -1794,6 +1794,12 @@ def worker_cycle(lane: str) -> bool:
                 indexed = process_mounted_index_once(db)
                 if indexed:
                     return True
+            # Local inventory work must run without requiring the optional
+            # Supervisely SDK token, and never consume publishing/status lanes.
+            if lane in {"mirror", "bulk"}:
+                from .dataset_append import process_append_once
+                if process_append_once(db) is not None:
+                    return True
             config = db.get(SuperviselyConfig, 1)
             if (config is None or not config.verified or config.team_id is None
                     or config.workspace_id is None):

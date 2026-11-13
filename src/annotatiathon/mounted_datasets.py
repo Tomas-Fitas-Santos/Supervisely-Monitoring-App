@@ -386,11 +386,15 @@ def run_indexer(*, once: bool = False, poll_seconds: int = 8) -> None:
     while True:
         try:
             with session_factory()() as db:
-                result = process_mounted_index_once(db)
+                from .dataset_append import process_append_once
+                result = process_append_once(db)
+                if result is None:
+                    result = process_mounted_index_once(db)
             if result is not None:
                 logger.info(
                     "Mounted indexing job %s ended with %s",
-                    result["dataset_id"], result["status"],
+                    result.get("dataset_id", result.get("operation_id")),
+                    result["status"],
                 )
         except Exception:
             logger.exception("Mounted indexer cycle failed; will retry")
