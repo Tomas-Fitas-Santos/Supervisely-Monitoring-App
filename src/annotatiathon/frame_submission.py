@@ -1,8 +1,9 @@
 """Complete-frame acceptance and partial-job snapshots for native submissions.
 
-Only the source annotation JSON is transferred. Completed frames are immutable
-once entered into the review pool. Incomplete frames retain their original
-logical Nightjar job but can be republished as a smaller native job.
+Only the source annotation JSON is transferred. Each structurally complete
+frame enters the monitor review pool immediately, even when the original job
+has incomplete frames. Accepted snapshots are immutable across correction
+rounds; the new native job contains only the unresolved images.
 """
 import hashlib
 import json
@@ -46,8 +47,8 @@ def capture_frame_submission(db: Session, api, job: LabelingJob, *,
                              source_round: int | None = None) -> dict:
     """Stage a job-scoped JSON snapshot of only structurally complete frames.
 
-    Accepted snapshots track missing-frame corrections, but review eligibility
-    stays closed until *every* original job frame has passed validation.
+    Accepted snapshots immediately enter frame review while the missing-image
+    subset remains assigned to the original participant for correction.
     The immutable round manifest supports crash-safe, idempotent retries.
     """
     dataset = db.get(MediaDataset, job.dataset_id)
