@@ -567,15 +567,15 @@ def simulate():
                      else [])
             items.extend(created_job(record) for record in created_jobs.values()
                          if index is None or record["dataset_id"] == 2000 + index)
-            # The SDK filters by assignedTo; keeping this filter avoids
-            # unstable global pagination during concurrent job creation.
+            # Supervisely's ASSIGNED_TO_ID maps to the top-level userId
+            # field in jobs.list. Filtering the fake response by the same
+            # field prevents unstable pagination during concurrent creates.
             assignee_id = next((
                 rule["value"] for rule in body.get("filter", [])
-                if rule.get("field") in {"assignedTo", "assignedToId", "userId"}
+                if rule.get("field") == "userId"
             ), None)
             if assignee_id is not None:
-                items = [row for row in items
-                         if (row.get("assignedTo") or {}).get("id") == assignee_id]
+                items = [row for row in items if row.get("userId") == assignee_id]
             return page(items, body)
         if method == "users.info":
             return {"teams": [{"id": 125980, "name": "Synthetic team", "role": "annotator", "roleId": 5}]}
