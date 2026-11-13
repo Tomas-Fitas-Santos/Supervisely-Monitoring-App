@@ -319,13 +319,6 @@ def create_plan(
                     detail="Every team needs one or two active participants or two active "
                            "monitor-pair members before planning.",
                 )
-    assets = list(db.scalars(select(MediaAsset).where(
-        MediaAsset.event_id == event.id, MediaAsset.dataset_id == dataset.id,
-    ).order_by(MediaAsset.video_group, MediaAsset.frame_index.nulls_last(), MediaAsset.relative_path, MediaAsset.id)))
-    if not assets:
-        raise HTTPException(status_code=422, detail="Dataset has no media assets.")
-    # The automatic pool is exclusive across ALL teams; manual video reuse
-    # is the only explicit way to assign duplicate video footage.
     prior_jobs = list(db.scalars(select(LabelingJob).where(
         LabelingJob.event_id == event.id,
         LabelingJob.dataset_id == dataset.id,
@@ -361,6 +354,14 @@ def create_plan(
         return {"plan_id": plan.id, "status": plan.status,
                 "mode": payload.mode, "prepared_revision": plan.prepared_revision,
                 **prepared.summary}
+    assets = list(db.scalars(select(MediaAsset).where(
+        MediaAsset.event_id == event.id, MediaAsset.dataset_id == dataset.id,
+    ).order_by(MediaAsset.video_group, MediaAsset.frame_index.nulls_last(), MediaAsset.relative_path, MediaAsset.id)))
+    if not assets:
+        raise HTTPException(status_code=422, detail="Dataset has no media assets.")
+    # The automatic pool is exclusive across ALL teams; manual video reuse
+    # is the only explicit way to assign duplicate video footage.
+    reserved = {mid for job in prior_jobs for mid in job.media_ids}
     if payload.mode == "shared_30_v1":
         if reserved or payload.video_limit is not None:
             raise HTTPException(status_code=409, detail="Use an unassigned dataset without a video limit for the shared queue.")
@@ -571,6 +572,39 @@ def approve_plan(
     ))
     db.commit()
     return {"id": plan.id, "status": "approved", "already_approved": False}
+
+
+@router.post("/plans/{plan_id}/cancel")
+def cancel_balanced_plan(
+    plan_id: str,
+    ctx: AuthContext = Depends(requires("organiser", mutation=True)),
+    db: Session = Depends(get_db),
+):
+    """Release a never-launched balanced plan so new footage may be appended."""
+    event = current_event(db, ctx, writable=True)
+    plan = db.scalar(select(LabelingPlan).where(
+        LabelingPlan.id == plan_id, LabelingPlan.event_id == event.id,
+    ).with_for_update())
+    if plan is None:
+        raise HTTPException(404, "Plan not found.")
+    if plan.allocation_mode != "balanced_30_v1":
+        raise HTTPException(409, "Only an unlaunched balanced plan can be cancelled here.")
+    if plan.status == "cancelled":
+        return {"id": plan.id, "status": "cancelled", "already_cancelled": True}
+    if plan.status not in {"planned", "approved"}:
+        raise HTTPException(409, "Launched plans cannot be cancelled or their media changed.")
+    if db.scalar(select(LabelingJob.id).where(
+        LabelingJob.plan_id == plan.id,
+    ).limit(1)):
+        raise HTTPException(409, "Plan already has assigned jobs.")
+    plan.status = "cancelled"
+    db.add(AuditEvent(
+        staff_id=ctx.staff.id, event_id=event.id,
+        action="balanced.plan.cancel", target_type="labeling_plan",
+        target_id=plan.id, details={"previous_status": "approved" if plan.approved_at else "planned"},
+    ))
+    db.commit()
+    return {"id": plan.id, "status": "cancelled", "already_cancelled": False}
 
 
 @router.get("/jobs")

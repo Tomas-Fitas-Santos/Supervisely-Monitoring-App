@@ -21,6 +21,7 @@ from .models import (
     Event,
     LabelingJob,
     LabelingPlan,
+    BalancedVideoRun,
     MediaAsset,
     MediaVideo,
     MonitorAssignment,
@@ -86,6 +87,12 @@ def manual_options(
                LabelingPlan.dataset_id == ds.id,
                LabelingPlan.status.in_(("planned", "approved", "running", "paused")))
     ) for asset_id in block.media_ids)
+    balanced_groups = set(db.scalars(select(BalancedVideoRun.video_group).join(
+        LabelingPlan, LabelingPlan.id == BalancedVideoRun.plan_id,
+    ).where(
+        BalancedVideoRun.dataset_id == ds.id,
+        LabelingPlan.status.in_(("planned", "approved", "running", "paused")),
+    )))
     blocks = []
     for group, frames in sorted(videos.items()):
         for offset in range(0, len(frames), 30):
@@ -100,7 +107,8 @@ def manual_options(
                 "first_frame": window[0].frame_index,
                 "last_frame": window[-1].frame_index,
                 "frames": 30, "morphology": window[0].morphology,
-                "reserved": any(frame.id in reserved_ids for frame in window),
+                "reserved": group in balanced_groups or
+                            any(frame.id in reserved_ids for frame in window),
             })
     assignments = []
     for job in existing:
@@ -186,6 +194,12 @@ def create_manual_jobs(
         for group, frames in videos.items():
             if frames and frames[0].id in frame_ids:
                 used.add(group)
+    balanced_groups = set(db.scalars(select(BalancedVideoRun.video_group).join(
+        LabelingPlan, LabelingPlan.id == BalancedVideoRun.plan_id,
+    ).where(
+        BalancedVideoRun.dataset_id == dataset.id,
+        LabelingPlan.status.in_(("planned", "approved", "running", "paused")),
+    )))
     used_ids = {mid for job in all_existing if job.dataset_id == dataset.id
                 for mid in job.media_ids}
     used_ids.update(mid for block in db.scalars(
@@ -199,6 +213,12 @@ def create_manual_jobs(
         source = videos.get(assignment.video_group)
         if not source:
             raise HTTPException(status_code=422, detail="Selected video is not in this dataset.")
+        if assignment.video_group in balanced_groups:
+            raise HTTPException(
+                status_code=409,
+                detail="This video belongs to a balanced queue plan. Cancel an unlaunched "
+                       "balanced plan before making a manual assignment.",
+            )
         if assignment.block_ordinal is None:
             # Historical whole-video API requests remain readable and valid.
             frames = source

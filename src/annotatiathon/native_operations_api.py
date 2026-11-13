@@ -177,7 +177,7 @@ def launch_event(
         plan.status = "running"
         db.add(AuditEvent(staff_id=ctx.staff.id, event_id=event.id, action="labeling.plan.launch",
                           target_type="labeling_plan", target_id=plan.id,
-                          details={"mode": "shared_30_v1"}))
+                          details={"mode": plan.allocation_mode}))
         db.commit()
         return {"status": "running", "plan_id": plan.id, "first_jobs": 0,
                 "pending_operations": 0, "remote_writes_queued": False,

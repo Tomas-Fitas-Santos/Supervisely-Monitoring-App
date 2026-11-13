@@ -286,6 +286,18 @@ export function CompetitionScreen({auth,view="progress"}:{
     }catch(e){setError((e as Error).message);}
     finally{setBusy(false);}
   }
+  async function cancelBalanced(planId:string){
+    if(!await confirmAction(
+      "Cancel this unlaunched balanced plan? Existing dataset files and prepared coverage remain; you can append new footage afterward."))return;
+    setBusy(true);setError("");setNotice("");
+    try{
+      await api("/labeling/plans/"+planId+"/cancel","POST",undefined,auth.csrf_token);
+      setNotice("Balanced plan cancelled. Append or reclassify footage, then prepare again.");
+      await refresh();
+    }catch(e){setError((e as Error).message);}
+    finally{setBusy(false);}
+  }
+
   async function nativeAction(endpoint:string,description:string,body?:unknown){
     if(!await confirmAction(description))return;
     setBusy(true);setError("");setNotice("");
@@ -704,6 +716,10 @@ export function CompetitionScreen({auth,view="progress"}:{
               plan.jobs_per_team+" maximum jobs/team · "+(plan.redundancy===1?"No overlap":"Legacy overlap plan")}</span></div>
           {plan.status==="planned"&&<button className="btn secondary" disabled={busy}
             onClick={()=>void approve(plan)}><ClipboardCheck size={15}/> Approve</button>}
+          {plan.mode==="balanced_30_v1"&&
+            ["planned","approved"].includes(plan.status)&&
+            <button className="btn danger-outline" disabled={busy}
+              onClick={()=>void cancelBalanced(plan.id)}>Cancel balanced plan</button>}
           {plan.status==="approved"&&<button className="btn primary" disabled={busy}
             onClick={()=>void nativeAction("/native/launch",
               plan.mode!=="legacy"?
