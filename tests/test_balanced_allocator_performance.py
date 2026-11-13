@@ -58,11 +58,11 @@ def exercise(rows, sealed=False):
     with engine.begin() as conn:
         if rows:
             conn.execute(insert(BalancedVideoRun), rows)
-        assets = [dict(id=f"{r['id']}:{offset}", event_id='event', dataset_id='dataset',
-                       video_id=r['video_id'], video_group=r['video_group'],
-                       frame_index=41 + offset, relative_path=f"{r['id']}/{offset}.jpg",
-                       morphology=r['source_folder'], kind='video_frame', size_bytes=1,
-                       sha256='0' * 64)
+        assets = [{'id': f"{r['id']}:{offset}", 'event_id': 'event', 'dataset_id': 'dataset',
+                       'video_id': r['video_id'], 'video_group': r['video_group'],
+                       'frame_index': 41 + offset, 'relative_path': f"{r['id']}/{offset}.jpg",
+                       'morphology': r['source_folder'], 'kind': 'video_frame',
+                       'size_bytes': 1, 'sha256': '0' * 64}
                   for r, start, count in expected for offset in range(start, start + count)]
         if assets:
             conn.execute(insert(MediaAsset), assets)

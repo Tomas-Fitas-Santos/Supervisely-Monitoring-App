@@ -3,7 +3,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CloudUpload, FolderOpen, RefreshCw, Trash2 } from "lucide-react";
-import { uploadApi as api, uploadFile, validateOffset, pathFor } from "./upload_helpers";
+import { uploadApi as api, uploadFile, validateOffset } from "./upload_helpers";
 import { confirmAction } from "./dialogs";
 import { validateDatasetSources } from "./dataset_transfer";
 
