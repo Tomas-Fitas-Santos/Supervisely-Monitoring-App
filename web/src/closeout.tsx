@@ -25,6 +25,9 @@ type Report={
     keypoint_score:number;temporal_consistency_issues:number};
   closeout_readiness:{ready:boolean;blocking_jobs:number;unfinished_unscored_jobs:number;
     verified_reviews_available:boolean;message:string};
+  closeout?:{cutoff_at:number|null;pending:number;running:number;done:number;
+    issues:{operation_id:string;job_id:string;error_code:string|null}[]};
+  verified_winner_available?:boolean;
   ticket_totals:Record<string,number>;generated_at:number;
 };
 export function CloseoutScreen({auth}:{auth:Auth}) {
@@ -59,13 +62,21 @@ export function CloseoutScreen({auth}:{auth:Auth}) {
   async function finalize(){
     if(!report||confirmation!=="CLOSE "+report.event_name)return;
     if(!await confirmAction(
-      "Final confirmation: archive this event and freeze operational data? "+
-      "Existing annotations and native Supervisely jobs will not be deleted."
+      "Close competition now? Only submissions already queued in Nightjar will count. "+
+      "Scores will freeze after the worker finishes validating those submissions."
     ))return;
     setBusy(true);setError("");
     try{
       await api("/closeout/finalize","POST",{confirmation},auth.csrf_token);
-      setNotice("Event closed, archived and snapshotted. Previous records remain accessible.");
+      setNotice("Competition intake closed.");
+      await refresh();
+    }catch(e){setError((e as Error).message);}
+    finally{setBusy(false);}
+  }
+  async function retrySubmission(id:string){
+    setBusy(true);setError("");
+    try{
+      await api("/native/operations/"+id+"/retry","POST",undefined,auth.csrf_token);
       await refresh();
     }catch(e){setError((e as Error).message);}
     finally{setBusy(false);}
@@ -196,23 +207,30 @@ export function CloseoutScreen({auth}:{auth:Auth}) {
         </section>
       </div>
       {auth.staff.roles.includes("organiser")&&<section className="panel closeout-confirm" style={{marginTop:20}}>
-        <span className="eyebrow">ARCHIVE CURRENT EVENT</span><h3>Finalize & close event</h3>
-        <p className="muted">Archiving preserves all existing people, job, ticket, dataset and activity records. Create a new event for another competition.</p>
-        {!report.closeout_readiness.ready?<div className="advisory"><ShieldAlert size={18}/>
-          {report.closeout_readiness.message}</div>:
-          <div className="settings-note"><CheckCircle2 size={17}/>
-            <p>Completed submissions have their annotation JSON captured and some reviews are verified.
-              {report.closeout_readiness.unfinished_unscored_jobs>0?
-                " "+report.closeout_readiness.unfinished_unscored_jobs+
-                " unfinished jobs remain unscored.":""}
-              Equal reviewed-frame counts are not required for finalisation.</p></div>}
-        <label>Type <strong>{phrase}</strong> to confirm
-          <input value={confirmation} onChange={e=>setConfirmation(e.target.value)}
-            placeholder={phrase} autoComplete="off" spellCheck={false}/></label>
-        <button className="btn danger-outline" disabled={busy||
-          report.event_status==="archived"||!report.closeout_readiness.ready||
-          confirmation!==phrase} onClick={()=>void finalize()}>
-          <Archive size={16}/> Archive & finalize event</button>
+        <span className="eyebrow">COMPETITION CLOSEOUT</span><h3>Close competition</h3>
+        {report.closeout?.cutoff_at&&<p>Intake closed at {new Date(report.closeout.cutoff_at*1000).toLocaleString()}.</p>}
+        {report.event_status==="finalizing"&&report.closeout&&<>
+          <p role="status">Finalizing. {report.closeout.pending} queued, {report.closeout.running} processing,
+            {" "}{report.closeout.done} complete, {report.closeout.issues.length} need attention.</p>
+          <p>Reviews saved before the leaderboard freezes count toward the final scores.</p>
+          {report.closeout.issues.map(issue=><div key={issue.operation_id} className="advisory">
+            <span>Job {issue.job_id} · {issue.error_code||"Validation needs attention"}</span>
+            <button className="btn secondary" disabled={busy}
+              onClick={()=>void retrySubmission(issue.operation_id)}>Retry validation</button>
+          </div>)}
+        </>}
+        {report.event_status==="archived"&&<p role="status">Leaderboard frozen.
+          {report.verified_winner_available===false?" No verified winner.":""}</p>}
+        {report.event_status==="active"&&<>
+          <p className="muted">Stop new assignments and count only submissions already queued in Nightjar.
+            The leaderboard freezes once those submissions finish processing.</p>
+          <label>Type <strong>{phrase}</strong> to confirm
+            <input value={confirmation} onChange={e=>setConfirmation(e.target.value)}
+              placeholder={phrase} autoComplete="off" spellCheck={false}/></label>
+          <button className="btn danger-outline" disabled={busy||confirmation!==phrase}
+            onClick={()=>void finalize()}>
+            <Archive size={16}/> Close competition</button>
+        </>}
       </section>}
     </>}
   </div>;

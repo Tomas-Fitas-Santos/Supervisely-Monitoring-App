@@ -36,6 +36,8 @@ DEFAULT_EVENT_ID = "00000000-0000-4000-8000-000000000010"
 class Event(Base):
     __tablename__ = "events"
     __table_args__ = (CheckConstraint(
+        "status IN ('active','archived','finalizing','resetting')", name="ck_event_status",
+    ), CheckConstraint(
         "(start_at IS NULL AND end_at IS NULL) OR "
         "(start_at IS NOT NULL AND end_at IS NOT NULL AND end_at > start_at)",
         name="ck_event_schedule_valid",
@@ -45,6 +47,8 @@ class Event(Base):
     status: Mapped[str] = mapped_column(String(20), default="active")
     created_at: Mapped[int] = mapped_column(Integer, default=epoch)
     archived_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    closing_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    closing_by: Mapped[str | None] = mapped_column(ForeignKey("staff_accounts.id"), nullable=True)
     start_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
     end_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
     last_native_job_number: Mapped[int] = mapped_column(Integer, default=0, server_default="0")

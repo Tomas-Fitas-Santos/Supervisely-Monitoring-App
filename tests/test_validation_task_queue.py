@@ -216,6 +216,38 @@ def test_postgres_multiple_validators_claim_only_one_round():
         ))
         assert operation.status == "done"
         assert operation.attempts == 1
+    # An in-progress poll attempting admission after the close transaction
+    # must see the new state, even when its SQLAlchemy session cached Active.
+    from threading import Event as ThreadEvent
+
+    from annotatiathon.closeout_api import finish_closeout, lock_closeout_event
+
+    poll_started = ThreadEvent()
+
+    def admit_after_close():
+        with Session(engine) as db:
+            assert db.get(m.Event, event).status == "active"
+            job = db.get(m.LabelingJob, jobid)
+            job.correction_round += 1
+            poll_started.set()
+            accepted = enqueue_validation(db, job)
+            db.rollback()
+            return accepted
+
+    with ThreadPoolExecutor(max_workers=1) as pool, Session(engine) as db:
+        closing = lock_closeout_event(db, event)
+        future = pool.submit(admit_after_close)
+        assert poll_started.wait(timeout=10)
+        closing.status = "finalizing"
+        closing.closing_by = staff
+        closing.closing_at = m.epoch()
+        db.commit()
+        assert not future.result(timeout=10)
+        snapshot = finish_closeout(db, lock_closeout_event(db, event))
+        assert snapshot["event_status"] == "archived"
+        assert snapshot["verified_winner_available"] is False
+        assert db.get(m.LabelingJob, jobid).correction_round == 0
+        db.commit()
     engine.dispose()
 
 
