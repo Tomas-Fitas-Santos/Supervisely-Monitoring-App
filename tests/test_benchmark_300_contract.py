@@ -156,3 +156,59 @@ def test_failed_native_operations_are_not_silently_reported_as_capacity_success(
     assert 'logger.exception("Synthetic publish operation' in native
     assert 'logger.exception("Synthetic correction operation' in native
     assert 'logger.exception("Synthetic validation task' in validation
+
+
+def test_full_lifecycle_uses_real_import_mirror_queue_and_review_actions():
+    """Full scenario is not the pre-seeded turnaround shortcut."""
+    root = Path(__file__).resolve().parents[1]
+    fixture = (root / "scripts/benchmark_full.py").read_text(encoding="utf-8")
+    runner = (root / "scripts/run_worker_sweep.ps1").read_text(encoding="utf-8")
+    compose = (root / "compose.benchmark.yaml").read_text(encoding="utf-8")
+    assert '{"initial", "turnaround", "full"}' in fixture
+    assert 'if PHASE == "full":' in fixture
+    assert 'range(ANNOTATORS + 60)' in fixture
+    assert 'frame_{frame * 5 + 1:08d}.jpg' in fixture
+    for endpoint in (
+        "/api/v1/datasets/uploads",
+        "/api/v1/labeling/plans",
+        "/api/v1/native/launch",
+        "/api/v1/review-queue/claim-next",
+        "/mirror-status",
+    ):
+        assert endpoint in fixture
+    assert 'full_flow_summary(full_plan_id, full_dataset_id)' in fixture
+    assert '"mirrored_frames": media_bound' in fixture
+    assert '"validated_frames": accepted' in fixture
+    assert '"reviewed_frames": reviewed' in fixture
+    assert '[ValidateSet("initial", "turnaround", "full")]' in runner
+    assert 'BENCHMARK_SQL_TIMING' in runner
+    assert 'BENCHMARK_SQL_TIMING:' in compose
+    assert '$flow.mirrored_frames -ne $flow.source_frames' in runner
+    assert '$flow.jobs_with_native_bindings -lt 300' in runner
+
+
+def test_code_hotspots_and_sql_query_timing_are_exposed_in_summary():
+    """Locate slow code paths without writing SQL parameters or annotations."""
+    root = Path(__file__).resolve().parents[1]
+    script = root / "scripts/analyze_worker_timing.py"
+    spec = importlib.util.spec_from_file_location("nightjar_worker_hotspots", script)
+    assert spec is not None and spec.loader is not None
+    metrics = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(metrics)
+    report, profile = metrics.summarize([
+        {"kind": "code", "name": "validation.download_annotations", "duration_ms": 20},
+        {"kind": "code", "name": "validation.download_annotations", "duration_ms": 40},
+        {"kind": "code", "name": "validation.frame_completeness", "duration_ms": 3},
+        {"kind": "sql", "name": "SELECT.native_operations", "duration_ms": 13},
+        {"kind": "http", "group": "annotation", "endpoint": "figures.list",
+         "duration_ms": 8, "outcome": "ok"},
+    ])
+    assert report["code_hotspots"][0]["path"] == "validation.download_annotations"
+    assert report["code_hotspots"][0]["total_wall_ms"] == 60
+    assert report["code_hotspots"][0]["p95_ms"] == 40
+    assert report["sql_hotspots"][0]["path"] == "SELECT.native_operations"
+    assert profile["annotation"]["count"] == 1
+    source = (root / "src/annotatiathon/worker_timing.py").read_text(encoding="utf-8")
+    assert 'os.environ.get("BENCHMARK_SQL_TIMING") == "1"' in source
+    assert '"name": f"{command}.{table}"' in source
+    assert 'statement, parameters' not in source.split('event.listen(engine(),')[0].split('_write({"kind": "sql"')[-1]
