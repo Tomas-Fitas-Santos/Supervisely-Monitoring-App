@@ -35,7 +35,7 @@ SECONDS_PER_FRAME = int(os.environ.get("BENCHMARK_SECONDS_PER_FRAME", "90"))
 UPLOAD = os.environ.get("BENCHMARK_UPLOAD") == "1"
 PHASE = os.environ.get("BENCHMARK_PHASE", "turnaround")
 INCOMPLETE_RATE = float(os.environ.get("BENCHMARK_INCOMPLETE_RATE", "0.20"))
-if PHASE not in {"initial", "turnaround"} or not 0 <= INCOMPLETE_RATE <= 1:
+if PHASE not in {"initial", "turnaround", "full"} or not 0 <= INCOMPLETE_RATE <= 1:
     raise ValueError("Invalid benchmark phase or incomplete rate")
 PROFILE_PATH = os.environ.get("BENCHMARK_PROFILE_PATH", "").strip()
 
@@ -104,6 +104,17 @@ def seed(frames):
             email="organiser@example.test", role="organiser", enabled=True))
         dataset = db.get(m.MediaDataset, "dataset")
         dataset.native_project_id = 41
+        if PHASE == "full":
+            # The roster is real, but no jobs are in progress before import,
+            # mirror, plan creation and launch through the application API.
+            db.get(m.LabelingPlan, "plan").status = "completed"
+            for person in db.scalars(select(m.Person).where(
+                m.Person.kind == "participant",
+            )):
+                person.check_in_at = m.epoch()
+            for previous in db.scalars(select(m.LabelingJob)):
+                previous.status = "completed"
+                previous.review_status = "accepted"
         if PHASE == "initial":
             # No queue is released before the timed burst. The load process
             # atomically activates the plan and enqueues exactly 300 jobs.
@@ -257,6 +268,12 @@ def simulate():
     submitted_times = {}
     created_jobs = {}
     next_native_job_id = 1_000_000
+    next_project_id = 10_000
+    next_dataset_id = 850_000
+    next_image_id = 20_000_000
+    projects_created = {}
+    datasets_created = {}
+    corrected_images = set()
     metadata, _ = merge_annotation_meta({"projectType": "images", "classes": [], "tags": []})
     # Supervisely's labeling-job annotation reader resolves returned figure IDs
     # through project metadata; class identities must be present in the simulator.
@@ -289,7 +306,7 @@ def simulate():
                     projectId=41, itemsCount=FRAMES, imagesCount=FRAMES, size=0, customData={})
 
     def images(index):
-        if UPLOAD and index >= ANNOTATORS:
+        if index in uploaded_images or index >= ANNOTATORS * 2:
             return uploaded_images.get(index, [])
         return [info(ImageApi, id=100000 + index * FRAMES + frame, name=f"asset-{frame}.jpg",
                      datasetId=2000 + index, width=1600, height=1200, size=2250000,
@@ -406,13 +423,14 @@ def simulate():
         if method == "images.internal.hashes.list":
             return [value for value in body if value in uploaded_hashes]
         if method == "images.bulk.add":
+            nonlocal next_image_id
             index = body["datasetId"] - 2000
             results = []
             for item in body["images"]:
-                frame = int(item["title"].split("-")[-1].split(".")[0])
-                result = info(ImageApi, id=100000 + index * FRAMES + frame,
-                              name=item["title"], datasetId=body["datasetId"], width=1600,
-                              height=1200, size=2250000, meta={}, customData={}, tags=[])
+                next_image_id += 1
+                result = info(ImageApi, id=next_image_id,
+                              name=item["title"], datasetId=body["datasetId"], width=64,
+                              height=64, size=1600, meta={}, customData={}, tags=[])
                 uploaded_images.setdefault(index, []).append(result)
                 results.append(result)
             return results
@@ -431,22 +449,45 @@ def simulate():
         if method == "workspaces.info":
             return info(WorkspaceApi, id=2001, name="Synthetic workspace", teamId=125980)
         if method == "projects.info":
-            return project()
+            return projects_created.get(body["id"], project())
+        if method == "projects.list":
+            return page([project(), *projects_created.values()], body)
+        if method == "projects.add":
+            nonlocal next_project_id
+            next_project_id += 1
+            row = info(ProjectApi, id=next_project_id, name=body["name"],
+                       workspaceId=body["workspaceId"], teamId=125980,
+                       type="images", itemsCount=0, size=0, customData={})
+            projects_created[next_project_id] = row
+            return row
         if method == "projects.meta":
             return metadata
         if method == "projects.meta.update":
             metadata.update(body.get("meta", {}))
             return {}
         if method == "datasets.info":
-            return dataset(body["id"] - 2000)
+            return datasets_created.get(body["id"], dataset(body["id"] - 2000))
         if method == "datasets.list":
-            return page([dataset(index) for index in sorted(remote_datasets)], body)
+            return page([dataset(index) for index in sorted(remote_datasets)]
+                        + list(datasets_created.values()), body)
         if method == "datasets.add":
-            index = int(body["name"].split("-")[-1])
-            remote_datasets.add(index)
-            return dataset(index)
+            nonlocal next_dataset_id
+            next_dataset_id += 1
+            row = info(DatasetApi, id=next_dataset_id, name=body["name"],
+                       projectId=body["projectId"], itemsCount=0,
+                       imagesCount=0, size=0, customData={})
+            datasets_created[next_dataset_id] = row
+            return row
         if method == "images.list":
-            return page(images(body["datasetId"] - 2000), body)
+            source = images(body["datasetId"] - 2000)
+            requested = next((
+                item.get("value", []) for item in body.get("filter", [])
+                if item.get("field") == "id" and item.get("operator") == "in"
+            ), None)
+            if requested is not None:
+                requested = set(requested)
+                source = [item for item in source if item["id"] in requested]
+            return page(source, body)
         if method == "figures.list":
             # The current Supervisely SDK fetches labeling-job annotations via
             # FigureApi.download -> figures.list, not annotations.info. Returning
@@ -460,12 +501,23 @@ def simulate():
                 # For the initial 300 original jobs, a deterministic subset
                 # lacks a head keypoint. Frame completeness is assessed by the
                 # REAL validator; the simulator never labels jobs incomplete.
-                original_index = (image_id - 100000) // FRAMES
-                missing = (
-                    PHASE == "turnaround" and 0 <= original_index < ANNOTATORS
-                    and (original_index * 137) % ANNOTATORS < round(INCOMPLETE_RATE * ANNOTATORS)
-                    and (image_id - 100000) % FRAMES == 0
-                )
+                if PHASE == "full" and image_id >= 20_000_000:
+                    original_index = (image_id - 20_000_001) // FRAMES
+                    first_image = (image_id - 20_000_001) % FRAMES == 0
+                    missing = (
+                        0 <= original_index < ANNOTATORS
+                        and (original_index * 137) % ANNOTATORS
+                            < round(INCOMPLETE_RATE * ANNOTATORS)
+                        and first_image and image_id not in corrected_images
+                    )
+                else:
+                    original_index = (image_id - 100000) // FRAMES
+                    missing = (
+                        PHASE == "turnaround" and 0 <= original_index < ANNOTATORS
+                        and (original_index * 137) % ANNOTATORS
+                            < round(INCOMPLETE_RATE * ANNOTATORS)
+                        and (image_id - 100000) % FRAMES == 0
+                    )
                 objects = annotation(image_id)["objects"]
                 if missing:
                     objects = [obj for obj in objects if obj["classTitle"] != "crown"]
@@ -502,6 +554,8 @@ def simulate():
                 users = [1000 + index % ANNOTATORS]
             selected = body.get("imagesIds") or body.get("images_ids") or []
             count = len(selected) if selected else FRAMES
+            if "(Incomplete #" in body.get("name", ""):
+                corrected_images.update(selected)
             result = []
             for uid in users:
                 next_native_job_id += 1
@@ -509,7 +563,8 @@ def simulate():
                     "id": next_native_job_id, "name": body.get("name", body.get("title", "")),
                     "user_id": uid, "dataset_id": body["datasetId"],
                     "images_count": count,
-                    "due": time.monotonic() + FRAMES * SECONDS_PER_FRAME,
+                    "due": time.monotonic() + (1.5 if PHASE == "full"
+                                                       else FRAMES * SECONDS_PER_FRAME),
                 }
                 created_jobs[data["id"]] = data
                 result.append(created_job(data))
