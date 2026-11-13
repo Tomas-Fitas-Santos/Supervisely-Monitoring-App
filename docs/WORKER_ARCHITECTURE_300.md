@@ -100,6 +100,61 @@ scan. If allocation fails, the status scheduler can retry.
 
 ## Capacity sizing: two automated scenarios
 
+### Complete image lifecycle and code-level bottlenecks
+
+Run the real Nightjar API workflow against an **internal fake Supervisely**
+(not your production team), with 300 automated annotators and 12 monitors:
+
+```powershell
+git pull --ff-only origin main
+
+# Baseline: 4 independent distributors, 2 validators,
+# 1 correction worker, 1 status worker.
+.\scripts\run_worker_sweep.ps1 -Phase full -SweepRole publisher -Workers 4 -Validators 2 -Correctors 1 -StatusWorkers 1 -Seconds 900 -Scenario burst -IncompleteRate 0.20
+
+# Hold 4 publishers fixed; measure whether validators 1/2/4 help.
+.\scripts\run_worker_sweep.ps1 -Phase full -SweepRole validation -Workers 1,2,4 -PublisherBaseline 4 -Correctors 1 -StatusWorkers 1 -Seconds 900 -Scenario burst -IncompleteRate 0.20
+```
+
+The full-flow fixture creates **360 separate sampled source videos** with
+30 distinct actual JPEGs each (10,800 source frames). It uses the real
+chunked dataset creation/finalization API and source mirror worker to upload
+to a simulated Supervisely server; creates, approves and launches a 30-frame
+source queue; publishes 300 initial jobs; simulates submissions with 20%
+incomplete frames; republishes only rejected images; issues 60 next jobs;
+and has 12 synthetic monitors claim and score accepted frame snapshots.
+
+The import + mirror preparation is timed **separately** from the subsequent
+`-Seconds` event workload. No real Supervisely requests are permitted.
+The corresponding CI smoke test runs the same lifecycle with four synthetic
+participants and five blocks before the larger local run.
+
+Each run records:
+
+- `phases.import.build_zip_seconds`, `transfer_seconds`,
+  `finalize_seconds`, `phases.mirror.seconds` and plan/launch seconds
+- `worker_timing.stage_lags`: submission detection, validation queue,
+  validation duration, correction turnaround, next-job wait and publication
+- `worker_timing.code_hotspots`: individual Python call paths
+  (`validation.download_annotations`, `validation.frame_completeness`,
+  `validation.claim_next_primary_block`, `status.claim_primary_block`,
+  `publish.remote_create_job`, `mirror.upload_image_batch`, etc.)
+- `worker_timing.sql_hotspots`: SQL execution/lock wait time by **table
+  category only** (no query values or user data)
+- `resources`: time-sampled aggregate and per-service peak CPU cores
+  and working-set MiB; `operation_kinds` and `operation_errors`
+
+**A passing complete 300-person result requires** all 10,800 source frames
+mirrored and accepted, all 360 blocks assigned and native jobs confirmed,
+60 incomplete corrections published and validated, 300 frames reviewed,
+and no attention/error operations. Otherwise the comparison row is marked
+invalid even if individual HTTP calls returned 200.
+
+`-Seconds 900` covers the event workload **after** data preparation.
+The reported fake Supervisely publication latency defaults to an explicit
+1000 ms assumption; replace it with a safely measured aggregate profile
+before treating it as live timing.
+
 Use the isolated benchmark to choose worker counts for **each stage**, not
 just the total API latency. The test modes never contact the real Supervisely
 API, and the live environment is not scaled.
