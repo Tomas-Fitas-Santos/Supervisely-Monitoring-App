@@ -324,6 +324,30 @@ async def receive_chunk(
     )
 
 
+def write_staged_chunk(target, offset, payload):
+    """The locked database receipt owns the durable prefix; replay only its tail."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.is_symlink():
+        raise HTTPException(409, "Symlinked staging path not allowed.")
+    existing = target.stat().st_size if target.exists() else 0
+    if existing < offset:
+        raise HTTPException(409, "Previously saved upload bytes are missing from storage.")
+    # A process can die after writing bytes but before committing the receipt.
+    # Those unacknowledged bytes may be partial, so never credit them as complete.
+    try:
+        with target.open("r+b" if target.exists() else "wb") as stream:
+            stream.truncate(offset)
+            stream.seek(offset)
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+    except Exception:
+        if target.exists():
+            with target.open("r+b") as stream:
+                stream.truncate(offset)
+        raise
+
+
 def store_chunk(dataset_id, relative_path, offset, total, payload, ctx, db):
     event = current_event(db, ctx, writable=True)
     ds = get_dataset(db, event.id, dataset_id, lock=True)
@@ -356,31 +380,13 @@ def store_chunk(dataset_id, relative_path, offset, total, payload, ctx, db):
             status_code=409, detail="Upload offset/size differs from stored progress."
         )
     target = root_dir(ds) / "stage" / rel
-    target.parent.mkdir(parents=True, exist_ok=True)
-    if target.is_symlink():
-        raise HTTPException(status_code=409, detail="Symlinked staging path not allowed.")
-    existing = target.stat().st_size if target.exists() else 0
-    if existing != offset:
-        raise HTTPException(
-            status_code=409, detail="On-disk progress differs from database. Stop and inspect."
-        )
     written = len(payload)
-    try:
-        with target.open("r+b" if target.exists() else "wb") as stream:
-            stream.seek(offset)
-            stream.write(payload)
-    except Exception:
-        if target.exists():
-            with target.open("r+b") as stream:
-                stream.truncate(offset)
-        raise
+    if ds.source_bytes + written > settings.max_dataset_bytes:
+        raise HTTPException(status_code=413, detail="Dataset size limit reached.")
+    write_staged_chunk(target, offset, payload)
     entry.received_bytes += written
     ds.source_bytes += written
     ds.last_activity_at = epoch()
-    if ds.source_bytes > settings.max_dataset_bytes:
-        with target.open("r+b") as stream:
-            stream.truncate(offset)
-        raise HTTPException(status_code=413, detail="Dataset size limit reached.")
     db.commit()
     return {
         "relative_path": str(rel), "received_bytes": entry.received_bytes,

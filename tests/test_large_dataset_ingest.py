@@ -116,6 +116,75 @@ def test_crashed_index_is_rebuilt_from_retained_staging(ctx):
         assert db.get(NativeOperation, op.id).attempts == 2
 
 
+@pytest.mark.parametrize("kind", ["folder", "zip"])
+def test_progress_permission_error_does_not_fail_import(ctx, monkeypatch, kind):
+    client, maker, csrf = ctx
+    dsid = create(client, csrf, kind)
+    if kind == "zip":
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w") as zipped:
+            zipped.writestr("birds/species/clip/frame_000001.jpg", jpeg())
+        upload(client, csrf, dsid, "source.zip", archive.getvalue())
+    else:
+        upload(client, csrf, dsid, "birds/species/clip/frame_000001.jpg", jpeg())
+    workflows.act(client, csrf, f"/datasets/{dsid}/finalize?background=true")
+    original = Path.replace
+    def locked(path, target):
+        if path.name == "index-progress.tmp":
+            raise PermissionError("Windows sharing violation")
+        return original(path, target)
+    monkeypatch.setattr(Path, "replace", locked)
+    with maker() as db:
+        assert process_index_once(db)["status"] == "done"
+        assert db.get(MediaDataset, dsid).status == "ready"
+        assert db.scalar(select(MediaAsset).where(MediaAsset.dataset_id == dsid)) is not None
+
+
+def test_mounted_retry_reuses_checks_and_keeps_partial_inventory_out_of_jobs(ctx, monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    from annotatiathon import mounted_datasets
+
+    client, maker, csrf = ctx
+    source = tmp_path / "source"
+    clip = source / "birds" / "species" / "clip"
+    clip.mkdir(parents=True)
+    for number in range(3):
+        (clip / f"frame_{number:06d}.jpg").write_bytes(jpeg())
+    monkeypatch.setattr(mounted_datasets, "get_settings", lambda: SimpleNamespace(
+        nightjar_dataset_source_dir=str(source), local_data_dir=str(tmp_path),
+        max_dataset_assets=250000, max_dataset_bytes=150_000_000_000))
+    result = workflows.act(client, csrf, "/datasets/mounted", {
+        "folder": "birds", "name": "Checkpoint import", "extraction_policy": "all_frames"})
+    assert result.status_code == 202, result.text
+    dsid = result.json()["id"]
+    from annotatiathon.source_reader import SourceDirectory
+    original_inspect = SourceDirectory.inspect
+    checked = []
+    def interrupted(reader, path, strict):
+        checked.append(path.name)
+        if len(checked) == 3:
+            raise OSError("Source temporarily disconnected")
+        return original_inspect(reader, path, strict)
+    monkeypatch.setattr(SourceDirectory, "inspect", interrupted)
+    with maker() as db:
+        assert mounted_datasets.process_mounted_index_once(db)["status"] == "attention"
+        assert db.get(MediaDataset, dsid).status == "failed"
+        assert db.scalar(select(MediaAsset).where(MediaAsset.dataset_id == dsid)) is None
+        assert db.scalar(select(NativeOperation).where(
+            NativeOperation.kind == "mirror_dataset", NativeOperation.target_id == dsid)) is None
+    assert workflows.act(client, csrf, f"/datasets/{dsid}/mounted/retry").status_code == 202
+    with maker() as db:
+        assert mounted_datasets.process_mounted_index_once(db)["status"] == "done"
+        assert db.get(MediaDataset, dsid).frame_count == 3
+        assets = list(db.scalars(select(MediaAsset).where(MediaAsset.dataset_id == dsid)))
+        assert sorted(asset.frame_index for asset in assets) == [0, 1, 2]
+        assert all(asset.frame_width == 32 for asset in assets)
+    assert len(checked) == 4
+    assert sorted(checked[:3]) == ["frame_000000.jpg", "frame_000001.jpg", "frame_000002.jpg"]
+    assert checked[-1] == checked[2]
+
+
 def test_invalid_frame_fails_locally_and_can_retry_without_reupload(ctx):
     client, maker, csrf = ctx
     dsid = create(client, csrf)
@@ -194,6 +263,44 @@ def test_chunk_receipt_and_resume_offsets_above_4_gib(ctx):
     assert result.json()["received_bytes"] == offset + len(tail)
     progress = client.get(f"/api/v1/datasets/{dsid}/upload-status?relative_path=source.zip").json()
     assert progress["file"]["received_bytes"] == offset + len(tail)
+
+
+@pytest.mark.parametrize("saved", [0, 4])
+def test_chunk_retry_discards_only_unacknowledged_crash_tail(ctx, saved):
+    client, maker, csrf = ctx
+    dsid = create(client, csrf, "zip")
+    with maker() as db:
+        ds = db.get(MediaDataset, dsid)
+        target = Path(ds.root_path) / "stage" / "source.zip"
+        target.write_bytes(b"good"[:saved] + b"uncommitted crash tail")
+        if saved:
+            db.add(DatasetStagedFile(dataset_id=dsid, relative_path="source.zip",
+                expected_bytes=8, received_bytes=saved))
+            ds.source_bytes = saved
+            db.commit()
+    response = client.put(f"/api/v1/datasets/uploads/{dsid}/chunk",
+        params={"relative_path": "source.zip", "offset": saved, "total": 8},
+        content=b"complete"[saved:], headers={"X-CSRF-Token": csrf})
+    assert response.status_code == 200, response.text
+    assert response.json()["received_bytes"] == 8
+    assert target.read_bytes() == b"good"[:saved] + b"complete"[saved:]
+    with maker() as db:
+        assert db.get(MediaDataset, dsid).source_bytes == 8
+
+
+def test_chunk_does_not_acknowledge_failed_disk_flush(ctx, monkeypatch):
+    client, maker, csrf = ctx
+    dsid = create(client, csrf, "zip")
+    def failed_flush(_fd):
+        raise OSError("disk flush failed")
+    monkeypatch.setattr("annotatiathon.datasets_api.os.fsync", failed_flush)
+    with pytest.raises(OSError, match="disk flush failed"):
+        upload(client, csrf, dsid, "source.zip", b"source")
+    with maker() as db:
+        ds = db.get(MediaDataset, dsid)
+        assert ds.source_bytes == 0
+        assert db.scalar(select(DatasetStagedFile).where(DatasetStagedFile.dataset_id == dsid)) is None
+        assert (Path(ds.root_path) / "stage" / "source.zip").stat().st_size == 0
 
 
 @pytest.mark.skipif(not os.getenv("NIGHTJAR_QUEUE_TEST_URL"), reason="requires disposable PostgreSQL")

@@ -187,6 +187,64 @@ service throughput or a 100,000-image network transfer.
 A real 100,000-image Supervisely transfer remains an operational verification
 step. This change does not upload a synthetic collection into the real workspace.
 
+## November 13 indexing and recovery fixes (not deployed)
+
+The observed mounted import failed after 8,156 files because replacing
+`index-progress.json` raised `PermissionError` on the shared filesystem.
+Progress snapshots are now best effort, including rate-limited failed writes and
+warnings. A progress-display failure cannot abort indexing or undo valid work.
+
+The source reader opens each frame directory once with no-follow directory
+handles on Linux, then hashes and checks image headers through those handles.
+Four reader threads process bounded groups of 128 files; SQL remains on the
+owning thread. Directory enumeration uses `scandir`, and validated dimensions
+are reused during frame-order/manifest validation. Final file and directory
+checks still reject changed sources. Symlink tests cover both leaf files and
+replaced parent directories. Platforms without directory handles retain the
+checked path fallback.
+
+Mounted-frame validation receipts are appended and flushed in batches of 250
+to a private, versioned journal outside the SQL inventory transaction. On retry,
+unchanged size, nanosecond timestamps, inode and device identity allow reuse of
+saved checksums and dimensions. A torn journal append is ignored. An ordinary
+exception flushes the remaining batch; abrupt process loss can repeat the last
+unflushed batch. If checkpoint storage itself fails, indexing remains correct
+but those checks may need repeating. Source files must remain unchanged.
+Inventory publication is still atomic, so unfinished datasets cannot enter jobs
+or review. Raw-video decoding and uploaded ZIP extraction may repeat on an
+indexing retry; their source bytes remain retained and need no network reupload.
+
+Both initial and append uploads now flush chunk bytes to storage before saving
+their database receipt. If a crash leaves extra bytes beyond that receipt,
+resume discards only the unacknowledged tail and resends from the saved offset.
+Missing acknowledged bytes still cause a visible error instead of silently
+accepting damaged storage. Append chunk I/O also runs outside the API event loop.
+Supervisely still uses its existing 128-image/64-MiB batches and reconciles saved
+remote IDs on retry; this change does not increase remote concurrency.
+
+In a read-only 64-frame sample on the actual Windows/Docker source mount, the
+previous I/O sequence took **4.384 seconds**, the implemented reader took
+**0.275 seconds**, and checkpoint reuse took **0.108 seconds**. Hashes and
+dimensions matched. These cached sample results measure the source-read stage,
+not the full import or remote upload. Repeated path/stat checks alone accounted
+for 3.61 seconds in the initial 64-frame profiling pass.
+
+An isolated end-to-end synthetic run indexed **100,000 small JPEG frames across
+100 videos in 93.14 seconds**, with frame dimensions and ordering verified, in a
+container limited to 1 GiB. The journal occupied 24.5 MB. This used hard-linked,
+cached 32×24 JPEGs and SQLite; it does not predict real image, drive, PostgreSQL,
+or Supervisely throughput and is not directly comparable to the earlier padded
+single-video benchmark. The benchmark script now supports `--videos` and
+includes checkpoint writes. Its per-worker timings overlap.
+
+Validation: **336 backend tests**, including disposable PostgreSQL concurrency,
+job distribution, submission validation and review; **15 browser tests**,
+including progressive 50K-file traversal, missing-file resume rejection, lost
+responses, and virtual ZIP chunks above 5 GiB. The production frontend build
+passes. The separate read-only preview verifies folder-picker feedback and
+responsive upload/append layouts. Full real-dataset throughput remains to be
+measured after deployment approval; the currently running stack is unchanged.
+
 ## Applying the change
 
 Rebuild the API, web, indexer, and native worker images together using the

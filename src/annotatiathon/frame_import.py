@@ -74,10 +74,15 @@ def natural_frame_key(frame: MediaAsset) -> tuple:
                   for piece in re.split(r"(\d+)", filename)), filename.casefold(), filename)
 
 
+def frame_dimensions(path):
+    with Image.open(path) as image:
+        return image.size
+
+
 def index_supplied_frames(db: Session, video: MediaVideo, media_root: Path,
                           manifest_path: Path | None, *, strict: bool,
                           path_for_frame: Callable[[str], Path] | None = None,
-                          progress=None) -> None:
+                          progress=None, validated_dimensions=None) -> None:
     frames = list(db.scalars(select(MediaAsset).where(MediaAsset.video_id == video.id)))
     descriptions = {}
     declared_total = None
@@ -157,9 +162,14 @@ def index_supplied_frames(db: Session, video: MediaVideo, media_root: Path,
         frame.frame_index = ordinal
         if strict:
             try:
-                with Image.open(path_for_frame(frame.relative_path) if path_for_frame
-                                else media_root / frame.relative_path) as image:
-                    width, height = image.size
+                path = (path_for_frame(frame.relative_path) if path_for_frame
+                        else media_root / frame.relative_path)
+                checkpoint = getattr(progress, "checkpoint", None)
+                if validated_dimensions is not None and frame.relative_path in validated_dimensions:
+                    width, height = validated_dimensions[frame.relative_path]
+                else:
+                    width, height = (checkpoint.cached("dimensions", path, frame_dimensions)
+                                     if checkpoint else frame_dimensions(path))
             except (OSError, UnidentifiedImageError, Image.DecompressionBombError) as exc:
                 raise HTTPException(status_code=422, detail=f"Unreadable frame {frame.relative_path}.") from exc
             if description and ((description.width is not None and description.width != width)

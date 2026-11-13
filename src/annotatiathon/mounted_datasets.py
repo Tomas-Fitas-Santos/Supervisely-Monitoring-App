@@ -5,7 +5,11 @@ Only the native worker opens media and uploads paths directly to Supervisely.
 No browser transfer, local copy of supplied frames, or public filesystem browsing.
 """
 import logging
+import os
 import shutil
+import stat as stat_mode
+from concurrent.futures import ThreadPoolExecutor
+from itertools import islice
 from pathlib import Path, PurePosixPath
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -187,6 +191,14 @@ def mounted_index_status(
                 if op and op.status == "running" and op.claimed_at else None}
 
 
+def bounded_source_map(function, items):
+    """Keep four source reads in flight and at most 128 pending metadata results."""
+    iterator = iter(items)
+    with ThreadPoolExecutor(max_workers=4, thread_name_prefix="dataset-source") as pool:
+        while batch := list(islice(iterator, 128)):
+            yield from pool.map(function, batch)
+
+
 def index_mounted_dataset(db: Session, ds: MediaDataset, progress=None, *, additions=False):
     """Index file metadata in one transaction; supplied image bytes remain mounted."""
     source = mounted_source(ds.source_folder)
@@ -214,8 +226,10 @@ def index_mounted_dataset(db: Session, ds: MediaDataset, progress=None, *, addit
     receipt_rows = []
     asset_rows = []
     settings = get_settings()
+    checkpoint = getattr(progress, "checkpoint", None)
     from .frame_extraction import extract_full_video
     from .frame_import import index_supplied_frames
+    from .source_reader import SourceDirectory
 
     def clear_new_output(path):
         # A failed raw-video attempt may later be replaced by a supplied frame
@@ -227,9 +241,9 @@ def index_mounted_dataset(db: Session, ds: MediaDataset, progress=None, *, addit
             shutil.rmtree(path)
 
     def source_stat(path):
-        if path.is_symlink() or not path.is_file() or not path.resolve().is_relative_to(source):
+        stat = path.lstat()
+        if not stat_mode.S_ISREG(stat.st_mode) or not path.resolve().is_relative_to(source):
             raise ValueError("unsafe_source_file")
-        stat = path.stat()
         return stat.st_size, stat.st_mtime_ns
 
     def save_receipt(path, digest, stat):
@@ -248,7 +262,8 @@ def index_mounted_dataset(db: Session, ds: MediaDataset, progress=None, *, addit
         expected_digest = previous[2] if previous else expected
         if previous and stat == previous[:2]:
             return
-        digest, size = sha256_file(path)
+        digest, size = (checkpoint.cached("sha256", path, sha256_file)
+                        if checkpoint else sha256_file(path))
         if source_stat(path) != stat:
             raise ValueError(f"source_file_changed_during_sync:{relative}")
         if expected_digest is not None and digest != expected_digest:
@@ -262,13 +277,17 @@ def index_mounted_dataset(db: Session, ds: MediaDataset, progress=None, *, addit
             # Bootstrap pre-receipt imports using their committed media hashes.
             save_receipt(path, digest, stat)
 
-    def count_file(path: Path) -> tuple[str, int]:
+    def count_file(path: Path, prepared=None) -> tuple[str, int]:
         nonlocal source_bytes
         relative = path.relative_to(source).as_posix()
-        stat = source_stat(path)
-        digest, size = sha256_file(path)
-        if source_stat(path) != stat:
-            raise ValueError(f"source_file_changed_during_sync:{relative}")
+        if prepared is None:
+            stat = source_stat(path)
+            digest, size = (checkpoint.cached("sha256", path, sha256_file)
+                            if checkpoint else sha256_file(path))
+            if source_stat(path) != stat:
+                raise ValueError(f"source_file_changed_during_sync:{relative}")
+        else:
+            stat, digest, size, _width, _height = prepared
         checked[relative] = stat
         save_receipt(path, digest, stat)
         source_bytes += size
@@ -278,7 +297,7 @@ def index_mounted_dataset(db: Session, ds: MediaDataset, progress=None, *, addit
 
     def add_asset(path: Path, rel: str, species: str, video: MediaVideo | None,
                   ordinal: int | None = None, pts: int | None = None,
-                  width: int | None = None, height: int | None = None):
+                  width: int | None = None, height: int | None = None, prepared=None):
         nonlocal frame_count, image_count
         if video is not None:
             frame_count += 1
@@ -290,7 +309,7 @@ def index_mounted_dataset(db: Session, ds: MediaDataset, progress=None, *, addit
         if frame_count + image_count > settings.max_dataset_assets:
             raise ValueError("mounted_dataset_exceeds_frame_limit")
         digest, size = (sha256_file(path) if path.is_relative_to(media_root)
-                        else count_file(path))
+                        else count_file(path, prepared))
         if video is not None:
             video.extracted_bytes += size
         asset_rows.append({
@@ -397,8 +416,12 @@ def index_mounted_dataset(db: Session, ds: MediaDataset, progress=None, *, addit
                 db.flush()
                 manifest = None
                 frames = 0
-                for frame in sorted(entry.iterdir()):
-                    if frame.is_symlink():
+                source_frames = []
+                with os.scandir(entry) as scan:
+                    source_entries = sorted(scan, key=lambda item: item.name)
+                for item in source_entries:
+                    frame = entry / item.name
+                    if item.is_symlink():
                         raise ValueError("source_symlinks_not_allowed")
                     if frame.name == "frames.json":
                         manifest = frame
@@ -406,10 +429,32 @@ def index_mounted_dataset(db: Session, ds: MediaDataset, progress=None, *, addit
                         continue
                     if frame.suffix.lower() not in IMAGE_EXTENSIONS:
                         continue
-                    name = str(safe_relative(frame.name))
-                    relative = str(PurePosixPath("videos", species, title, name))
-                    add_asset(frame, relative, species, video)
-                    frames += 1
+                    source_frames.append(frame)
+                strict = ds.extraction_policy == "all_frames" or manifest is not None
+                dimensions = {}
+
+                with SourceDirectory(source, entry) as reader:
+                    def inspect_frame(frame, strict=strict, reader=reader):
+                        before = reader.stat(frame)
+                        stat = (before.st_size, before.st_mtime_ns)
+                        def inspect(path):
+                            return reader.inspect(path, strict)
+                        values = (checkpoint.cached("source-frame-strict" if strict else "source-frame", frame,
+                                                    inspect, stat_reader=reader.stat)
+                                  if checkpoint else inspect(frame))
+                        after = reader.stat(frame)
+                        if (after.st_size, after.st_mtime_ns, after.st_ctime_ns, after.st_ino) != (
+                                before.st_size, before.st_mtime_ns, before.st_ctime_ns, before.st_ino):
+                            raise ValueError("source_file_changed_during_validation")
+                        return frame, (stat, *values)
+
+                    for frame, prepared in bounded_source_map(inspect_frame, source_frames):
+                        name = str(safe_relative(frame.name))
+                        relative = str(PurePosixPath("videos", species, title, name))
+                        if strict:
+                            dimensions[relative] = prepared[3:]
+                        add_asset(frame, relative, species, video, prepared=prepared)
+                        frames += 1
                 if not frames:
                     raise ValueError(f"empty_source_video_folder:{video.video_group}")
                 if asset_rows:
@@ -418,7 +463,8 @@ def index_mounted_dataset(db: Session, ds: MediaDataset, progress=None, *, addit
                 db.flush()
                 index_supplied_frames(db, video, media_root, manifest,
                     strict=ds.extraction_policy == "all_frames",
-                    path_for_frame=lambda rel: source.joinpath(*PurePosixPath(rel).parts[1:]), progress=progress)
+                    path_for_frame=lambda rel: source.joinpath(*PurePosixPath(rel).parts[1:]),
+                    progress=progress, validated_dimensions=dimensions)
                 video_count += 1
             elif entry.is_file():
                 raise ValueError("expected_species_video_file_or_frame_directory")
@@ -437,10 +483,15 @@ def index_mounted_dataset(db: Session, ds: MediaDataset, progress=None, *, addit
                        and not (media_root / rel).is_file())
         if missing:
             raise ValueError(f"existing_source_file_missing:{min(missing)}")
-    for relative, stat in checked.items():
-        if source_stat(source / relative) != stat:
+    def verify_source(item):
+        relative, stat = item
+        current = (source / relative).lstat()
+        if not stat_mode.S_ISREG(current.st_mode) or (current.st_size, current.st_mtime_ns) != stat:
             raise ValueError(f"source_file_changed_during_sync:{relative}")
-    if any(path.stat().st_mtime_ns != modified for path, modified in checked_directories.items()):
+    for _ in bounded_source_map(verify_source, checked.items()):
+        pass
+    if any(path.is_symlink() or not path.resolve().is_relative_to(source)
+           or path.stat().st_mtime_ns != modified for path, modified in checked_directories.items()):
         raise ValueError("source_folder_changed_during_sync_finish_copying_then_retry")
     ds.source_bytes = source_bytes
     ds.frame_count = frame_count

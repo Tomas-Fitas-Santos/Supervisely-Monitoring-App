@@ -5,6 +5,7 @@ This measures application overhead with cached source bytes, NOT disk/network
 throughput. Run on the actual source mount separately to measure its I/O cost.
 """
 import argparse
+import hashlib
 import io
 import json
 import os
@@ -20,15 +21,18 @@ from sqlalchemy.orm import Session
 
 from annotatiathon import mounted_datasets
 from annotatiathon.dataset_indexing import IndexProgress
+from annotatiathon.import_checkpoints import ImportCheckpoints
 from annotatiathon.models import Base, Event, MediaDataset, StaffAccount
 
 
-def benchmark(images: int, image_bytes: int):
+def benchmark(images: int, image_bytes: int, videos: int = 1):
     with tempfile.TemporaryDirectory(prefix="nightjar-ingest-benchmark-") as directory:
         root = Path(directory)
         sources = root / "sources"
-        frames = sources / "synthetic" / "species" / "clip"
-        frames.mkdir(parents=True)
+        species = sources / "synthetic" / "species"
+        folders = [species / f"clip_{number:04d}" for number in range(videos)]
+        for folder in folders:
+            folder.mkdir(parents=True)
         encoded = io.BytesIO()
         Image.new("RGB", (32, 24)).save(encoded, format="JPEG")
         content = encoded.getvalue()
@@ -39,11 +43,12 @@ def benchmark(images: int, image_bytes: int):
             if number % 10_000 == 1:
                 sample = root / f"sample-{number}.jpg"
                 sample.write_bytes(payload)
-            os.link(sample, frames / f"frame_{number:08d}.jpg")
+            os.link(sample, folders[min((number - 1) * videos // images, videos - 1)]
+                    / f"frame_{number:08d}.jpg")
         setup_seconds = time.perf_counter() - started
         engine = create_engine(f"sqlite:///{root / 'metadata.sqlite'}")
         Base.metadata.create_all(engine)
-        timings = {"checksum_seconds": 0.0, "image_header_seconds": 0.0}
+        timings = {"checksum_worker_seconds": 0.0, "image_header_worker_seconds": 0.0}
 
         def measured(name, function):
             def call(*args, **kwargs):
@@ -73,22 +78,27 @@ def benchmark(images: int, image_bytes: int):
             start = time.perf_counter()
             with (
                 patch.object(mounted_datasets, "get_settings", return_value=settings),
-                patch.object(mounted_datasets, "sha256_file",
-                    measured("checksum_seconds", mounted_datasets.sha256_file)),
-                patch.object(Image, "open", measured("image_header_seconds", Image.open)),
+                patch.object(hashlib, "file_digest",
+                    measured("checksum_worker_seconds", hashlib.file_digest)),
+                patch.object(Image, "open", measured("image_header_worker_seconds", Image.open)),
             ):
-                mounted_datasets.index_mounted_dataset(db, ds, IndexProgress(ds))
+                progress = IndexProgress(ds)
+                progress.checkpoint = ImportCheckpoints(ds.root_path)
+                mounted_datasets.index_mounted_dataset(db, ds, progress)
                 db.commit()
+                progress.checkpoint.flush()
             elapsed = time.perf_counter() - start
             result = {
                 "synthetic": True, "database": "isolated SQLite",
                 "source_storage": "hard links; cached repeated JPEG bytes",
                 "images": ds.frame_count, "logical_source_bytes": ds.source_bytes,
+                "videos": ds.video_count,
                 "setup_seconds": round(setup_seconds, 3),
                 "index_seconds": round(elapsed, 3),
                 "images_per_second": round(images / elapsed, 1),
                 **{key: round(value, 3) for key, value in timings.items()},
                 "supervisely_upload_tested": False,
+                "timing_note": "Worker times overlap; do not subtract their sum from wall time.",
             }
         engine.dispose()
         return result
@@ -98,7 +108,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--images", type=int, default=100_000)
     parser.add_argument("--image-bytes", type=int, default=65_536)
+    parser.add_argument("--videos", type=int, default=1)
     options = parser.parse_args()
-    if not 1 <= options.images <= 250_000 or not 1024 <= options.image_bytes <= 1024**2:
-        parser.error("Use 1..250000 images and 1024..1048576 bytes per fixture")
-    print(json.dumps(benchmark(options.images, options.image_bytes), indent=2))
+    if (not 1 <= options.images <= 250_000 or not 0 <= options.image_bytes <= 1024**2
+            or not 1 <= options.videos <= options.images):
+        parser.error("Use 1..250000 images, 0..1048576 bytes per fixture, and 1..images videos")
+    print(json.dumps(benchmark(options.images, options.image_bytes, options.videos), indent=2))

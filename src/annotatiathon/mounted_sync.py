@@ -115,6 +115,8 @@ def process_sync_once(db: Session):
                 if ds is None or ds.upload_kind != "mounted" or ds.status != "indexing":
                     raise ValueError("mounted_dataset_not_syncable")
                 ensure_sync_allowed(db, ds, indexing=True)
+                from .import_checkpoints import ImportCheckpoints
+                progress.checkpoint = ImportCheckpoints(ds.root_path)
                 progress(phase="synchronizing", force=True)
                 from .mounted_datasets import index_mounted_dataset
                 result = index_mounted_dataset(db, ds, progress, additions=True)
@@ -140,4 +142,7 @@ def process_sync_once(db: Session):
                 if progress:
                     progress(phase="sync_failed", force=True)
                 return {"status": "attention", "dataset_id": dsid}
+            finally:
+                if progress and progress.checkpoint is not None:
+                    progress.checkpoint.flush()
     return None

@@ -44,6 +44,8 @@ class IndexProgress:
         self.path = Path(ds.root_path) / "index-progress.json"
         self.started = epoch()
         self.last_write = 0.0
+        self.last_warning = None
+        self.checkpoint = None
         self.values = {"phase": "starting", "files": 0, "checked_frames": 0,
                        "started_at": self.started}
 
@@ -52,11 +54,20 @@ class IndexProgress:
         now = time.monotonic()
         if not force and now - self.last_write < 1:
             return
-        self.values["updated_at"] = epoch()
-        temporary = self.path.with_suffix(".tmp")
-        temporary.write_text(json.dumps(self.values), encoding="utf-8")
-        temporary.replace(self.path)
         self.last_write = now
+        self.values["updated_at"] = epoch()
+        if self.checkpoint is not None:
+            self.values["reused_checks"] = self.checkpoint.reused
+        temporary = self.path.with_suffix(".tmp")
+        try:
+            temporary.write_text(json.dumps(self.values), encoding="utf-8")
+            temporary.replace(self.path)
+        except OSError:
+            # A monitoring snapshot must never roll back an otherwise valid import.
+            # Throttle failed attempts too: retrying every frame makes locks worse.
+            if self.last_warning is None or now - self.last_warning >= 60:
+                logger.warning("Cannot update indexing progress snapshot; indexing continues", exc_info=True)
+                self.last_warning = now
 
 
 def read_progress(ds):
@@ -179,6 +190,8 @@ def process_index_once(db, kind=UPLOAD_INDEX):
                 # The inventory is atomic; a crash rolls it back. Remove only
                 # abandoned derived output before rebuilding from retained input.
                 clean_derived(ds)
+                from .import_checkpoints import ImportCheckpoints
+                progress.checkpoint = ImportCheckpoints(ds.root_path)
                 progress(force=True)
                 if kind == UPLOAD_INDEX:
                     from .datasets_api import index_uploaded_dataset
@@ -213,4 +226,7 @@ def process_index_once(db, kind=UPLOAD_INDEX):
                     progress(phase="failed", force=True)
                 return {"status": "attention", "operation_id": op_id,
                         "dataset_id": ds_id, "error": type(exc).__name__}
+            finally:
+                if progress and progress.checkpoint is not None:
+                    progress.checkpoint.flush()
     return None

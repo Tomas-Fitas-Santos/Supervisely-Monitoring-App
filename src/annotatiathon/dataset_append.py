@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 from .auth import AuthContext, requires
 from .config import get_settings
@@ -26,6 +27,7 @@ from .datasets_api import (
     safe_relative,
     sha256_file,
     staged_sources,
+    write_staged_chunk,
 )
 from .db import get_db
 from .events_api import current_event
@@ -182,6 +184,17 @@ async def append_chunk(
     ctx: AuthContext = Depends(requires("organiser", mutation=True)),
     db: Session = Depends(get_db),
 ):
+    payload = bytearray()
+    async for block in request.stream():
+        if len(payload) + len(block) > MAX_CHUNK_BYTES or offset + len(payload) + len(block) > total:
+            raise HTTPException(413, "Chunk exceeds limits.")
+        payload.extend(block)
+    return await run_in_threadpool(
+        store_append_chunk, dataset_id, batch_id, relative_path, offset, total, payload, ctx, db,
+    )
+
+
+def store_append_chunk(dataset_id, batch_id, relative_path, offset, total, payload, ctx, db):
     event = current_event(db, ctx, writable=True)
     ds = get_dataset(db, event.id, dataset_id, lock=True)
     batch = _batch(db, ds, batch_id, lock=True)
@@ -215,25 +228,10 @@ async def append_chunk(
     elif row.expected_bytes != total or row.received_bytes != offset:
         raise HTTPException(409, "Chunk offset/size differs from the saved upload.")
     target = _append_root(ds, batch) / "stage" / str(rel)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    if target.is_symlink() or (target.stat().st_size if target.exists() else 0) != offset:
-        raise HTTPException(409, "Unsafe or inconsistent on-disk upload offset.")
-    written = 0
-    try:
-        with target.open("r+b" if target.exists() else "wb") as out:
-            out.seek(offset)
-            async for chunk in request.stream():
-                written += len(chunk)
-                if (written > MAX_CHUNK_BYTES or offset + written > total
-                        or ds.source_bytes + batch.source_bytes + written >
-                           limits.max_dataset_bytes):
-                    raise HTTPException(413, "Chunk exceeds limits.")
-                out.write(chunk)
-    except Exception:
-        if target.exists():
-            with target.open("r+b") as out:
-                out.truncate(offset)
-        raise
+    written = len(payload)
+    if ds.source_bytes + batch.source_bytes + written > limits.max_dataset_bytes:
+        raise HTTPException(413, "Chunk exceeds limits.")
+    write_staged_chunk(target, offset, payload)
     row.received_bytes += written
     batch.source_bytes += written
     batch.last_activity_at = epoch()

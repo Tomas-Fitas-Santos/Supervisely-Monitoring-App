@@ -98,6 +98,13 @@ def test_additions_skip_old_bytes_preserve_ids_and_only_queue_new_mirror(mounted
         return original_hash(path)
 
     monkeypatch.setattr(mounted_datasets, "sha256_file", tracked_hash)
+    from annotatiathon.source_reader import SourceDirectory
+    original_inspect = SourceDirectory.inspect
+    def tracked_inspect(reader, path, strict):
+        hashed.append(path)
+        assert "first" not in path.parts, "Existing bytes should not be read again."
+        return original_inspect(reader, path, strict)
+    monkeypatch.setattr(SourceDirectory, "inspect", tracked_inspect)
     request = act(client, csrf, f"/datasets/{dsid}/mounted/sync")
     assert request.status_code == 202
     assert act(client, csrf, f"/datasets/{dsid}/mounted/sync").json() == request.json()
@@ -228,15 +235,15 @@ def test_legacy_import_bootstraps_receipts_from_committed_hashes(mounted):
 def test_copying_more_frames_during_sync_rejects_entire_addition(mounted, monkeypatch):
     _client, _maker, _csrf, _dsid, _source, content, add_clip, _originals = mounted
     folder = add_clip("second")
-    from annotatiathon import mounted_datasets
-    original_hash = mounted_datasets.sha256_file
+    from annotatiathon.source_reader import SourceDirectory
+    original_inspect = SourceDirectory.inspect
 
-    def copying(path):
-        result = original_hash(path)
+    def copying(reader, path, strict):
+        result = original_inspect(reader, path, strict)
         (folder / "frame_000003.jpg").write_bytes(content)
         return result
 
-    monkeypatch.setattr(mounted_datasets, "sha256_file", copying)
+    monkeypatch.setattr(SourceDirectory, "inspect", copying)
     result, status = synchronize(mounted)
     assert result["status"] == "attention"
     assert "source_folder_changed_during_sync" in status["error"]
