@@ -538,10 +538,11 @@ def queue_automatic_incomplete_return(
     db: Session, job: LabelingJob, finished: int, total: int,
     *, pending_media_ids: list[str] | None = None,
 ) -> str:
-    """Automatically return unfinished native submissions without review.
+    """Return only incomplete frames, leaving complete frames in review.
 
-    Do not release WorkPacket or capture annotations for this round. Recovery
-    uses the existing durable restart_job operation, not a second queue.
+    Accepted JSON has already been captured and queued for monitor review.
+    Keep the original WorkPacket pending until all frames are submitted.
+    Recovery uses the existing durable restart_job operation.
     """
     if job.assignee_person_id is None:
         raise NativeWorkerError("automatic_return_requires_single_assignee")
