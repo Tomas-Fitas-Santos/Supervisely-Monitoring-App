@@ -39,6 +39,13 @@ Remote job removal alone is not treated as annotation removal: the worker also
 uploads empty annotation JSON, grouped by remote dataset, in batches of at most
 200 images. It never uploads image bytes or replaces source IDs.
 
+An unused event takes a faster path: if there are no local jobs, review/media
+history or remote jobs, the worker requests project-level statistics. It skips
+all per-image reads and annotation writes only when complete statistics match
+the remote dataset inventory and confirm zero objects and image/object tags.
+Unavailable, incomplete or inconsistent statistics retain the full cleanup.
+The decision is saved before job removal so retries preserve the original scope.
+
 The request requires idle, ready datasets and completed synchronization and
 mirroring. It locks the event against new work. PostgreSQL advisory locks let
 in-flight publishing, validation, status and correction cycles finish before
@@ -99,3 +106,13 @@ records and 126 teams remained; 100 participants' verification/update timestamps
 refreshed during live operation, with no other participant fields changed.
 The verified local recovery copy is on the same computer, and does not back up
 Supervisely's remote annotation/job state or protect against loss of that disk.
+
+The first user-triggered Official Event clean subsequently completed successfully:
+zero plans and queue blocks remained, the event returned to active, and every
+dataset/asset/source-mapping checksum matched the pre-clean backup. It took about
+450 seconds because the original implementation rewrote empty annotations on all
+50,447 images even though no jobs existed. The unused-event fast path above fixes
+that unnecessary work. Its tests verify draft-plan deletion without any image
+scan, plus safe fallback for remote objects/tags, missing statistics, inventory
+mismatches and statistics request errors. All 46 focused cleanup, native dispatch
+and table-assignment tests passed after this correction.

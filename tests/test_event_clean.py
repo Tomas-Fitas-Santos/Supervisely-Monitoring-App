@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 import test_native_dispatch as native
-from sqlalchemy import select, text
+from sqlalchemy import delete, select, text
 from test_import_job_review_lifecycle import workflow as lifecycle_workflow
 from test_sequential_image_plans import setup_sequence
 
@@ -153,6 +153,58 @@ def test_clean_keeps_zip_and_mounted_data_and_can_recreate_sequence(workflow, tm
 @pytest.fixture
 def configured(monkeypatch, tmp_path):
     yield from native.configured.__wrapped__(monkeypatch, tmp_path)
+
+
+@pytest.mark.parametrize("remote_state", ["empty", "objects", "tags", "unknown", "mismatch", "error"])
+def test_unused_draft_skips_image_scan_only_with_verified_empty_remote_stats(configured, remote_state):
+    http, maker, csrf, plan, sdk = configured
+    with maker.begin() as db:
+        db.execute(delete(m.LabelingJob))
+        db.get(m.LabelingPlan, plan).status = "planned"
+        before = snapshot(db)
+    support_clear(sdk)
+    for dataset in sdk.datasets:
+        dataset.items_count = len(sdk.images[dataset.id])
+    stats_calls = []
+
+    def stats(project_id):
+        stats_calls.append(project_id)
+        if remote_state == "error":
+            raise ConnectionError("Stats unavailable")
+        rows = [{"id": d.id, "imagesInDataset": d.items_count}
+                for d in sdk.datasets if d.project_id == project_id]
+        total = sum(row["imagesInDataset"] for row in rows)
+        result = {
+            "images": {"datasets": rows, "total": {"imagesInDataset": total, "imagesMarked": 0}},
+            "imageTags": {"datasets": rows, "total": {"imagesInDataset": total, "imagesTagged": 0}},
+            "objects": {"total": {"objectsInDataset": int(remote_state == "objects")}},
+            "objectTags": {"total": {"objectsTagged": 0}},
+        }
+        if remote_state == "tags":
+            result["imageTags"]["total"]["imagesTagged"] = 1
+        if remote_state == "unknown":
+            del result["objects"]
+        if remote_state == "mismatch":
+            result["images"]["total"]["imagesInDataset"] += 1
+        return result
+    sdk.project.get_stats = stats
+    if remote_state == "empty":
+        sdk.annotations = {image_id: {"objects": [], "tags": []} for image_id in sdk.annotations}
+
+        def unexpected_scan(*args, **kwargs):
+            pytest.fail("An unused, confirmed-empty project must not scan individual images")
+        sdk.image.get_list = unexpected_scan
+    request_clean(http, csrf)
+    with maker() as db:
+        result = process_event_reset(db, sdk, db.get(m.SuperviselyConfig, 1))
+        assert result["status"] == "done"
+        assert db.get(m.LabelingPlan, plan) is None  # Includes unapproved drafts.
+        assert snapshot(db) == before
+        operation = db.scalar(select(m.NativeOperation).where(m.NativeOperation.kind == "reset_event"))
+        assert operation.payload["annotation_cleanup_skipped"] == (remote_state == "empty")
+    assert stats_calls == [p.id for p in sdk.projects]
+    assert bool(sdk.annotation_batches) == (remote_state != "empty")
+    assert not sdk.removed_projects and not sdk.removed_datasets
 
 
 @pytest.mark.parametrize("failure", ["remove_job", "clear_annotations", "worker_crash"])

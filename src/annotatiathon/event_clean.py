@@ -36,6 +36,35 @@ def checkpoint(db, operation, **values):
     db.commit()
 
 
+def remote_annotations_empty(api, inventory):
+    """Prove emptiness with one statistics request per owned project.
+
+    Missing/unsupported statistics or inventory discrepancies fall back to the
+    established cleanup. Never infer absence of remote labels just from no jobs.
+    """
+    try:
+        for project_id, datasets in inventory.items():
+            if any(type(count) is not int or count < 0 for count in datasets.values()):
+                return False
+            stats = api.project.get_stats(project_id)
+            images = stats["images"]
+            tags = stats["imageTags"]
+            if (images["total"]["imagesMarked"] != 0
+                    or tags["total"]["imagesTagged"] != 0
+                    or stats["objects"]["total"]["objectsInDataset"] != 0
+                    or stats["objectTags"]["total"]["objectsTagged"] != 0):
+                return False
+            for section in (images, tags):
+                rows = section["datasets"]
+                if (len(rows) != len(datasets)
+                        or {row["id"]: row["imagesInDataset"] for row in rows} != datasets
+                        or section["total"]["imagesInDataset"] != sum(datasets.values())):
+                    return False
+        return True
+    except Exception:  # noqa: BLE001 - optional optimization; retain full cleanup on uncertainty
+        return False
+
+
 def clean_preserving_datasets(db, api, config, operation):
     """Called under the exclusive worker barrier, with the event locked for work.
 
@@ -57,6 +86,7 @@ def clean_preserving_datasets(db, api, config, operation):
         if annotations.is_symlink() or annotations.resolve().parent != root:
             raise ValueError("unsafe_annotation_storage")
     projects = set()
+    inventory = {}
     remote_datasets = set()
     for dataset in datasets:
         if dataset.native_project_id is None:
@@ -74,6 +104,7 @@ def clean_preserving_datasets(db, api, config, operation):
                 dataset.native_dataset_id, dataset.native_manual_dataset_id)):
             raise ValueError("clean_source_dataset_missing")
         remote_datasets.update(ids)
+        inventory[project.id] = {d.id: getattr(d, "items_count", None) for d in listed}
 
     # Include correction revisions and uncertain remote creations by listing
     # the exact owned projects; never use team-wide deletion or guessed IDs.
@@ -89,7 +120,18 @@ def clean_preserving_datasets(db, api, config, operation):
             if remote is not None and remote.id not in native_jobs:
                 raise ValueError("clean_linked_job_outside_owned_projects")
 
-    checkpoint(db, operation, phase="removing_jobs")
+    # Persist the decision BEFORE removing remote jobs: a lost acknowledgement
+    # must not make a retry mistake an event with job history for an unused one.
+    needs_annotations = (operation.payload or {}).get("annotation_cleanup_required")
+    if needs_annotations is None:
+        history = bool(native_jobs) or any(db.scalar(select(model.id).where(
+            model.event_id == event_id).limit(1)) for model in (
+                m.LabelingJob, m.NativeJobBinding, m.NativeJobRevision,
+                m.NativeMediaInstance, m.ReviewSample, m.JobReview))
+        needs_annotations = history or not remote_annotations_empty(api, inventory)
+    checkpoint(db, operation, phase="removing_jobs",
+               annotation_cleanup_required=needs_annotations,
+               annotation_cleanup_skipped=not needs_annotations)
     removed = (operation.payload or {}).get("removed_jobs", 0)
     for job_id in sorted(native_jobs):
         api.labeling_job.remove(job_id)
@@ -111,7 +153,7 @@ def clean_preserving_datasets(db, api, config, operation):
     images = union(*selections).subquery()
     cursor = (operation.payload or {}).get("annotation_cursor", 0)
     cleared = (operation.payload or {}).get("cleared_annotations", 0)
-    while True:
+    while needs_annotations:
         rows = db.execute(select(images).where(images.c.image_id > cursor)
                           .order_by(images.c.image_id).limit(200)).all()
         if not rows:
