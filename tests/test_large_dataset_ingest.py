@@ -258,6 +258,7 @@ def test_postgres_event_operations_stay_responsive_during_uncommitted_media_inse
 
     from annotatiathon.closeout_api import lock_closeout_event
     from annotatiathon.dataset_indexing import require_active_import_event
+    from annotatiathon.datasets_api import get_dataset
     from annotatiathon.events_api import current_event
     from annotatiathon.models import Event
 
@@ -286,6 +287,9 @@ def test_postgres_event_operations_stay_responsive_during_uncommitted_media_inse
                 api.rollback()  # Reproduces the previous global event-lock bottleneck.
                 api.execute(text("SET LOCAL lock_timeout = '500ms'"))
                 assert current_event(api, ctx, writable=True).id == event.id
+                # A repeated finalize/sync click also locks the dataset row.
+                # FOR UPDATE here reproduced the same FK lock deadlock.
+                assert get_dataset(api, event.id, ds.id, lock=True).status == "indexing"
                 # Mutations still serialize against each other.
                 with Session(engine) as competing_api:
                     competing_api.execute(text("SET LOCAL lock_timeout = '500ms'"))

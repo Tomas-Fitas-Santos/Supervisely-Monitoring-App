@@ -18,8 +18,11 @@ UPLOAD_INDEX = "index_uploaded_dataset"
 
 def require_active_import_event(db, ds):
     """Only hold the shared event mutation lock during the final short commit."""
-    event = db.scalar(select(Event).where(Event.id == ds.event_id)
-        .with_for_update(key_share=True).execution_options(populate_existing=True))
+    # Always take the event lock before flushing final dataset metadata. API
+    # mutations use event -> dataset order too, so the importer must match it.
+    with db.no_autoflush:
+        event = db.scalar(select(Event).where(Event.id == ds.event_id)
+            .with_for_update(key_share=True).execution_options(populate_existing=True))
     if event is None or event.status != "active":
         raise HTTPException(409, "Dataset event became read-only during indexing.")
 

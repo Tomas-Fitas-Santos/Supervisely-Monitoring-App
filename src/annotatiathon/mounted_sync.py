@@ -43,8 +43,8 @@ def sync_view(op):
     })
 
 
-def ensure_sync_allowed(db, ds):
-    ensure_append_allowed(db, ds)
+def ensure_sync_allowed(db, ds, *, indexing=False):
+    ensure_append_allowed(db, ds, indexing=indexing)
     if db.scalar(select(LabelingPlan.id).where(
         LabelingPlan.dataset_id == ds.id, LabelingPlan.status == "planned",
     ).limit(1)):
@@ -109,13 +109,12 @@ def process_sync_once(db: Session):
             op.attempts += 1
             db.commit()
             ds = db.scalar(select(MediaDataset).where(MediaDataset.id == dsid)
-                .with_for_update().execution_options(populate_existing=True))
+                .execution_options(populate_existing=True))
             progress = IndexProgress(ds) if ds else None
             try:
                 if ds is None or ds.upload_kind != "mounted" or ds.status != "indexing":
                     raise ValueError("mounted_dataset_not_syncable")
-                ds.status = "ready"
-                ensure_sync_allowed(db, ds)
+                ensure_sync_allowed(db, ds, indexing=True)
                 progress(phase="synchronizing", force=True)
                 from .mounted_datasets import index_mounted_dataset
                 result = index_mounted_dataset(db, ds, progress, additions=True)

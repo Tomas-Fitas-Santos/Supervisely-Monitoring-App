@@ -84,7 +84,9 @@ def get_dataset(db: Session, event_id: str, dsid: str,
         MediaDataset.id == dsid, MediaDataset.event_id == event_id,
     )
     if lock:
-        query = query.with_for_update()
+        # Serialize metadata writers without blocking FK KEY SHARE locks held
+        # by a long inventory insert. Dataset IDs are immutable.
+        query = query.with_for_update(key_share=True)
     ds = db.scalar(query)
     if ds is None:
         raise HTTPException(status_code=404, detail="Dataset not found in selected event.")

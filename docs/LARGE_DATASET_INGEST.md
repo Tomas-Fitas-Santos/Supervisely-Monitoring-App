@@ -42,11 +42,14 @@ event lock while occupying database connections.
 
 There was a second locking problem even after moving work out of HTTP:
 PostgreSQL foreign-key checks on inserted images hold `KEY SHARE` locks on the
-event. The old `FOR UPDATE` event guard conflicts with those locks. Event
-mutation guards now use `FOR NO KEY UPDATE`: they still serialize event
+event and dataset. The old `FOR UPDATE` guards conflict with those locks. Event
+and dataset mutation guards now use `FOR NO KEY UPDATE`: they still serialize
 mutations, but remain compatible with long image-insert transactions. This is
 also applied to publication, manual jobs, submission validation, and closeout
-event guards. Event IDs remain immutable. See the
+event guards. Sync keeps its dataset in the committed `indexing` state without
+holding a metadata-write lock during file I/O. Its final commit locks the event
+before flushing dataset changes, matching API mutation lock order. Event and
+dataset IDs remain immutable. See the
 [PostgreSQL lock compatibility rules](https://www.postgresql.org/docs/17/explicit-locking.html)
 and [SQLAlchemy lock options](https://docs.sqlalchemy.org/en/20/core/selectable.html).
 

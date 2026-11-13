@@ -84,8 +84,8 @@ def _append_root(ds: MediaDataset, batch: DatasetAppendBatch) -> Path:
     return candidate
 
 
-def ensure_append_allowed(db: Session, ds: MediaDataset) -> None:
-    if ds.status != "ready":
+def ensure_append_allowed(db: Session, ds: MediaDataset, *, indexing=False) -> None:
+    if ds.status not in ({"ready", "indexing"} if indexing else {"ready"}):
         raise HTTPException(409, "Finish indexing the dataset before appending.")
     # Never change a source set that any active or historical job may reference.
     if db.scalar(select(LabelingJob.id).where(
