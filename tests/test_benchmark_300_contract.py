@@ -171,6 +171,8 @@ def test_full_lifecycle_uses_real_import_mirror_queue_and_review_actions():
     assert 'person.membership_status = "joined"' in fixture
     assert 'person.supervisely_role = "annotator"' in fixture
     assert 'person.native_verified_at = m.epoch()' in fixture
+    assert 'select(m.WorkPacket).where(' in fixture
+    assert 'packet.submitted_at = m.epoch()' in fixture
     assert 'range(ANNOTATORS + FULL_FOLLOWUPS)' in fixture
     assert 'frame_{frame * 5 + 1:08d}.jpg' in fixture
     for endpoint in (
