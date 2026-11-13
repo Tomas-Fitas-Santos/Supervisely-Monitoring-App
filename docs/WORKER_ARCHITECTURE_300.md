@@ -15,10 +15,11 @@ preparation and Supervisely uploads.
 - Supervisely real-world calibration has a strictly bounded read-only probe
   and an **optional** 1–3 controlled create/delete probe in an isolated
   benchmark project. Never produce 300 real jobs or upload thousands of files.
-- Complete annotations from an incomplete job are staged privately but
-  **no frame enters monitor review** until every original job frame is
-  complete. Missing frames return as a smaller native correction job to
-  the same participant; all correction rounds share one original job.
+- Structurally complete annotation JSON from a partial job enters the monitor
+  review queue **immediately**. The incomplete images alone return as a
+  smaller correction job to the same participant. Already accepted frames
+  remain immutable and are reviewed once, even across correction rounds;
+  all rounds share one original Nightjar logical job.
 - Reviewer UI and original local frames remain fast and independent of
   remote Supervisely availability. Scoring formulas are unchanged.
 - Keep PostgreSQL, existing Docker deployment and production environment.
