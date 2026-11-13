@@ -1,7 +1,7 @@
 """Strict settings. Event data and credentials are never embedded in source code."""
 from functools import lru_cache
 
-from pydantic import SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     nightjar_organiser_emails: str = ""
     max_dataset_bytes: int = 140_000_000_000
     max_dataset_assets: int = 250_000
+    mirror_batch_images: int = Field(default=128, ge=1, le=512)
+    mirror_batch_bytes: int = Field(default=64 * 1024 * 1024, ge=1024 * 1024,
+                                    le=256 * 1024 * 1024)
 
     @field_validator("database_url")
     @classmethod

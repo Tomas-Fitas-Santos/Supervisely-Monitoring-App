@@ -14,6 +14,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .annotation_schema import AnnotationSchemaError, ensure_project_annotation_classes
+from .config import get_settings
 from .models import (
     AuditEvent,
     Event,
@@ -158,6 +159,7 @@ def mirror_dataset(db: Session, api, config: SuperviselyConfig,
         raise MirrorError("mirror_dataset_changed")
     root = (Path(ds.root_path) / "media").resolve()
     uploaded_count = 0
+    settings = get_settings()
     with (
         tempfile.TemporaryDirectory(prefix="nightjar-mirror-") as temp_root,
         closing(sqlite3.connect(str(Path(temp_root) / "remote.sqlite3"))) as index,
@@ -181,6 +183,28 @@ def mirror_dataset(db: Session, api, config: SuperviselyConfig,
                     raise MirrorError("duplicate_mirrored_image_names") from exc
             index.commit()
 
+        def flush_pending(pending):
+            nonlocal uploaded_count
+            if not pending:
+                return
+            with code_timing("mirror.upload_image_batch"):
+                uploaded = api.image.upload_paths(
+                    remote_ds.id, names=[row[1] for row in pending],
+                    paths=[row[2] for row in pending], conflict_resolution="skip",
+                )
+            results = {im.name: im.id for im in uploaded}
+            if len(results) != len(pending) or set(results) != {row[1] for row in pending}:
+                raise MirrorError("mirror_batch_upload_incomplete")
+            for source, remote_name, _ in pending:
+                db.add(NativeSourceMedia(
+                    event_id=ds.event_id, dataset_id=ds.id, media_id=source.id,
+                    native_dataset_id=remote_ds.id, native_image_id=results[remote_name],
+                ))
+            with code_timing("mirror.persist_batch_bindings"):
+                db.commit()
+            uploaded_count += len(pending)
+            pending.clear()
+
         cursor = ""
         while True:
             local_page = list(db.scalars(select(MediaAsset).where(
@@ -199,6 +223,8 @@ def mirror_dataset(db: Session, api, config: SuperviselyConfig,
                 )
             )}
             pending = []
+            pending_bytes = 0
+
             for item in local_page:
                 name = source_image_name(item)
                 result = index.execute(
@@ -227,50 +253,18 @@ def mirror_dataset(db: Session, api, config: SuperviselyConfig,
                     path = (root / item.relative_path).resolve()
                     if not path.is_relative_to(root) or not path.is_file():
                         raise MirrorError("local_frame_missing")
+                if pending and pending_bytes + item.size_bytes > settings.mirror_batch_bytes:
+                    flush_pending(pending)
+                    pending_bytes = 0
                 pending.append((item, name, str(path)))
-                if len(pending) == 24:
-                    with code_timing("mirror.upload_image_batch"):
-                        uploaded = api.image.upload_paths(
-                            remote_ds.id,
-                            names=[row[1] for row in pending],
-                            paths=[row[2] for row in pending],
-                            conflict_resolution="skip",
-                        )
-                    results = {im.name: im.id for im in uploaded}
-                    if len(results) != len(pending) or set(results) != {row[1] for row in pending}:
-                        raise MirrorError("mirror_batch_upload_incomplete")
-                    for source, name, _ in pending:
-                        db.add(NativeSourceMedia(
-                            event_id=ds.event_id, dataset_id=ds.id, media_id=source.id,
-                            native_dataset_id=remote_ds.id, native_image_id=results[name],
-                        ))
-                    with code_timing("mirror.persist_batch_bindings"):
-                        db.commit()
-                    uploaded_count += len(pending)
-                    pending.clear()
-            if pending:
-                with code_timing("mirror.upload_image_batch"):
-                    uploaded = api.image.upload_paths(
-                        remote_ds.id,
-                        names=[row[1] for row in pending],
-                        paths=[row[2] for row in pending],
-                        conflict_resolution="skip",
-                    )
-                results = {im.name: im.id for im in uploaded}
-                if len(results) != len(pending) or set(results) != {row[1] for row in pending}:
-                    raise MirrorError("mirror_batch_upload_incomplete")
-                for source, name, _ in pending:
-                    db.add(NativeSourceMedia(
-                        event_id=ds.event_id, dataset_id=ds.id, media_id=source.id,
-                        native_dataset_id=remote_ds.id, native_image_id=results[name],
-                    ))
-                with code_timing("mirror.persist_batch_bindings"):
-                    db.commit()
-                uploaded_count += len(pending)
-            else:
-                # Persist adopted pre-existing remote images page by page.
-                db.commit()
-
+                pending_bytes += item.size_bytes
+                if (len(pending) >= settings.mirror_batch_images
+                        or pending_bytes >= settings.mirror_batch_bytes):
+                    flush_pending(pending)
+                    pending_bytes = 0
+            flush_pending(pending)
+            # Persist adopted pre-existing remote images even on an upload-free page.
+            db.commit()
     total = db.scalar(select(func.count(MediaAsset.id)).where(
         MediaAsset.dataset_id == ds.id,
     )) or 0

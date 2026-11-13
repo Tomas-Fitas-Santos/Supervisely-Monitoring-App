@@ -1,13 +1,14 @@
 import { RefreshButton } from "./refresh_button";
 import { confirmAction } from "./dialogs";
 import { AppendVideos } from "./dataset_append";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type React from "react";
 import {
   AlertTriangle, Archive, CheckCircle2, CloudUpload, FileArchive,
   FolderOpen, HardDrive, Layers3, RotateCcw, Trash2, PauseCircle
 } from "lucide-react";
 import { api, type Auth } from "./api";
+import { singleFlight } from "./single_flight";
 import { uploadApi } from "./upload_helpers";
 import { beginDatasetTransfer, clearDatasetTransfer, getDatasetTransfer,
   validateDatasetSources,
@@ -17,6 +18,7 @@ type Dataset={id:string;name:string;upload_kind:"zip"|"folder";
   status:string;source_bytes:number;image_count:number;frame_count:number;
   video_count:number;created_at:number;last_activity_at:number;error_code:string|null;
   inventory_revision:number;mirrored_revision:number;configuration_revision:number;
+  index_progress?:{phase:string;files:number;checked_frames:number;updated_at:number}|null;
   native_project_id:number|null};
 type MirrorStatus={state:string;uploaded_frames:number;total_frames:number;
   ready_for_automatic_jobs:boolean;error_code:string|null;
@@ -58,14 +60,20 @@ export function DatasetScreen({auth}:{auth:Auth}) {
   useEffect(()=>watchDatasetTransfer(setTransfer),[]);
   const [error,setError]=useState("");
   const [notice,setNotice]=useState("");
-  const refresh=useCallback(async()=>{
+  const refresh=useMemo(()=>singleFlight(async()=>{
     try{
       const result=await uploadApi<{items:Dataset[]}>("/datasets");
       setDatasets(result.items);
       setSelected(old=>result.items.some(d=>d.id===old)?old:(result.items[0]?.id||""));
     }catch(e){setError((e as Error).message);return false;}
-  },[]);
+  }),[]);
   useEffect(()=>{void refresh();},[refresh]);
+  const indexing=datasets.some(d=>d.status==="indexing");
+  useEffect(()=>{
+    if(!indexing)return;
+    const timer=window.setInterval(()=>{if(!document.hidden)void refresh();},5000);
+    return()=>window.clearInterval(timer);
+  },[indexing,refresh]);
   useEffect(()=>{if(transfer && !transfer.running)void refresh();},
     [transfer?.datasetId,transfer?.phase,transfer?.running,refresh]);
   useEffect(()=>{
@@ -95,6 +103,16 @@ export function DatasetScreen({auth}:{auth:Auth}) {
       await api("/datasets/"+dataset.id+"/mirror/retry","POST",undefined,auth.csrf_token);
       setNotice("Full-dataset Supervisely replication queued for the worker.");
       setMirror(await api<MirrorStatus>("/datasets/"+dataset.id+"/mirror-status"));
+    }catch(e){setError((e as Error).message);}
+    finally{setBusy(false);}
+  }
+  async function retryIndex(){
+    if(!dataset||busy)return;
+    setBusy(true);setError("");
+    try{
+      await uploadApi("/datasets/"+dataset.id+"/finalize?background=true","POST",undefined,auth.csrf_token);
+      setNotice("Local validation queued. Saved source files will be reused.");
+      await refresh();
     }catch(e){setError((e as Error).message);}
     finally{setBusy(false);}
   }
@@ -268,6 +286,17 @@ export function DatasetScreen({auth}:{auth:Auth}) {
             {dataset.frame_count} frames available for annotation</p>
           <p className="muted small">Local status: {dataset.status} · Native project: {dataset.native_project_id||"Not created yet"}
             {" "}· Inventory revision {dataset.inventory_revision} · Mirrored revision {dataset.mirrored_revision}</p>
+          {dataset.status==="indexing"&&<div className="settings-note" role="status">
+            <strong>Validating local data in the background</strong>
+            <p>{dataset.index_progress
+              ?`${dataset.index_progress.phase}: ${dataset.index_progress.files.toLocaleString()} files indexed, ${dataset.index_progress.checked_frames.toLocaleString()} frames checked.`
+              :"Waiting for the local indexer."}</p>
+            <p className="muted small">You can close the browser. Supervisely upload starts after validation completes.
+              If progress does not advance, check the indexer service logs.</p>
+          </div>}
+          {admin&&dataset.status==="failed"&&dataset.error_code==="upload_index_failed"&&
+            <button className="btn secondary" disabled={busy} onClick={()=>void retryIndex()}>
+              <RotateCcw size={15}/> Retry local validation</button>}
           {dataset.status==="ready"&&<div className="dataset-mirror-status">
             <strong>Supervisely media upload: {mirror?.ready_for_automatic_jobs?
               "Complete":"Not complete"}</strong>
@@ -321,7 +350,7 @@ export function DatasetScreen({auth}:{auth:Auth}) {
           </div>)}
           {transfer?.datasetId===dataset.id&&transfer.error&&
             <p className="alert danger" role="alert">{transfer.error}</p>}
-          {admin&&dataset.status!=="ready"&&<div className="dataset-recovery-actions">
+          {admin&&!["ready","indexing"].includes(dataset.status)&&<div className="dataset-recovery-actions">
             {transfer?.datasetId===dataset.id&&transfer.running?
               <button type="button" className="btn secondary" disabled={busy||transfer.phase==="validating"}
                 onClick={()=>void stopSelected()}><PauseCircle size={15}/> Stop upload</button>:

@@ -46,7 +46,10 @@ def current_event(
     event_id = ctx.session.event_id or DEFAULT_EVENT_ID
     statement = select(Event).where(Event.id == event_id)
     if writable:
-        statement = statement.with_for_update().execution_options(populate_existing=True)
+        # Serialize event mutations without conflicting with the KEY SHARE
+        # locks held by long-running media inserts' event foreign keys.
+        # Event IDs are immutable; PostgreSQL NO KEY UPDATE is sufficient.
+        statement = statement.with_for_update(key_share=True).execution_options(populate_existing=True)
     event = db.scalar(statement)
     if event is None:
         raise HTTPException(status_code=409, detail="Select an existing event first.")

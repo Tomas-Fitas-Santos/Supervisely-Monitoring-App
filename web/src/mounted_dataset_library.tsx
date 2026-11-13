@@ -8,6 +8,7 @@ type Dataset = {
   id:string;name:string;upload_kind:string;source_folder?:string|null;
   status:string;source_bytes:number;image_count:number;frame_count:number;
   video_count:number;native_project_id:number|null;error_code:string|null;
+  index_progress?:{phase:string;files:number;checked_frames:number}|null;
 };
 type Mirror = {
   state:string;uploaded_frames:number;total_frames:number;
@@ -198,9 +199,12 @@ export function MountedDatasetLibrary({auth}:{auth:Auth}){
               "Checking the local indexing queue…"}</strong>
             <p className="muted small">Local index state: {index?.state||"checking"}.
               {index?.state==="running"?
-                " Files are being read and frames prepared. Counts appear when indexing finishes.":
+                " Files are being read and frames prepared.":
                 " No remote Supervisely upload starts until indexing finishes."}
               {" "}The browser can be closed.</p>
+            {dataset.index_progress&&<p className="muted small">
+              {dataset.index_progress.files.toLocaleString()} files indexed · {dataset.index_progress.checked_frames.toLocaleString()} frames checked
+            </p>}
             {index?.state==="pending"&&index.pending_seconds!=null&&index.pending_seconds>30&&
               <p className="muted small">The local indexer may be stopped.
                 On the Docker host run <code>docker compose --env-file .env.live -f compose.live.yaml up -d indexer</code>

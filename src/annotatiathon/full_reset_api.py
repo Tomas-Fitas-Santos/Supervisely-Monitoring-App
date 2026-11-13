@@ -120,6 +120,8 @@ def request_reset(
     event = current_event(db, ctx, writable=True)
     if payload.confirmation != "RESET " + event.name:
         raise HTTPException(status_code=422, detail="Type the exact reset confirmation phrase.")
+    from .dataset_indexing import require_idle_imports
+    require_idle_imports(db, event.id)
     config = db.get(SuperviselyConfig, 1)
     if not config or not config.verified or not config.token_ciphertext:
         raise HTTPException(

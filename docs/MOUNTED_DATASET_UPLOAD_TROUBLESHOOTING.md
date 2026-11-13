@@ -1,5 +1,8 @@
 # Mounted-source datasets: indexing and Supervisely mirroring
 
+For large folder/ZIP imports, background recovery, database contention, and
+100,000-image scale evidence, see [Large dataset ingestion](LARGE_DATASET_INGEST.md).
+
 Nightjar imports a local dataset in **two separate, durable phases**:
 
 1. **Local indexing**: the always-on `indexer` service reads the mounted species/video

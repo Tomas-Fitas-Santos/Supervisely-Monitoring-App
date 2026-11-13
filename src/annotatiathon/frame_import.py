@@ -76,7 +76,8 @@ def natural_frame_key(frame: MediaAsset) -> tuple:
 
 def index_supplied_frames(db: Session, video: MediaVideo, media_root: Path,
                           manifest_path: Path | None, *, strict: bool,
-                          path_for_frame: Callable[[str], Path] | None = None) -> None:
+                          path_for_frame: Callable[[str], Path] | None = None,
+                          progress=None) -> None:
     frames = list(db.scalars(select(MediaAsset).where(MediaAsset.video_id == video.id)))
     descriptions = {}
     declared_total = None
@@ -150,6 +151,8 @@ def index_supplied_frames(db: Session, video: MediaVideo, media_root: Path,
             detail=f"Duplicate source frame ordinals in {video.video_group}.",
         )
     for frame, ordinal in zip(frames, ordinals):
+        if progress:
+            progress(checked_frames=progress.values.get("checked_frames", 0) + 1)
         description = descriptions.get(Path(frame.relative_path).name)
         frame.frame_index = ordinal
         if strict:

@@ -48,6 +48,22 @@ export function validateOffset(value: number, size: number): number {
   if (!Number.isSafeInteger(value) || value < 0 || value > size) throw new Error("Server returned invalid saved upload progress.");
   return value;
 }
+/** Hide per-file network latency with four requests; settle active writes on error. */
+export async function uploadSources(sources: Map<string, File>,
+  send: (path: string, file: File) => Promise<void>): Promise<void> {
+  const entries = sources.entries();
+  let failure: unknown;
+  async function worker() {
+    while (!failure) {
+      const next = entries.next();
+      if (next.done) return;
+      try { await send(next.value[0], next.value[1]); }
+      catch (error) { failure = error || new Error("Dataset upload stopped."); }
+    }
+  }
+  await Promise.all(Array.from({length: Math.min(4, sources.size)}, worker));
+  if (failure) throw failure;
+}
 /** Sequential slices bound memory regardless of total dataset size. */
 export async function uploadFile(params: {file: Blob; offset: number; url: string; csrf: string; signal: AbortSignal;
   readOffset: () => Promise<number>; onProgress: (bytes: number) => void}) {

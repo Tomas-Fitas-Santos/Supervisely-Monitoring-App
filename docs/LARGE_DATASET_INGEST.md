@@ -1,0 +1,148 @@
+# Large dataset ingestion and system impact
+
+## Recommended path
+
+For a dataset already on the Docker host, use **Dataset → Link host folder**.
+Mount its parent directory read-only through `NIGHTJAR_DATASET_HOST_DIR`; the
+existing Compose backend definition exposes the same source and private media
+paths to the API, indexer, and native workers. See
+[the host-folder setup](DIRECT_FOLDER_TO_SUPERVISELY.md).
+
+The indexer reads existing images without copying them. The mirror worker sends
+them directly from the server to Supervisely once, retaining source-to-image-ID
+mappings. Automatic jobs then reference those IDs. Existing manual assignments
+retain their independent-copy behavior.
+
+Every authorized organiser can view images through the existing authenticated,
+event-scoped review image endpoint. Their computers need neither the source
+folder nor a mount. The host and source volume must stay available. Displaying
+an image still transfers its bytes to the viewing browser; mounting eliminates
+the initial browser dataset transfer and automatic job reuploads.
+
+For a dataset on a remote organiser's computer, retain **Upload folder or ZIP**.
+ZIP is usually preferable to 100,000 individual files across a high-latency
+connection. Both formats use resumable 8 MiB chunks. Folder imports use up to
+four concurrent file requests, and failed transfers settle active writes before
+reporting interruption.
+
+## Why validation could stall the system
+
+The old browser path performed hashing, archive extraction, frame validation,
+and inventory insertion inside a single finalization HTTP request. Its event
+row lock stayed open during that work. Increasing a browser deadline did not
+remove upstream proxy deadlines. Cloudflare documents its origin read timeout
+and recommends status polling for long operations in its
+[524 guidance](https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-5xx-errors/error-524/).
+
+The inspected live logs contained a disconnected finalization request (Nginx
+499), connection-pool exhaustion, and disconnected membership refresh requests.
+Those logs do not prove which component first ended the historical request.
+The code does explain a likely amplification: other mutations wait for the same
+event lock while occupying database connections.
+
+There was a second locking problem even after moving work out of HTTP:
+PostgreSQL foreign-key checks on inserted images hold `KEY SHARE` locks on the
+event. The old `FOR UPDATE` event guard conflicts with those locks. Event
+mutation guards now use `FOR NO KEY UPDATE`: they still serialize event
+mutations, but remain compatible with long image-insert transactions. This is
+also applied to publication, manual jobs, submission validation, and closeout
+event guards. Event IDs remain immutable. See the
+[PostgreSQL lock compatibility rules](https://www.postgresql.org/docs/17/explicit-locking.html)
+and [SQLAlchemy lock options](https://docs.sqlalchemy.org/en/20/core/selectable.html).
+
+Chunk requests also previously ran synchronous database and disk operations on
+the API's async event loop. They now buffer only one bounded chunk and perform
+those operations in a worker thread.
+
+## New lifecycle and compatibility
+
+The browser calls `POST /datasets/{id}/finalize?background=true`. This returns
+HTTP 202 after validating upload receipts and queuing a durable
+`index_uploaded_dataset` operation. The dataset enters `indexing`. The always-on
+indexer handles uploaded folders and ZIPs as well as mounted folders, without
+Supervisely credentials. The browser can close after queuing validation.
+
+The old synchronous finalization API remains available for existing clients and
+scripts. It rejects a dataset that already has a background import in progress.
+Existing ready datasets, media IDs, frame ordinals, checksum validation,
+Supervisely mappings, review URLs, and database schema remain compatible.
+
+| Area | Integration behavior |
+| --- | --- |
+| Browser | Polls indexing status; displays file/check progress; retries failed validation using retained server files |
+| API | Accepts chunks and queues work; event mutations remain available during inventory inserts |
+| Indexer | Uses 500-row bulk inserts; commits validated inventory atomically; writes a small shared progress snapshot at most once per second |
+| Recovery | PostgreSQL session advisory locks prevent duplicate owners; after a crash, rebuilds uncommitted derived output from retained staging or mounted originals |
+| Supervisely mirror | Batches default to 128 images and 64 MiB of source bytes; an individual larger image travels alone; remote inventory is reconciled before recovery writes |
+| Job publication | Existing automatic source-image-ID references continue to avoid image reuploads |
+| Review and organisers | Existing server authorization and event isolation apply to both mounted and private media |
+| Reset | Refuses destructive reset while a local import is indexing |
+| Closeout | Keeps the existing cutoff behavior; an importer checks event state again before committing and cannot add ready inventory after closeout |
+
+Folder uploads attempt hard links from private staging into final media, avoiding
+a second copy of all supplied image bytes. Filesystems without hard-link support
+fall back to copying. ZIPs require extraction space. Mounted source files are
+never deleted or rewritten by recovery; cleanup is limited to validated private
+derived directories.
+
+No database migration is needed. Current defaults allow 250,000 assets and
+140,000,000,000 source bytes. ZIP expanded contents are also size-limited. Ensure
+space for archive plus extracted output, or original videos plus decoded frames.
+Keep large media outside OneDrive; actual host-volume performance must be
+measured separately from the synthetic application benchmark.
+
+Optional private environment settings:
+
+```dotenv
+MIRROR_BATCH_IMAGES=128
+MIRROR_BATCH_BYTES=67108864
+```
+
+The dedicated mirror worker retains its existing 768 MiB container limit. The
+batch byte setting describes source-file bytes, not a guarantee of total SDK
+memory usage. Increase concurrency or batch limits only with measured throughput
+and memory evidence. Uploads still depend on host uplink and Supervisely limits.
+
+## Scale evidence and limits
+
+The repeatable [benchmark](../scripts/benchmark_dataset_ingest.py) indexes
+100,000 JPEGs representing 6,553,600,000 logical source bytes. It uses temporary
+SQLite, repeated cached JPEG content, and hard links on the container filesystem.
+It does not measure a real host drive, diverse image decoding, PostgreSQL
+throughput, or Supervisely upload speed.
+
+On this host, the first instrumented run took **115.968 seconds**. After changing
+inventory insertion to 500-row bulk mappings, the run took **97.432 seconds**
+(about **16% less elapsed time**). Hashing took 15.704 seconds and image-header
+reads 11.578 seconds in the latter run; the rest includes directory/path work,
+identity sorting, SQL/ORM work, and commit overhead. These are single runs, not a
+controlled hardware comparison or an upload-speed promise.
+
+The large-file regression suite exercises a sparse ZIP64 archive above 6 GiB,
+chunk receipts and resume offsets above 4 GiB, browser slicing above 5 GiB,
+folder/ZIP background imports, retry and restart recovery, second-organiser
+access, anonymous denial, unchanged automatic publication behavior, and real
+PostgreSQL worker ownership and foreign-key lock concurrency. Sparse and virtual
+fixtures prove large-file addressing, not sustained multi-gigabyte transfer.
+
+Validation completed with **300 backend tests passing**, **8 browser upload/read
+tests passing**, the production TypeScript/Vite build passing, and Python lint
+passing. The disposable PostgreSQL database was migrated through the existing
+schema head. Lint ignored executable-bit checks because Docker's Windows bind
+mount presents source files as executable.
+
+A real 100,000-image Supervisely transfer remains an operational verification
+step. This change does not upload a synthetic collection into the real workspace.
+
+## Applying the change
+
+Rebuild the API, web, indexer, and native worker images together using the
+existing deployment workflow. The new browser queue needs the updated indexer;
+restart the dedicated mirror worker when applying its recovery/lock changes.
+Do not run an old mirror worker concurrently with a new one during the upgrade.
+No database reset, source relocation, or volume removal is required.
+
+After deployment, reload the browser so it uses the updated finalization flow.
+Old disconnected imports are not automatically guessed to be complete: inspect
+their saved upload receipts, then resume/requeue using the existing controls.
+Do not register another mounted copy merely because indexing takes time.

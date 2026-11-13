@@ -292,9 +292,29 @@ def assigned_people(db: Session, job: LabelingJob):
 
 def process_mirror_once(db: Session, api, config: SuperviselyConfig) -> dict | None:
     """Mirror a whole source library once, before any labeling job can be issued."""
+    from .dataset_indexing import operation_lock
+
+    candidates = list(db.scalars(select(NativeOperation.id).where(
+        NativeOperation.kind == "mirror_dataset",
+        NativeOperation.status.in_(("pending", "running")),
+    ).order_by(NativeOperation.created_at, NativeOperation.id)))
+    db.rollback()
+    for operation_id in candidates:
+        with operation_lock(db, operation_id) as acquired:
+            if acquired:
+                result = _process_mirror_operation(db, api, config, operation_id)
+                if result is not None:
+                    return result
+    return None
+
+
+def _process_mirror_operation(db, api, config, operation_id):
+    # mirror_dataset inventories remote names before any write. After a crash,
+    # adopt matching remote images rather than blindly replaying uncertain writes.
     op = db.scalar(select(NativeOperation).where(
         NativeOperation.kind == "mirror_dataset",
-        NativeOperation.status == "pending",
+        NativeOperation.status.in_(("pending", "running")),
+        NativeOperation.id == operation_id,
     ).order_by(NativeOperation.created_at, NativeOperation.id)
       .with_for_update(skip_locked=True))
     if op is None:
@@ -408,7 +428,7 @@ def require_open_event(db: Session, event_id: str) -> None:
 def ensure_native_job_number(db: Session, job: LabelingJob) -> int:
     if job.native_job_number is None:
         event = db.scalars(select(Event).where(Event.id == job.event_id)
-                           .with_for_update().execution_options(populate_existing=True)).one()
+                           .with_for_update(key_share=True).execution_options(populate_existing=True)).one()
         db.refresh(job)
         if job.native_job_number is None:
             event.last_native_job_number += 1
@@ -627,7 +647,7 @@ def queue_automatic_incomplete_return(
     if job.assignee_person_id is None:
         raise NativeWorkerError("automatic_return_requires_single_assignee")
     event = db.scalar(select(Event).where(Event.id == job.event_id)
-                      .with_for_update().execution_options(populate_existing=True))
+                      .with_for_update(key_share=True).execution_options(populate_existing=True))
     if event is None or event.status != "active":
         return job.status
     job.status = "needs_correction"
@@ -703,7 +723,7 @@ def sync_one(db: Session, api, job: LabelingJob, *,
         binding.last_synced_at = epoch()
         statuses.append(native)
     event = db.scalar(select(Event).where(Event.id == job.event_id)
-                      .with_for_update().execution_options(populate_existing=True))
+                      .with_for_update(key_share=True).execution_options(populate_existing=True))
     if event is None or event.status != "active":
         db.rollback()
         return previous_status
@@ -1724,7 +1744,7 @@ def process_event_reset(db: Session, api, config: SuperviselyConfig) -> dict | N
         export.unlink(missing_ok=True)
         locked = db.scalar(select(Event).where(
             Event.id == event_id,
-        ).with_for_update())
+        ).with_for_update(key_share=True))
         if locked is None or locked.status != "resetting":
             raise NativeWorkerError("reset_event_identity_changed")
         clear_event_data(db, event_id)
@@ -1793,6 +1813,9 @@ def worker_cycle(lane: str) -> bool:
                 from .mounted_datasets import process_mounted_index_once
                 indexed = process_mounted_index_once(db)
                 if indexed:
+                    return True
+                from .dataset_indexing import process_index_once
+                if process_index_once(db) is not None:
                     return True
             # Local inventory work must run without requiring the optional
             # Supervisely SDK token, and never consume publishing/status lanes.

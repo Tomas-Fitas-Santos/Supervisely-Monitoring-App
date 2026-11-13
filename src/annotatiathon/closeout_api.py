@@ -255,7 +255,7 @@ def finalize_event(
 
 def lock_closeout_event(db: Session, event_id: str) -> Event:
     return db.scalars(select(Event).where(Event.id == event_id)
-                      .with_for_update().execution_options(populate_existing=True)).one()
+                      .with_for_update(key_share=True).execution_options(populate_existing=True)).one()
 
 
 def closeout_progress(db: Session, event: Event) -> dict:

@@ -2,7 +2,7 @@
  * A full browser reload loses File objects: the organiser must reselect the
  * original archive/folder, and we resume using offsets persisted on the server.
  */
-import { uploadApi as api, uploadFile, validateOffset, validateDatasetSources } from "./upload_helpers";
+import { uploadApi as api, uploadFile, uploadSources, validateOffset, validateDatasetSources } from "./upload_helpers";
 export { validateDatasetSources } from "./upload_helpers";
 
 type UploadKind = "zip" | "folder";
@@ -14,7 +14,7 @@ type UploadStatus = { file_progress?: FileReceipt[]; file?: FileReceipt | null; 
 
 export type DatasetTransferState = {
   datasetId: string; name: string; running: boolean;
-  phase: "preparing" | "reconciling" | "uploading" | "validating" | "ready" | "interrupted";
+  phase: "preparing" | "reconciling" | "uploading" | "validating" | "queued" | "ready" | "interrupted";
   done: number; total: number; files: number; count: number;
   error: string | null;
 };
@@ -105,7 +105,7 @@ export function beginDatasetTransfer(params: {
       for(const offset of offsets.values()) done += offset;
       update({done, phase: "uploading"});
       let index = 0;
-      for(const [path, file] of sources) {
+      await uploadSources(sources, async (path, file) => {
         await uploadFile({file, offset: offsets.get(path) || 0, csrf, signal: controller.signal,
           url: "/datasets/uploads/" + datasetId + "/chunk?relative_path=" + encodeURIComponent(path),
           readOffset: async () => {
@@ -116,10 +116,10 @@ export function beginDatasetTransfer(params: {
           onProgress: bytes => {done += bytes; update({done});},
         });
         update({files: ++index});
-      }
+      });
       update({ phase: "validating" });
-      await api("/datasets/" + datasetId + "/finalize", "POST", undefined, csrf, controller.signal, 30 * 60_000);
-      update({ phase: "ready", running: false });
+      await api("/datasets/" + datasetId + "/finalize?background=true", "POST", undefined, csrf, controller.signal);
+      update({ phase: "queued", running: false });
     } catch (error) {
       update({ phase: "interrupted", running: false, error: (error as Error).message || "Dataset transfer stopped." });
       try {

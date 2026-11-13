@@ -162,7 +162,7 @@ def create_manual_jobs(
 ):
     event = current_event(db, ctx, writable=True)
     # Serialize manual writes so simultaneous requests cannot double-assign a video.
-    db.scalar(select(Event).where(Event.id == event.id).with_for_update())
+    db.scalar(select(Event).where(Event.id == event.id).with_for_update(key_share=True))
     dataset = get_dataset(db, event.id, payload.dataset_id)
     if dataset.status != "ready":
         raise HTTPException(status_code=409, detail="Dataset must be finalized.")
@@ -423,7 +423,7 @@ def reassign_job(
     db: Session = Depends(get_db),
 ):
     event = current_event(db, ctx, writable=True)
-    db.scalar(select(Event).where(Event.id == event.id).with_for_update())
+    db.scalar(select(Event).where(Event.id == event.id).with_for_update(key_share=True))
     job = db.scalar(select(LabelingJob).where(
         LabelingJob.event_id == event.id,
         LabelingJob.id == job_id,

@@ -39,7 +39,7 @@ def enqueue_validation(db: Session, job: LabelingJob) -> bool:
     if job.status not in {"on_review", "completed"}:
         return False
     event = db.scalar(select(Event).where(Event.id == job.event_id)
-                      .with_for_update().execution_options(populate_existing=True))
+                      .with_for_update(key_share=True).execution_options(populate_existing=True))
     if event is None or event.status != "active":
         return False
     binding = db.scalar(select(NativeJobBinding).where(

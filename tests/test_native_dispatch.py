@@ -1003,6 +1003,45 @@ def test_pre_event_mirror_is_complete_and_job_publish_uploads_zero_frames(config
     assert len(sdk.images[sdk.datasets[0].id]) == 3
 
 
+def test_crashed_mirror_reconciles_existing_images_before_uploading(configured):
+    _http, maker, _csrf, _plan_id, sdk = configured
+    with maker() as db:
+        op = db.scalar(select(NativeOperation).where(NativeOperation.kind == "mirror_dataset"))
+        op.status = "running"  # Process exited after the remote writes committed.
+        binding = db.scalar(select(NativeSourceMedia))
+        db.delete(binding)  # Simulate a missing local receipt for one remote image.
+        db.commit()
+        result = process_mirror_once(db, sdk, db.get(SuperviselyConfig, 1))
+        assert result["status"] == "done"
+        assert len(list(db.scalars(select(NativeSourceMedia)))) == 3
+    assert len(sdk.upload_history) == 1
+
+
+def test_mirror_batches_respect_image_and_byte_limits(configured, monkeypatch):
+    from annotatiathon import native_media_pool
+
+    _http, maker, _csrf, _plan_id, sdk = configured
+    monkeypatch.setattr(native_media_pool, "get_settings", lambda: Obj(
+        mirror_batch_images=4, mirror_batch_bytes=1024**2))
+    with maker() as db:
+        ds = db.get(MediaDataset, "dataset01")
+        for number in range(7):
+            relative = f"images/large/{number}.jpg"
+            path = Path(ds.root_path) / "media" / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"synthetic frame")
+            db.add(MediaAsset(event_id=ds.event_id, dataset_id=ds.id,
+                relative_path=relative, morphology="large", kind="image",
+                size_bytes=400_000, sha256="a" * 64))
+        op = db.scalar(select(NativeOperation).where(NativeOperation.kind == "mirror_dataset"))
+        op.status = "pending"
+        db.commit()
+        assert process_mirror_once(db, sdk, db.get(SuperviselyConfig, 1))["status"] == "done"
+    # 400k source bytes limit batches to two images, rather than four.
+    # The initial three-image fixture was uploaded before the limit override.
+    assert len(sdk.upload_history) == 5
+
+
 @pytest.mark.parametrize("repeat", [False, True])
 def test_manual_duplicate_jobs_use_independent_copies_and_annotator_mappings(configured, repeat):
     from annotatiathon.models import WorkPacket

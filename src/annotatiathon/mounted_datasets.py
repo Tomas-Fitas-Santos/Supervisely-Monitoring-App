@@ -5,12 +5,11 @@ Only the native worker opens media and uploads paths directly to Supervisely.
 No browser transfer, local copy of supplied frames, or public filesystem browsing.
 """
 import logging
-import shutil
 from pathlib import Path, PurePosixPath
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select
+from sqlalchemy import insert, select
 from sqlalchemy.orm import Session
 
 from .auth import AuthContext, requires
@@ -178,7 +177,7 @@ def mounted_index_status(
                 if op and op.status == "running" and op.claimed_at else None}
 
 
-def index_mounted_dataset(db: Session, ds: MediaDataset):
+def index_mounted_dataset(db: Session, ds: MediaDataset, progress=None):
     """Index file metadata in one transaction; supplied image bytes remain mounted."""
     source = mounted_source(ds.source_folder)
     root = Path(ds.root_path)
@@ -189,6 +188,7 @@ def index_mounted_dataset(db: Session, ds: MediaDataset):
     frame_count = 0
     image_count = 0
     video_count = 0
+    asset_rows = []
     settings = get_settings()
     from .frame_extraction import extract_full_video
     from .frame_import import index_supplied_frames
@@ -220,16 +220,20 @@ def index_mounted_dataset(db: Session, ds: MediaDataset):
                         else count_file(path))
         if video is not None:
             video.extracted_bytes += size
-        db.add(MediaAsset(
-            event_id=ds.event_id, dataset_id=ds.id, relative_path=rel,
-            morphology=species, kind=kind,
-            video_group=video.video_group if video else None,
-            video_id=video.id if video else None, frame_index=ordinal,
-            presentation_timestamp=pts, frame_width=width, frame_height=height,
-            size_bytes=size, sha256=digest,
-        ))
+        asset_rows.append({
+            "event_id": ds.event_id, "dataset_id": ds.id, "relative_path": rel,
+            "morphology": species, "kind": kind,
+            "video_group": video.video_group if video else None,
+            "video_id": video.id if video else None, "frame_index": ordinal,
+            "presentation_timestamp": pts, "frame_width": width, "frame_height": height,
+            "size_bytes": size, "sha256": digest,
+        })
         if (frame_count + image_count) % 500 == 0:
-            db.flush()
+            db.execute(insert(MediaAsset), asset_rows)
+            asset_rows.clear()
+        if progress:
+            progress(phase="indexing", files=frame_count + image_count,
+                     source_bytes=source_bytes)
 
     for species_dir in sorted(source.iterdir()):
         if species_dir.name.startswith("."):
@@ -305,19 +309,26 @@ def index_mounted_dataset(db: Session, ds: MediaDataset):
                     frames += 1
                 if not frames:
                     raise ValueError(f"empty_source_video_folder:{video.video_group}")
+                if asset_rows:
+                    db.execute(insert(MediaAsset), asset_rows)
+                    asset_rows.clear()
                 db.flush()
                 index_supplied_frames(db, video, media_root, manifest,
                     strict=ds.extraction_policy == "all_frames",
-                    path_for_frame=lambda rel: media_file(ds, rel))
+                    path_for_frame=lambda rel: source.joinpath(*PurePosixPath(rel).parts[1:]), progress=progress)
                 video_count += 1
             elif entry.is_file():
                 raise ValueError("expected_species_video_file_or_frame_directory")
     if frame_count + image_count == 0:
         raise ValueError("mounted_source_has_no_usable_frames")
+    if asset_rows:
+        db.execute(insert(MediaAsset), asset_rows)
     ds.source_bytes = source_bytes
     ds.frame_count = frame_count
     ds.image_count = image_count
     ds.video_count = video_count
+    from .dataset_indexing import require_active_import_event
+    require_active_import_event(db, ds)
     ds.status = "ready"
     ds.completed_at = epoch()
     ds.error_code = None
@@ -325,49 +336,9 @@ def index_mounted_dataset(db: Session, ds: MediaDataset):
 
 
 def process_mounted_index_once(db: Session) -> dict | None:
-    """Run outside HTTP in the existing long-running worker; no SDK required."""
-    op = db.scalar(select(NativeOperation).where(
-        NativeOperation.kind == "index_mounted_dataset",
-        NativeOperation.status == "pending",
-    ).order_by(NativeOperation.created_at, NativeOperation.id)
-        .with_for_update(skip_locked=True))
-    if op is None:
-        db.rollback()
-        return None
-    op.status = "running"
-    op.claimed_at = epoch()
-    op.attempts += 1
-    op_id, ds_id = op.id, op.target_id
-    db.commit()
-    ds = db.get(MediaDataset, ds_id)
-    try:
-        if ds is None or ds.upload_kind != "mounted" or ds.status != "indexing":
-            raise ValueError("mounted_dataset_not_indexable")
-        index_mounted_dataset(db, ds)
-        finished = db.get(NativeOperation, op_id)
-        finished.status = "done"
-        finished.completed_at = epoch()
-        finished.error_code = None
-        db.commit()
-        return {"status": "done", "operation_id": op_id, "dataset_id": ds_id}
-    except Exception as exc:
-        db.rollback()
-        logger.exception("Mounted dataset indexing failed for dataset %s", ds_id)
-        ds = db.get(MediaDataset, ds_id)
-        if ds is not None:
-            ds.status = "failed"
-            ds.error_code = "mounted_index_failed"
-        failed = db.get(NativeOperation, op_id)
-        failed.status = "attention"
-        failed.error_code = "mounted_index_failed"
-        db.commit()
-        # Never remove the mounted source; only delete derived, private frames.
-        if ds is not None:
-            shutil.rmtree(Path(ds.root_path) / "media", ignore_errors=True)
-            (Path(ds.root_path) / "media").mkdir(exist_ok=True)
-        return {"status": "attention", "operation_id": op_id,
-                "dataset_id": ds_id, "error": type(exc).__name__}
-
+    """Local imports share a crash-safe claim/recovery implementation."""
+    from .dataset_indexing import process_index_once
+    return process_index_once(db, "index_mounted_dataset")
 
 def run_indexer(*, once: bool = False, poll_seconds: int = 8) -> None:
     """Index mounted source folders independently of Supervisely credentials.
@@ -389,6 +360,9 @@ def run_indexer(*, once: bool = False, poll_seconds: int = 8) -> None:
                 # Preserve mounted indexing as the first local-only operation.
                 # An open index requires finishing before queue preparation.
                 result = process_mounted_index_once(db)
+                if result is None:
+                    from .dataset_indexing import process_index_once
+                    result = process_index_once(db)
                 if result is None:
                     from .dataset_append import process_append_once
                     result = process_append_once(db)

@@ -4,6 +4,7 @@ Browser → chunk endpoint → private disk staging → validated immutable data
 The import never uploads to or modifies Supervisely until separately approved.
 """
 import hashlib
+import os
 import shutil
 import subprocess
 import zipfile
@@ -12,9 +13,11 @@ from pathlib import Path, PurePosixPath
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import case, delete, func, select
+from sqlalchemy import case, delete, func, insert, select
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 from .auth import AuthContext, requires
 from .config import get_settings
@@ -55,6 +58,7 @@ def dataset_view(ds: MediaDataset) -> dict:
     status = ds.status
     if status == "uploading" and epoch() - ds.last_activity_at >= STALE_UPLOAD_SECONDS:
         status = "interrupted"
+    from .dataset_indexing import read_progress
     return {
         "id": ds.id, "name": ds.name, "event_id": ds.event_id,
         "upload_kind": ds.upload_kind, "source_folder": ds.source_folder,
@@ -70,6 +74,7 @@ def dataset_view(ds: MediaDataset) -> dict:
         "inventory_revision": ds.inventory_revision,
         "configuration_revision": ds.configuration_revision,
         "mirrored_revision": ds.mirrored_revision,
+        "index_progress": read_progress(ds) if status == "indexing" else None,
     }
 
 
@@ -305,6 +310,19 @@ async def receive_chunk(
     ctx: AuthContext = Depends(requires("organiser", mutation=True)),
     db: Session = Depends(get_db),
 ):
+    # Bound memory by a chunk, never by archive/dataset size. Database waits
+    # and slow host-volume writes must not block the API's asyncio event loop.
+    payload = bytearray()
+    async for block in request.stream():
+        if len(payload) + len(block) > MAX_CHUNK_BYTES or offset + len(payload) + len(block) > total:
+            raise HTTPException(413, "Upload chunk exceeds size or remaining bytes.")
+        payload.extend(block)
+    return await run_in_threadpool(
+        store_chunk, dataset_id, relative_path, offset, total, payload, ctx, db,
+    )
+
+
+def store_chunk(dataset_id, relative_path, offset, total, payload, ctx, db):
     event = current_event(db, ctx, writable=True)
     ds = get_dataset(db, event.id, dataset_id, lock=True)
     if ds.status != "uploading":
@@ -344,19 +362,12 @@ async def receive_chunk(
         raise HTTPException(
             status_code=409, detail="On-disk progress differs from database. Stop and inspect."
         )
-    written = 0
+    written = len(payload)
     try:
         with target.open("r+b" if target.exists() else "wb") as stream:
             stream.seek(offset)
-            async for block in request.stream():
-                written += len(block)
-                if written > MAX_CHUNK_BYTES or offset + written > total:
-                    raise HTTPException(
-                        status_code=413, detail="Upload chunk exceeds size or remaining bytes."
-                    )
-                stream.write(block)
+            stream.write(payload)
     except Exception:
-        # Roll back filesystem progress to match the uncommitted database state.
         if target.exists():
             with target.open("r+b") as stream:
                 stream.truncate(offset)
@@ -517,7 +528,20 @@ def safe_zip_entries(file: zipfile.ZipFile, max_count: int,
     return files
 
 
-def copy_and_hash(source, destination: Path) -> tuple[str, int]:
+def copy_and_hash(source, destination: Path, *, link_staged: bool = False) -> tuple[str, int]:
+    # Folder staging already lives on the persistent media volume. A hard link
+    # avoids a second full write and duplicate storage, while retained staging
+    # still permits retry after a crash. ZIP streams continue to copy normally.
+    if link_staged and isinstance(getattr(source, "name", None), (str, bytes)):
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.link(source.name, destination)
+        except FileExistsError:
+            raise
+        except OSError:
+            pass  # Filesystems without hard-link support retain the copy path.
+        else:
+            return sha256_file(destination)
     digest = hashlib.sha256()
     written = 0
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -603,14 +627,25 @@ def retry_dataset_mirror(
 @router.post("/{dataset_id}/finalize")
 def finalize_dataset(
     dataset_id: str,
+    background: bool = Query(default=False),
     ctx: AuthContext = Depends(requires("organiser", mutation=True)),
     db: Session = Depends(get_db),
 ):
     event = current_event(db, ctx, writable=True)
     ds = get_dataset(db, event.id, dataset_id, lock=True)
+    if background:
+        from .dataset_indexing import queue_uploaded_index
+        return JSONResponse(queue_uploaded_index(db, ds), status_code=202)
+    if ds.status == "indexing":
+        raise HTTPException(409, "Local indexing is already queued or running.")
+    return index_uploaded_dataset(db, ds)
+
+
+def index_uploaded_dataset(db: Session, ds: MediaDataset, progress=None):
+    """Legacy synchronous importer, also used by the durable local indexer."""
     if ds.status == "ready":
         return dataset_view(ds)
-    if ds.status != "uploading":
+    if ds.status not in {"uploading", "indexing"}:
         raise HTTPException(status_code=409, detail="Dataset cannot be finalized in this state.")
     files = list(db.scalars(select(DatasetStagedFile).where(
         DatasetStagedFile.dataset_id == ds.id,
@@ -636,7 +671,7 @@ def finalize_dataset(
 
     def get_video(group: str, policy: str) -> MediaVideo:
         if group not in video_records:
-            video = MediaVideo(event_id=event.id, dataset_id=ds.id,
+            video = MediaVideo(event_id=ds.event_id, dataset_id=ds.id,
                                video_group=group, extraction_policy=policy)
             db.add(video)
             db.flush()
@@ -655,19 +690,20 @@ def finalize_dataset(
         if video:
             video.frame_count += 1
             video.extracted_bytes += size
-        assets.append(MediaAsset(
-            event_id=event.id, dataset_id=ds.id,
-            relative_path=rel, morphology=morph, kind=kind,
-            video_group=group, size_bytes=size, sha256=digest,
-            video_id=video.id if video else None, frame_index=ordinal,
-            presentation_timestamp=pts, frame_width=width, frame_height=height,
-        ))
+        assets.append({
+            "event_id": ds.event_id, "dataset_id": ds.id,
+            "relative_path": rel, "morphology": morph, "kind": kind,
+            "video_group": group, "size_bytes": size, "sha256": digest,
+            "video_id": video.id if video else None, "frame_index": ordinal,
+            "presentation_timestamp": pts, "frame_width": width, "frame_height": height,
+        })
         if sum(counts.values()) > get_settings().max_dataset_assets:
             raise HTTPException(status_code=413, detail="Too many extracted video frames.")
         if len(assets) >= 500:
-            db.add_all(assets)
-            db.flush()
+            db.execute(insert(MediaAsset), assets)
             assets.clear()
+        if progress:
+            progress(phase="indexing", files=sum(counts.values()))
 
     try:
         for rel, stream in staged_sources(ds, files):
@@ -684,7 +720,8 @@ def finalize_dataset(
                     raise HTTPException(status_code=422, detail="Duplicate video title.")
                 source_group_names.add(group)
                 original = source_videos / morph / parts[2]
-                digest, _source_size = copy_and_hash(stream, original)
+                digest, _source_size = copy_and_hash(stream, original,
+                    link_staged=ds.upload_kind == "folder")
                 video = get_video(group, ds.extraction_policy)
                 video.source_sha256 = digest
                 video.source_relative_path = original.relative_to(root_dir(ds)).as_posix()
@@ -727,30 +764,37 @@ def finalize_dataset(
                     video = get_video(group, "supplied_unknown")
                     if parts[-1] == "frames.json":
                         path = root_dir(ds) / "provenance" / video.id / "frames.json"
-                        copy_and_hash(stream, path)
+                        copy_and_hash(stream, path, link_staged=ds.upload_kind == "folder")
                         manifests[group] = path
                         continue
-                digest, size = copy_and_hash(stream, media_dir / rel)
+                digest, size = copy_and_hash(stream, media_dir / rel,
+                    link_staged=ds.upload_kind == "folder")
                 register_asset(rel, morph, group, kind, digest, size)
-        db.add_all(assets)
+        if assets:
+            db.execute(insert(MediaAsset), assets)
         db.flush()
         if not counts:
             raise HTTPException(status_code=422, detail="No usable video frames found.")
         from .frame_import import index_supplied_frames
+        if progress:
+            progress(phase="checking_frames", files=sum(counts.values()), force=True)
         for group, video in video_records.items():
             if video.extraction_policy == "supplied_unknown":
                 index_supplied_frames(db, video, media_dir, manifests.get(group),
-                                      strict=ds.extraction_policy == "all_frames")
+                                      strict=ds.extraction_policy == "all_frames",
+                                      progress=progress)
         ds.image_count = counts["image"]
         ds.frame_count = counts["video_frame"]
         ds.video_count = len(videos)
+        from .dataset_indexing import require_active_import_event
+        require_active_import_event(db, ds)
         ds.status = "ready"
         ds.completed_at = epoch()
         # Preload the complete collection before event launch. The SDK worker
         # handles actual remote writes independently of this HTTP request.
         enqueue_mirror(db, ds)
         db.add(AuditEvent(
-            staff_id=ctx.staff.id, event_id=event.id, action="dataset.finalize",
+            staff_id=ds.created_by, event_id=ds.event_id, action="dataset.finalize",
             target_type="media_dataset", target_id=ds.id,
             details={
                 "images": ds.image_count, "frames": ds.frame_count,
