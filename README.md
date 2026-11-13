@@ -80,6 +80,75 @@ Check imported frames** to identify missing source-video grouping,
 unorderable frames, or inconsistent imported frame counts. Existing
 sampled frames need not be reuploaded solely because of gaps.
 
+## Add videos and prepare morphology-balanced 30-frame jobs
+
+The existing **Shared 30-image queue** and **Whole videos** modes are unchanged.
+The new **Morphology-balanced 30-frame queue** is opt-in and is intended
+for a fresh distribution plan, before any job from the selected source
+dataset has been assigned.
+
+1. **Data → Upload & Manage → Add videos to this dataset**: choose a folder
+   or ZIP containing new `species/video/frame_000000.jpg` clips or source
+   video files. The original dataset and all previously mirrored source
+   image IDs remain intact. The browser sends resumable chunks to a
+   separate append batch; the dedicated local indexer imports and hashes
+   the new clips before advancing the dataset inventory revision. A new
+   species directory is allowed; the same source video key is not.
+2. Check the append status until it is **committed**. Failure or discard
+   affects only the pending append batch. A stopped browser upload can
+   resume from recorded file offsets. The separate Supervisely mirror
+   worker uploads **only newly missing images** into the **same** native
+   source dataset. Launch cannot proceed until the mirror has finished
+   the current inventory revision.
+3. **Job Distribution → Automatic → Morphology-balanced 30-frame queue
+   → Prepare queue**: explicitly request a fresh queue preparation.
+   Dataset upload itself never prepares or publishes jobs. Preparation
+   can run before users check in or connect their Supervisely accounts.
+   It requires all local upload/indexing work to finish but does not
+   require the remote mirror to finish.
+4. Review the per-group coverage, source-video exclusions, warnings
+   about uncertain temporal overlap, and current inventory/configuration
+   revisions. Correct missing source-folder classifications in **Coverage
+   & Classification** before preparing again.
+5. **Create balanced queue draft → Approve → Launch**. Approval freezes
+   the prepared video's morphology mapping for that plan. Launch waits
+   for the current revision's complete Supervisely mirror. Workers
+   then assign one individual up-to-30-frame job per checked-in,
+   verified team member. They preferentially finish started videos,
+   opening a new full-density video from the least-covered eligible
+   morphology group to fill a job (including cross-video 16+14 blocks).
+
+Only the single final available job can be shorter than 30 frames.
+The default finish-window seal stops opening new videos one hour before
+the scheduled event end; already-started tails can still be assigned.
+The unfinished-video soft target defaults to 16, but is never used
+as a hard barrier that would starve an otherwise fillable 30-frame job.
+
+Full-density originals and declared-full frame clips with provably
+consecutive ordinals are eligible for balanced preparation. Unknown
+species, inferred frame numbering, missing source frames and `_sampled`
+variants are excluded from the new mode with a reason. This **does not**
+remove sampled footage from the original shared queue.
+
+Append is blocked after a dataset has assigned jobs or an approved,
+launched, or paused plan. To add footage after **approval but before
+launch**, use **Cancel balanced plan**, append the new batch, then
+**Prepare queue** again. A launched plan cannot be reopened to add source
+footage. Manual assignments cannot reserve its approved video runs.
+
+**Progress and provenance:** In the running balanced plan, choose
+**Video coverage** to see planned, assigned, structurally validated,
+complete-video usable frames and unfinished videos. The
+`balanced-manifest.jsonl` download streams a record of each source
+video. Only videos with every required frame validated emit individual
+frame records, which include source ordinals and immutable annotation
+snapshot references. This does not change the separate raw Supervisely
+annotation export or review scoring.
+
+The 300-participant worker topology defined above is unchanged.
+Do not remove database volumes, existing Supervisely datasets or
+existing annotation files to enable the new mode.
+
 ## Link a Windows dataset folder without a browser upload
 
 When **Data → Source folders & upload** displays **No folders available**,
