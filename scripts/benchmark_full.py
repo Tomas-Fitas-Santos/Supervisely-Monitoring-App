@@ -627,12 +627,12 @@ def import_dataset(client, call):
     archive = io.BytesIO()
     with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zipped:
         if PHASE == "full":
-            # 300 independent 30-frame videos, each intentionally sampled
+            # 360 independent 30-frame videos, each intentionally sampled
             # from sparse source indices. These *real JPEG bytes* traverse
             # the API upload/finalize and Supervisely mirror worker paths.
             from PIL import Image
 
-            for video in range(ANNOTATORS):
+            for video in range(ANNOTATORS + 60):
                 for frame in range(FRAMES):
                     index = video * FRAMES + frame
                     buffer = io.BytesIO()
@@ -664,7 +664,8 @@ def import_dataset(client, call):
     response.raise_for_status()
     return {"archive_bytes": len(content), "finalize_seconds": time.monotonic() - started,
             "dataset": response.json(),
-            "uploaded_images": ANNOTATORS * FRAMES if PHASE == "full" else FRAMES}
+            "uploaded_images": (ANNOTATORS + 60) * FRAMES
+                if PHASE == "full" else FRAMES}
 
 
 def export_dataset(client, call):
@@ -819,9 +820,11 @@ def load(seconds, latency, fail_rate, profile_scale=1.0, timeout_rate=0.0,
                 })
                 response.raise_for_status()
                 plan_data = response.json()
-                if plan_data["primary_blocks"] != ANNOTATORS or (
-                        plan_data["unique_frames"] != ANNOTATORS * FRAMES):
-                    raise RuntimeError("Full-flow plan did not allocate 300 unique 30-frame blocks")
+                if plan_data["primary_blocks"] != ANNOTATORS + 60 or (
+                        plan_data["unique_frames"] != (ANNOTATORS + 60) * FRAMES):
+                    raise RuntimeError(
+                        "Full-flow plan did not allocate the 300 initial and "
+                        "60 follow-up unique 30-frame blocks")
                 full_plan_id = plan_data["plan_id"]
                 response = call(organiser, "POST",
                                 f"/api/v1/labeling/plans/{full_plan_id}/approve")
