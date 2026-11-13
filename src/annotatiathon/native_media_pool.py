@@ -22,6 +22,7 @@ from .models import (
     epoch,
 )
 from .native_names import legacy_project_name, project_name
+from .worker_timing import code_timing
 
 
 class MirrorError(Exception):
@@ -133,7 +134,8 @@ def mirror_dataset(db: Session, api, config: SuperviselyConfig,
     local = list(db.scalars(select(MediaAsset).where(
         MediaAsset.event_id == ds.event_id, MediaAsset.dataset_id == ds.id,
     ).order_by(MediaAsset.relative_path)))
-    remote = api.image.get_list(remote_ds.id)
+    with code_timing("mirror.remote_image_inventory"):
+        remote = api.image.get_list(remote_ds.id)
     indexed = {image.name: image.id for image in remote}
     if len(indexed) != len(remote):
         raise MirrorError("duplicate_mirrored_image_names")
@@ -170,12 +172,13 @@ def mirror_dataset(db: Session, api, config: SuperviselyConfig,
     db.commit()
     for offset in range(0, len(pending), 24):
         batch = pending[offset:offset + 24]
-        uploaded = api.image.upload_paths(
-            remote_ds.id,
-            names=[row[1] for row in batch],
-            paths=[row[2] for row in batch],
-            conflict_resolution="skip",
-        )
+        with code_timing("mirror.upload_image_batch"):
+            uploaded = api.image.upload_paths(
+                remote_ds.id,
+                names=[row[1] for row in batch],
+                paths=[row[2] for row in batch],
+                conflict_resolution="skip",
+            )
         results = {item.name: item.id for item in uploaded}
         if set(results) != {row[1] for row in batch}:
             raise MirrorError("mirror_batch_upload_incomplete")
@@ -184,7 +187,8 @@ def mirror_dataset(db: Session, api, config: SuperviselyConfig,
                 event_id=ds.event_id, dataset_id=ds.id, media_id=item.id,
                 native_dataset_id=remote_ds.id, native_image_id=results[name],
             ))
-        db.commit()
+        with code_timing("mirror.persist_batch_bindings"):
+            db.commit()
     # Verify every source frame (and not just the first queued batch) exists.
     rows = list(db.scalars(select(NativeSourceMedia).where(
         NativeSourceMedia.dataset_id == ds.id,
