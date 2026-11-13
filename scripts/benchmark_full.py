@@ -677,6 +677,7 @@ def full_flow_summary(plan_id, dataset_id):
 
 
 def import_dataset(client, call):
+    import_start = time.monotonic()
     archive = io.BytesIO()
     with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zipped:
         if PHASE == "full":
@@ -701,6 +702,8 @@ def import_dataset(client, call):
             for source in sorted((DATA / "event/dataset/media").glob("*.jpg")):
                 zipped.write(source, f"images/bird/{source.name}")
     content = archive.getvalue()
+    build_seconds = time.monotonic() - import_start
+    transfer_start = time.monotonic()
     response = call(client, "POST", "/api/v1/datasets/uploads", json={
         "name": "Synthetic lifecycle import", "upload_kind": "zip",
         "extraction_policy": "all_frames"})
@@ -712,10 +715,13 @@ def import_dataset(client, call):
             content=content[offset:offset + 8 * 1024**2],
             headers={"Content-Type": "application/octet-stream"})
         response.raise_for_status()
+    transfer_seconds = time.monotonic() - transfer_start
     started = time.monotonic()
     response = call(client, "POST", f"/api/v1/datasets/{identifier}/finalize")
     response.raise_for_status()
-    return {"archive_bytes": len(content), "finalize_seconds": time.monotonic() - started,
+    return {"archive_bytes": len(content), "build_zip_seconds": round(build_seconds, 3),
+            "transfer_seconds": round(transfer_seconds, 3),
+            "finalize_seconds": time.monotonic() - started,
             "dataset": response.json(),
             "uploaded_images": (ANNOTATORS + 60) * FRAMES
                 if PHASE == "full" else FRAMES}
