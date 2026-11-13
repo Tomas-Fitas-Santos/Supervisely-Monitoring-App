@@ -1044,8 +1044,14 @@ def process_once(db: Session, api, config: SuperviselyConfig) -> dict | None:
             details={"code": failed.error_code},
         ))
         db.commit()
-        logger.warning("Native operation %s requires reconciliation (type %s)",
-                       opid, type(exc).__name__)
+        if os.environ.get("BENCHMARK_ANNOTATORS") == "300":
+            # The benchmark uses synthetic IDs and an isolated fake SDK.
+            # Preserve the full traceback there to diagnose load-test
+            # failures without exposing production API payloads in logs.
+            logger.exception("Synthetic publish operation %s failed", opid)
+        else:
+            logger.warning("Native operation %s requires reconciliation (type %s)",
+                           opid, type(exc).__name__)
         return {"operation_id": opid, "status": "attention"}
     finished = db.get(NativeOperation, opid)
     finished.status = "done"
@@ -1373,8 +1379,11 @@ def process_correction_once(db: Session, api, config: SuperviselyConfig) -> dict
             details={"error_code": task.error_code},
         ))
         db.commit()
-        logger.warning("Correction operation %s requires reconciliation (%s)",
-                       opid, type(exc).__name__)
+        if os.environ.get("BENCHMARK_ANNOTATORS") == "300":
+            logger.exception("Synthetic correction operation %s failed", opid)
+        else:
+            logger.warning("Correction operation %s requires reconciliation (%s)",
+                           opid, type(exc).__name__)
         return {"operation_id": opid, "status": "attention"}
 
 
