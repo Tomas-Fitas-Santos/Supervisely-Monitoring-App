@@ -89,12 +89,29 @@ try {
     Write-Host "Source mount already configured."
   }
 
-  $runningIds = @(& docker compose @compose --profile native ps --status running -q worker)
-  Check-Exit "Inspecting Supervisely worker"
-  $wasRunning = @($runningIds | Where-Object { $_ }).Count -gt 0
-  $uploadIds = @(& docker compose @compose --profile native ps --status running -q mirror-worker)
-  Check-Exit "Inspecting upload worker"
-  $uploadWasRunning = @($uploadIds | Where-Object { $_ }).Count -gt 0
+  $nativeCounts = [ordered]@{
+    "worker" = 4
+    "validation-worker" = 3
+    "correction-worker" = 3
+    "status-worker" = 1
+    "recovery-worker" = 1
+    "bulk-worker" = 1
+    "mirror-worker" = 1
+  }
+  $nativeServices = @($nativeCounts.Keys)
+  $computeWasRunning = $false
+  $mirrorWasRunning = $false
+  foreach ($service in $nativeServices) {
+    $ids = @(& docker compose @compose --profile native ps --status running -q $service)
+    Check-Exit "Inspecting $service"
+    $running = @($ids | Where-Object { $_ }).Count -gt 0
+    if ($service -eq "mirror-worker") {
+      $mirrorWasRunning = $running
+    }
+    elseif ($running) {
+      $computeWasRunning = $true
+    }
+  }
 
   # Recreate only when the Docker bind changed. If the parent mount is
   # unchanged, selecting another folder from it is fully handled in the app,
@@ -109,13 +126,24 @@ try {
     Check-Exit "Refreshing web proxy"
   }
   $refreshFlag = if ($updated -ne $original) { @("--force-recreate") } else { @() }
-  if ($wasRunning -or $StartWorker) {
-    & docker compose @compose --profile native up -d --no-deps @refreshFlag worker
-    Check-Exit "Starting native job worker"
+  if ($computeWasRunning -or $StartWorker) {
+    $scales = @("--scale", "worker=4",
+                "--scale", "validation-worker=3",
+                "--scale", "correction-worker=3")
+    & docker compose @compose --profile native up -d --no-deps @refreshFlag @scales @nativeServices
+    Check-Exit "Starting dedicated production native worker fleet"
+    foreach ($service in $nativeServices) {
+      $ids = @(& docker compose @compose --profile native ps --status running -q $service)
+      Check-Exit "Checking $service"
+      $actual = @($ids | Where-Object { $_ }).Count
+      if ($actual -ne $nativeCounts[$service]) {
+        throw "$service running count is $actual; expected $($nativeCounts[$service])."
+      }
+    }
   }
-  if ($wasRunning -or $uploadWasRunning -or $StartWorker) {
+  elseif ($mirrorWasRunning) {
     & docker compose @compose --profile native up -d --no-deps @refreshFlag mirror-worker
-    Check-Exit "Starting dedicated Supervisely upload worker"
+    Check-Exit "Preserving dedicated Supervisely upload worker"
   }
 
   $apiId = (& docker compose @compose ps -q api | Select-Object -First 1)
@@ -128,9 +156,9 @@ try {
   Write-Host "Dataset '$($info.Name)' is now visible inside Nightjar."
   Write-Host "In Nightjar: Dataset -> Link host folder (optional) -> Refresh."
   Write-Host "Select '$($info.Name)' and click 'Link folder & start Supervisely upload'."
-  if (-not ($wasRunning -or $uploadWasRunning -or $StartWorker)) {
-    Write-Warning "Local folder indexing will run automatically, but Supervisely UPLOAD still requires the native worker. Start it after verifying Team/Workspace:"
-    Write-Host "docker compose --env-file .env.live -f compose.live.yaml --profile native up -d --no-deps worker mirror-worker"
+  if (-not ($computeWasRunning -or $mirrorWasRunning -or $StartWorker)) {
+    Write-Warning "Indexing runs automatically, but Supervisely upload and job processing need the SDK workers. Start after verifying Team/Workspace:"
+    Write-Host ".\\scripts\\deploy-live.ps1 -StartWorker"
   }
 }
 finally {
