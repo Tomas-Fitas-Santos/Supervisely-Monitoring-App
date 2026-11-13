@@ -430,8 +430,8 @@ def simulate():
             for item in body["images"]:
                 next_image_id += 1
                 result = info(ImageApi, id=next_image_id,
-                              name=item["title"], datasetId=body["datasetId"], width=64,
-                              height=64, size=1600, meta={}, customData={}, tags=[])
+                              name=item["title"], datasetId=body["datasetId"], width=256,
+                              height=256, size=1600, meta={}, customData={}, tags=[])
                 uploaded_images.setdefault(index, []).append(result)
                 results.append(result)
             return results
@@ -553,7 +553,13 @@ def simulate():
             if not users:
                 index = body["datasetId"] - 2000
                 users = [1000 + index % ANNOTATORS]
-            selected = body.get("imagesIds") or body.get("images_ids") or []
+            # Supervisely LabelingJobApi.create serializes the image subset
+            # under meta.entityIds (not at top level). The former fake API
+            # accepted the request but reported 30 images for a 1-image
+            # correction, falsely flagging correction_subset_not_confirmed.
+            selected = (body.get("meta") or {}).get("entityIds")
+            if selected is None:
+                selected = body.get("imagesIds") or body.get("images_ids") or []
             count = len(selected) if selected else FRAMES
             if "(Incomplete #" in body.get("name", ""):
                 corrected_images.update(selected)
