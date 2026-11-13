@@ -1030,7 +1030,7 @@ def process_once(db: Session, api, config: SuperviselyConfig) -> dict | None:
     milestone("publish_started", job_id=job.id, operation_id=opid)
     try:
         details = publish_job(db, job, api, config)
-    except Exception as exc:  # noqa: BLE001 - remote outcome may be uncertain
+    except Exception as exc:
         db.rollback()
         failed = db.get(NativeOperation, opid)
         failed.status = "attention"
@@ -1364,7 +1364,7 @@ def process_correction_once(db: Session, api, config: SuperviselyConfig) -> dict
         db.commit()
         milestone("correction_publish_confirmed", job_id=jobid, operation_id=opid)
         return {"operation_id": opid, "status": "done", "correction_round": job.correction_round}
-    except Exception as exc:  # noqa: BLE001 - native restart may succeed with lost response
+    except Exception as exc:
         db.rollback()
         task = db.get(NativeOperation, opid)
         task.status = "attention"
