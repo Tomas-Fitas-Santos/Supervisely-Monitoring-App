@@ -24,6 +24,8 @@ def summarize(records: list[dict]) -> tuple[dict, dict]:
     groups: dict[str, list[float]] = defaultdict(list)
     endpoints: dict[str, list[float]] = defaultdict(list)
     outcomes: dict[str, int] = defaultdict(int)
+    code: dict[str, list[float]] = defaultdict(list)
+    sql: dict[str, list[float]] = defaultdict(list)
     stages: dict[str, dict[str, int]] = defaultdict(dict)
     next_job_relations: dict[str, str] = {}
     for row in records:
@@ -38,6 +40,11 @@ def summarize(records: list[dict]) -> tuple[dict, dict]:
             groups[group].append(float(duration))
             endpoints[endpoint].append(float(duration))
             outcomes[str(row.get("outcome", "unknown"))] += 1
+        elif row.get("kind") in {"code", "sql"}:
+            name, duration = row.get("name"), row.get("duration_ms")
+            if (isinstance(name, str) and isinstance(duration, (int, float))
+                    and math.isfinite(duration) and duration >= 0):
+                (code if row["kind"] == "code" else sql)[name].append(float(duration))
         elif row.get("kind") == "stage":
             job = row.get("job_id")
             stamp = row.get("unix_ms")
@@ -91,12 +98,21 @@ def summarize(records: list[dict]) -> tuple[dict, dict]:
                 spans[metric].append(float(confirmed - begin))
 
     profile = {group: stat(values) for group, values in sorted(groups.items())}
+
+    def hotspot(values):
+        return sorted([
+            {"path": name, **stat(times), "total_wall_ms": round(sum(times), 2)}
+            for name, times in values.items()
+        ], key=lambda row: row["total_wall_ms"], reverse=True)
+
     report = {
         "http_requests": sum(outcomes.values()),
         "outcomes": dict(sorted(outcomes.items())),
         "groups": profile,
         "endpoints": {endpoint: stat(values)
                       for endpoint, values in sorted(endpoints.items())},
+        "code_hotspots": hotspot(code),
+        "sql_hotspots": hotspot(sql),
         "stage_lags": {key: stat(values) for key, values in sorted(spans.items())},
         "jobs_with_stages": len(stages),
         "next_job_relations": len(next_job_relations),
