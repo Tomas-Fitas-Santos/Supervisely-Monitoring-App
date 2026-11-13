@@ -187,7 +187,7 @@ service throughput or a 100,000-image network transfer.
 A real 100,000-image Supervisely transfer remains an operational verification
 step. This change does not upload a synthetic collection into the real workspace.
 
-## November 13 indexing and recovery fixes (not deployed)
+## November 13 indexing and recovery fixes
 
 The observed mounted import failed after 8,156 files because replacing
 `index-progress.json` raised `PermissionError` on the shared filesystem.
@@ -242,8 +242,14 @@ job distribution, submission validation and review; **15 browser tests**,
 including progressive 50K-file traversal, missing-file resume rejection, lost
 responses, and virtual ZIP chunks above 5 GiB. The production frontend build
 passes. The separate read-only preview verifies folder-picker feedback and
-responsive upload/append layouts. Full real-dataset throughput remains to be
-measured after deployment approval; the currently running stack is unchanged.
+responsive upload/append layouts. Following explicit deployment approval, the
+updated API, web, indexer and complete native worker fleet were deployed on
+November 13 after a verified PostgreSQL backup. Local and existing tunnel
+readiness checks passed; the read-only operational audit confirmed all worker
+roles and preserved job/review counts. The restarted real mounted import
+successfully indexed and checked **50,447 frames / 5,530,757,688 source bytes in
+297 seconds (4 minutes 57 seconds)**, including time overlapping worker-image
+builds. This measures complete local indexing; Supervisely transfer is separate.
 
 ## Applying the change
 
