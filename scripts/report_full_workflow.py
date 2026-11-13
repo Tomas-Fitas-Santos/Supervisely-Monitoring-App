@@ -58,7 +58,13 @@ def explain(summary: dict) -> dict:
                 lifecycle.get("validated_frames", 0) >= 10800 and
                 lifecycle.get("reviewed_frames", 0) >= 300 and
                 (lifecycle.get("operation_kinds") or {}).get(
-                    "restart_job:done", 0) >= 60)
+                    "restart_job:done", 0) >= 60 and
+                (lifecycle.get("operation_kinds") or {}).get(
+                    "publish_job:done", 0) >= 360 and
+                (lifecycle.get("operation_kinds") or {}).get(
+                    "validate_submission:done", 0) >= 360 and
+                not issues and
+                not (operations.get("operation_states") or {}).get("attention", 0))
     bottlenecks = sorted(
         [stage for stage in stages if isinstance(stage.get("p95_ms"), (int, float))],
         key=lambda stage: stage["p95_ms"], reverse=True,
