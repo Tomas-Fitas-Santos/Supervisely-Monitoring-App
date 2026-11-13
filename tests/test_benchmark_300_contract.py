@@ -217,3 +217,63 @@ def test_code_hotspots_and_sql_query_timing_are_exposed_in_summary():
     assert 'os.environ.get("BENCHMARK_SQL_TIMING") == "1"' in source
     assert '"name": f"{command}.{table}"' in source
     assert 'statement, parameters' not in source.split('event.listen(engine(),')[0].split('_write({"kind": "sql"')[-1]
+
+
+def test_full_workflow_diagnostic_report_marks_failures_and_identifies_slowest_stage():
+    """Do not mistake high validation throughput for completed end-to-end jobs."""
+    root = Path(__file__).resolve().parents[1]
+    script = root / "scripts/report_full_workflow.py"
+    spec = importlib.util.spec_from_file_location("nightjar_pipeline_diagnostics", script)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    summary = {
+        "workload": {
+            "phase": "full", "profile_mode": False,
+            "phases": {"import": {"finalize_seconds": 5}, "mirror": {"seconds": 12}},
+            "database": {"operation_states": {"attention": 2},
+                         "operation_errors": ["remote_operation_uncertain"]},
+            "full_flow": {
+                "source_frames": 10800, "mirrored_frames": 10800,
+                "source_blocks_allocated": 360,
+                "jobs_with_native_bindings": 360,
+                "validated_frames": 10800, "reviewed_frames": 300,
+                "operation_kinds": {
+                    "restart_job:done": 60, "publish_job:done": 360,
+                    "validate_submission:done": 360,
+                },
+            },
+        },
+        "worker_timing": {
+            "stage_lags": {
+                "validation_queue_wait": {"count": 300, "p50_ms": 2200,
+                                          "p95_ms": 50000, "p99_ms": 55000},
+                "validation_duration": {"count": 300, "p50_ms": 240,
+                                        "p95_ms": 430, "p99_ms": 600},
+            },
+            "code_hotspots": [{"path": "validation.download_annotations",
+                               "p95_ms": 100, "total_wall_ms": 50000}],
+            "sql_hotspots": [{"path": "SELECT.native_operations",
+                              "p95_ms": 21, "total_wall_ms": 3200}],
+        },
+        "resources": {
+            "combined": {"max_sample_cpu_cores": 4.5,
+                         "max_sample_working_set_mib": 2500},
+            "validation-worker": {"sampled_containers": 2,
+                                  "max_aggregate_cpu_cores": 1.1,
+                                  "max_aggregate_working_set_mib": 415},
+        },
+    }
+    report = module.explain(summary)
+    assert report["fully_accepted"] is False
+    assert report["largest_observed_p95_stages"][0]["metric"] == "validation_queue_wait"
+    assert report["code_hotspots_by_total_wall_time"][0]["path"] == (
+        "validation.download_annotations")
+    assert report["resources"]["combined_peak_ram_mib"] == 2500
+    assert report["resources"]["by_role"][0]["replicas"] == 2
+
+    summary["workload"]["database"] = {"operation_states": {}, "operation_errors": []}
+    assert module.explain(summary)["fully_accepted"] is True
+    summary["workload"]["full_flow"]["operation_kinds"]["publish_job:done"] = 299
+    assert module.explain(summary)["fully_accepted"] is False
