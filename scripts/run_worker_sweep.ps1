@@ -312,9 +312,13 @@ try {
         $flow = $report.workload.full_flow
         if ($null -eq $flow -or $flow.source_frames -ne 10800 -or
             $flow.mirrored_frames -ne $flow.source_frames -or
-            $flow.source_blocks -ne 360 -or $flow.jobs_with_native_bindings -lt 300 -or
-            $flow.validated_frames -lt 300 -or $flow.reviewed_frames -lt 1) {
-          Write-Warning "Incomplete full-flow acceptance: source/mirror/300 participants, validation or frame reviews did not finish. Inspect summary.json."
+            $flow.source_blocks -ne 360 -or $flow.source_blocks_allocated -ne 360 -or
+            $flow.jobs_with_native_bindings -lt 360 -or
+            $flow.validated_frames -lt 10800 -or $flow.reviewed_frames -lt 300 -or
+            [int]$flow.operation_kinds.'publish_job:done' -lt 360 -or
+            [int]$flow.operation_kinds.'restart_job:done' -lt 60 -or
+            [int]$flow.operation_kinds.'validate_submission:done' -lt 360) {
+          Write-Warning "Incomplete full-flow acceptance: require 10800 mirrored and validated frames, 360 confirmed jobs, 60 corrections, 300 reviews and no attention errors. Inspect summary.json."
           $integrityFailure = $true
         }
       }
