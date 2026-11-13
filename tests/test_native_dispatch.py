@@ -1478,7 +1478,7 @@ def test_retry_old_users_info_404_correction_recovers_original_complete_frames(c
         followup = next(x for x in sdk.jobs if x.id == binding.native_job_id)
         assert followup.images_count == 1
         assert followup.image_ids == [mapped[original_ids[-1]]]
-        assert followup.name.endswith(" · Incomplete")
+        assert followup.name.endswith(" (Incomplete #1)")
         assert len(list(db.scalars(select(LabelingJob).where(
             LabelingJob.id == jid,
         )))) == 1
