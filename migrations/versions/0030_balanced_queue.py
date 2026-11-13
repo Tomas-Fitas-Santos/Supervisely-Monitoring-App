@@ -1,6 +1,6 @@
 """Revisioned append batches and additive morphology-balanced queues."""
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision = "0030_balanced_queue"
 down_revision = "0029_competition_closeout"

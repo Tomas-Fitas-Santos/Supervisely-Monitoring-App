@@ -17,14 +17,30 @@ from sqlalchemy.orm import Session
 from .auth import AuthContext, requires
 from .config import get_settings
 from .datasets_api import (
-    MAX_CHUNK_BYTES, VIDEO_EXTENSIONS, copy_and_hash, extract_video_frames,
-    get_dataset, root_dir, safe_relative, sha256_file, staged_sources,
+    MAX_CHUNK_BYTES,
+    VIDEO_EXTENSIONS,
+    copy_and_hash,
+    extract_video_frames,
+    get_dataset,
+    root_dir,
+    safe_relative,
+    sha256_file,
+    staged_sources,
 )
-from .events_api import current_event
 from .db import get_db
+from .events_api import current_event
 from .models import (
-    AuditEvent, DatasetAppendBatch, DatasetAppendFile, DatasetPreparedQueue,
-    LabelingJob, LabelingPlan, MediaAsset, MediaDataset, MediaVideo, NativeOperation, epoch,
+    AuditEvent,
+    DatasetAppendBatch,
+    DatasetAppendFile,
+    DatasetPreparedQueue,
+    LabelingJob,
+    LabelingPlan,
+    MediaAsset,
+    MediaDataset,
+    MediaVideo,
+    NativeOperation,
+    epoch,
 )
 from .native_media_pool import enqueue_mirror
 
@@ -475,7 +491,7 @@ def process_append_once(db: Session) -> dict | None:
         # Only this batch's private staging is removed, never prior media.
         shutil.rmtree(_append_root(ds, batch) / "stage", ignore_errors=True)
         return {"status": "done", "operation_id": op_id, **result}
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - preserve failure state for local importer
         db.rollback()
         failed = db.get(NativeOperation, op_id)
         if failed:

@@ -17,10 +17,21 @@ from .db import get_db, session_factory
 from .ecomorphology_reference import GROUPS, suggested_classification
 from .events_api import current_event
 from .models import (
-    AuditEvent, BalancedVideoRun, DatasetAppendBatch,
-    DatasetFolderClassification, DatasetPreparedQueue, Event, LabelingJob,
-    LabelingPlan, MediaAsset, MediaDataset, MediaVideo, NativeOperation,
-    WorkPacket, ReviewSample, epoch,
+    AuditEvent,
+    BalancedVideoRun,
+    DatasetAppendBatch,
+    DatasetFolderClassification,
+    DatasetPreparedQueue,
+    Event,
+    LabelingJob,
+    LabelingPlan,
+    MediaAsset,
+    MediaDataset,
+    MediaVideo,
+    NativeOperation,
+    ReviewSample,
+    WorkPacket,
+    epoch,
 )
 
 router = APIRouter(prefix="/api/v1", tags=["balanced automatic distribution"])
@@ -242,7 +253,7 @@ def process_preparation_once(db: Session) -> dict | None:
         finished.error_code = None
         db.commit()
         return {"status": "done", "operation_id": op_id, "videos": len(runs)}
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - retain durable preparation failure status
         db.rollback()
         op = db.get(NativeOperation, op_id)
         if op:

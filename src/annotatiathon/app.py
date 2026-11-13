@@ -4,12 +4,12 @@ from fastapi import FastAPI, Response
 from .activities_api import router as activities_router
 from .attendance_api import router as attendance_router
 from .auth import router as auth_router
+from .balanced_queue import router as balanced_queue_router
 from .closeout_api import router as closeout_router
 from .coverage_api import router as coverage_router
 from .database import database_is_ready
-from .datasets_api import router as datasets_router
 from .dataset_append import router as dataset_append_router
-from .balanced_queue import router as balanced_queue_router
+from .datasets_api import router as datasets_router
 from .events_api import router as events_router
 from .full_reset_api import router as full_reset_router
 from .labeling_api import router as labeling_router
