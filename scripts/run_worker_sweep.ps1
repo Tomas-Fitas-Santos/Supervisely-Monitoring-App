@@ -8,7 +8,7 @@ param(
   [ValidateRange(1, 16)][int]$Validators = 2,
   [ValidateRange(1, 16)][int]$Correctors = 1,
   [ValidateRange(1, 16)][int]$StatusWorkers = 1,
-  [ValidateSet("initial", "turnaround")][string]$Phase = "turnaround",
+  [ValidateSet("initial", "turnaround", "full")][string]$Phase = "turnaround",
   [ValidateRange(0.0, 1.0)][double]$IncompleteRate = 0.20,
   [ValidateRange(60, 7200)][int]$Seconds = 480,
   [ValidateSet("burst", "staggered")][string]$Scenario = "burst",
@@ -69,7 +69,8 @@ $original = @{}
 foreach ($key in @("BENCHMARK_ANNOTATORS", "BENCHMARK_MONITORS",
                     "BENCHMARK_FRAMES", "BENCHMARK_SECONDS_PER_FRAME",
                     "BENCHMARK_BURST", "BENCHMARK_UPLOAD", "BENCHMARK_PROFILE_PATH",
-                    "BENCHMARK_PHASE", "BENCHMARK_INCOMPLETE_RATE")) {
+                    "BENCHMARK_PHASE", "BENCHMARK_INCOMPLETE_RATE",
+                    "BENCHMARK_SQL_TIMING")) {
   $original[$key] = [Environment]::GetEnvironmentVariable($key, "Process")
 }
 try {
@@ -81,6 +82,7 @@ try {
   $env:BENCHMARK_SECONDS_PER_FRAME = "90"
   $env:BENCHMARK_BURST = if ($Scenario -eq "burst") { "1" } else { "0" }
   $env:BENCHMARK_UPLOAD = "0"
+  $env:BENCHMARK_SQL_TIMING = if ($Phase -eq "full") { "1" } else { "0" }
   $env:BENCHMARK_PHASE = $Phase
   $env:BENCHMARK_INCOMPLETE_RATE = $IncompleteRate.ToString([System.Globalization.CultureInfo]::InvariantCulture)
   if (Test-Path $Profile) {
@@ -297,13 +299,24 @@ try {
       $corrections = [int]$states.'restart_job:done'
       $validations = [int]$states.'validate_submission:done'
       if (($Phase -eq "initial" -and $confirmed -eq 0) -or
-          ($Phase -eq "turnaround" -and ($validations -eq 0 -or $validated -eq 0))) {
+          ($Phase -in @("turnaround", "full") -and ($validations -eq 0 -or $validated -eq 0))) {
         Write-Warning "No meaningful $Phase throughput: $confirmed published, $validations validations, $validated ready frames."
         Write-Warning "Inspect $out\\services.log and summary.json."
         throw "Benchmark stage did not progress. Fix the fixture or workers before comparing roles."
       }
-      if ($Phase -eq "initial" -and $confirmed -lt 300) {
-        Write-Warning "Only $confirmed/300 original jobs confirmed within $Seconds seconds. Full 300-job release time is not yet measured; extend -Seconds."
+      if ($Phase -in @("initial", "full") -and $confirmed -lt 300) {
+        Write-Warning "Only $confirmed/300 jobs confirmed within the measured window. Full 300-job release time is not yet established; extend -Seconds."
+        $integrityFailure = $true
+      }
+      if ($Phase -eq "full") {
+        $flow = $report.workload.full_flow
+        if ($null -eq $flow -or $flow.source_frames -ne 10800 -or
+            $flow.mirrored_frames -ne $flow.source_frames -or
+            $flow.source_blocks -ne 360 -or $flow.jobs_with_native_bindings -lt 300 -or
+            $flow.validated_frames -lt 300 -or $flow.reviewed_frames -lt 1) {
+          Write-Warning "Incomplete full-flow acceptance: source/mirror/300 participants, validation or frame reviews did not finish. Inspect summary.json."
+          $integrityFailure = $true
+        }
       }
       $results += [PSCustomObject]@{
         SweepRole = $SweepRole
@@ -311,6 +324,12 @@ try {
         Valid = -not $integrityFailure
         AttentionOperations = $attentionCount
         OperationErrorKinds = $operationErrors.Count
+        FullSourceFrames = if ($Phase -eq "full") { $report.workload.full_flow.source_frames } else { $null }
+        FullMirroredFrames = if ($Phase -eq "full") { $report.workload.full_flow.mirrored_frames } else { $null }
+        FullAllocatedBlocks = if ($Phase -eq "full") { $report.workload.full_flow.source_blocks_allocated } else { $null }
+        FullReviewedFrames = if ($Phase -eq "full") { $report.workload.full_flow.reviewed_frames } else { $null }
+        HotCodePath = if ($report.worker_timing.code_hotspots.Count) { $report.worker_timing.code_hotspots[0].path } else { $null }
+        HotCodeTotalMs = if ($report.worker_timing.code_hotspots.Count) { $report.worker_timing.code_hotspots[0].total_wall_ms } else { $null }
         Publishers = $publishers
         Phase = $Phase
         Validators = $validatorsRun
@@ -340,7 +359,7 @@ try {
         PeakRamMiB = [math]::Round([double]$report.resources.combined.max_sample_working_set_mib, 0)
         Results = $out
       }
-      Write-Host "Completed $SweepRole=$count benchmark; output: $out"
+      Write-Host "Completed $SweepRole=$count benchmark; valid=$(-not $integrityFailure); output: $out"
     }
     finally {
       # Only project-specific test containers and TEST volumes are deleted.
