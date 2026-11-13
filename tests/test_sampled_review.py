@@ -195,8 +195,8 @@ def test_current_round_supersedes_old_review_only_after_new_review(dataset_ctx, 
         assert sum(row["correct_objects"] for row in current) == 2
 
 
-def test_partial_submission_does_not_release_frames_for_monitor_review(dataset_ctx):
-    """Accept staged frame JSON but hide all reviews until the job is complete."""
+def test_complete_frames_from_partial_job_enter_monitor_queue_immediately(dataset_ctx):
+    """Review complete annotation JSON immediately; only missing frames retry."""
     client, maker, csrf = dataset_ctx
     dataset_id = ingest(client, csrf)
     teams(client, csrf)
@@ -207,19 +207,20 @@ def test_partial_submission_does_not_release_frames_for_monitor_review(dataset_c
             LabelingJob.plan_id == plan.json()["plan_id"],
         )) if len(j.media_ids) > 1)
         job.release_mode = "shared_primary"
-        job.status = "on_review"
+        job.status = "needs_correction"
         job.assignee_person_id = db.scalar(select(Person.id).where(
             Person.team_id == job.team_id,
         ).limit(1))
         assert job.assignee_person_id is not None
         job.annotation_snapshot_frames = job.frame_count - 1
         job_id = job.id
+        original_media_id = job.media_ids[0]
         db.add(ReviewSample(
             event_id=job.event_id, job_id=job.id, team_id=job.team_id,
-            media_id=job.media_ids[0], correction_round=0,
+            media_id=original_media_id, correction_round=0,
             validated_complete=True,
             snapshot={
-                "source_media_id": job.media_ids[0],
+                "source_media_id": original_media_id,
                 "source_relative_path": "synthetic_video/frame_000001.jpg",
                 "sha256": "a" * 64,
                 "selection_reason": "structurally_complete_submitted_frame",
@@ -231,18 +232,38 @@ def test_partial_submission_does_not_release_frames_for_monitor_review(dataset_c
     api.include_router(review_router)
     api.dependency_overrides.update(app.dependency_overrides)
     with TestClient(api, cookies=client.cookies) as http:
-        assert http.get("/api/v1/review-queue/status").json()["pending"] == 0
-        assert act(http, csrf, "/review-queue/claim-next").json()["review"] is None
-        # Even an in-progress correction remains unreviewable.
+        status = http.get("/api/v1/review-queue/status").json()
+        assert status["pending"] == 1
+        first = act(http, csrf, "/review-queue/claim-next")
+        assert first.status_code == 200, first.text
+        review = first.json()["review"]
+        assert review is not None
+        assert review["source_media_id"] == original_media_id
+        assert review["annotation"]["objects"] == []
         with maker.begin() as db:
             job = db.get(LabelingJob, job_id)
-            job.status = "needs_correction"
-        assert http.get("/api/v1/review-queue/status").json()["pending"] == 0
+            job.status = "in_progress"
+            job.correction_round = 1
+        # The immutable round-0 snapshot remains claimable while the person
+        # is working on a new job containing only the missing frames.
+        recheck = act(http, csrf, "/review-queue/claim-next")
+        assert recheck.status_code == 200
+        assert recheck.json()["review"]["review_id"] == review["review_id"]
+        completed = act(http, csrf, f"/review-queue/{review['review_id']}/complete", {
+            "claim_token": review["claim_token"],
+            "verdicts": [], "missing_classes": [], "action": "pause",
+        })
+        assert completed.status_code == 200, completed.text
+        counts = http.get("/api/v1/review-queue/status").json()
+        assert counts["completed"] == 1
+        assert counts["pending"] == 0
         with maker.begin() as db:
             job = db.get(LabelingJob, job_id)
-            job.annotation_snapshot_frames = job.frame_count
             job.status = "on_review"
-        assert http.get("/api/v1/review-queue/status").json()["pending"] == 1
-        claimed = act(http, csrf, "/review-queue/claim-next")
-        assert claimed.status_code == 200
-        assert claimed.json()["review"] is not None
+            job.annotation_snapshot_frames = job.frame_count
+        # Finishing the correction must never enqueue the previously accepted
+        # frame a second time or erase its earlier monitor decision.
+        counts = http.get("/api/v1/review-queue/status").json()
+        assert counts["completed"] == 1
+        assert counts["pending"] == 0
+        assert act(http, csrf, "/review-queue/claim-next").json()["review"] is None
