@@ -290,15 +290,17 @@ def process_validation_once(db: Session, api, config) -> dict | None:
         # the durable recovery path if the allocation cannot commit.
         from .work_queue import claim_primary_block
         try:
-            with Session(db.get_bind()) as assignment_db:
-                with code_timing("validation.claim_next_primary_block", job_id=job_id):
-                    next_job = claim_primary_block(
-                        assignment_db, *assignment_candidate,
-                        include_repeats=False,
-                    )
-                    if next_job is not None:
-                        next_assignment_id = next_job.id
-                    assignment_db.commit()
+            with (
+                Session(db.get_bind()) as assignment_db,
+                code_timing("validation.claim_next_primary_block", job_id=job_id),
+            ):
+                next_job = claim_primary_block(
+                    assignment_db, *assignment_candidate,
+                    include_repeats=False,
+                )
+                if next_job is not None:
+                    next_assignment_id = next_job.id
+                assignment_db.commit()
         except Exception:
             logger.exception(
                 "Successor allocation deferred to status worker for job %s",
