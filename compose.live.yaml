@@ -100,35 +100,99 @@ services:
     restart: unless-stopped
     # Only this combined web/API origin is reachable from the host/tunnel.
 
+  # Official 300-person worker topology. Start with
+  # scripts/deploy-live.ps1 -StartWorker; that script fixes the replica counts:
+  #   worker x4, validation-worker x3, correction-worker x3,
+  #   status-worker x1, recovery-worker x1, bulk-worker x1, mirror-worker x1.
+  # Never scale the previous combined --role all worker in production.
   mirror-worker:
     <<: *backend
     profiles: ["native"]
-    build:
+    build: &native-worker-build
       context: .
       dockerfile: deploy/Dockerfile.api
       target: native
     depends_on:
       migrate:
         condition: service_completed_successfully
-    # Dedicated, bounded media I/O. Never publishes jobs or polls submissions.
     cpus: "1.0"
+    mem_limit: 768m
     command: ["python", "-m", "annotatiathon.native_worker", "--loop",
               "--role", "mirror", "--poll-seconds", "8"]
 
   worker:
     <<: *backend
     profiles: ["native"]
-    build:
-      context: .
-      dockerfile: deploy/Dockerfile.api
-      target: native
+    build: *native-worker-build
     depends_on:
       migrate:
         condition: service_completed_successfully
+    cpus: "0.75"
+    mem_limit: 768m
+    # Existing service name retained so upgrades replace the legacy
+    # combined worker rather than leave it running beside the new lanes.
     command: ["python", "-m", "annotatiathon.native_worker", "--loop",
-              "--poll-seconds", "12"]
-    # Explicitly start AFTER an organiser has verified shared credentials
-    # and Team ID/Workspace ID. Not part of default web startup.
+              "--role", "publish", "--poll-seconds", "12"]
+
+  validation-worker:
+    <<: *backend
+    profiles: ["native"]
+    build: *native-worker-build
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    cpus: "0.75"
+    mem_limit: 768m
+    command: ["python", "-m", "annotatiathon.native_worker", "--loop",
+              "--role", "validation", "--poll-seconds", "3"]
+
+  correction-worker:
+    <<: *backend
+    profiles: ["native"]
+    build: *native-worker-build
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    cpus: "0.5"
+    mem_limit: 512m
+    command: ["python", "-m", "annotatiathon.native_worker", "--loop",
+              "--role", "correction", "--poll-seconds", "3"]
+
+  status-worker:
+    <<: *backend
+    profiles: ["native"]
+    build: *native-worker-build
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    cpus: "0.75"
+    mem_limit: 768m
+    command: ["python", "-m", "annotatiathon.native_worker", "--loop",
+              "--role", "status", "--poll-seconds", "3"]
+
+  recovery-worker:
+    <<: *backend
+    profiles: ["native"]
+    build: *native-worker-build
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    cpus: "0.25"
+    mem_limit: 256m
+    command: ["python", "-m", "annotatiathon.native_worker", "--loop",
+              "--role", "recovery", "--poll-seconds", "3"]
+
+  bulk-worker:
+    <<: *backend
+    profiles: ["native"]
+    build: *native-worker-build
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    cpus: "0.5"
+    mem_limit: 512m
+    command: ["python", "-m", "annotatiathon.native_worker", "--loop",
+              "--role", "bulk", "--poll-seconds", "12"]
 
 volumes:
   live_pg_data:
