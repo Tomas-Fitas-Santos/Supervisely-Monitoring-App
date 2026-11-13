@@ -55,6 +55,7 @@ from .models import (
     NativeOperation,
     NativeSourceMedia,
     Person,
+    WorkPacket,
     ReviewSample,
     SuperviselyConfig,
     epoch,
@@ -400,6 +401,34 @@ def ensure_native_job_number(db: Session, job: LabelingJob) -> int:
     return job.native_job_number
 
 
+def list_assigned_native_jobs(api, team_id: int, dataset_id: int,
+                              user_ids) -> list:
+    """Reconcile only the assigned user's dataset; retry read-only pagination.
+
+    A remote create can have succeeded before confirmation failed. Never
+    blindly repeat jobs.add: the caller checks deterministic job names first.
+    """
+    result = []
+    for user_id in dict.fromkeys(user_ids):
+        for attempt in range(3):
+            try:
+                with code_timing("publish.list_assignee_jobs"):
+                    rows = api.labeling_job.get_list(
+                        team_id, dataset_id=dataset_id,
+                        assigned_to_id=user_id, show_disabled=True,
+                    )
+                break
+            except RuntimeError as exc:
+                if "error during pagination" not in str(exc) or attempt == 2:
+                    raise
+                time.sleep(0.10 * (attempt + 1))
+        for row in rows:
+            if row.dataset_id != dataset_id or row.assigned_to_id != user_id:
+                raise NativeWorkerError("native_assignee_list_mismatch")
+            result.append(row)
+    return result
+
+
 def publish_job(db: Session, job: LabelingJob, api, config: SuperviselyConfig) -> dict:
     """Idempotent by deterministic project/dataset names and native user IDs."""
     if job.status not in {"queued", "publishing", "in_progress"}:
@@ -486,8 +515,8 @@ def publish_job(db: Session, job: LabelingJob, api, config: SuperviselyConfig) -
     expected_title = numbered_job_name(ensure_native_job_number(db, job))
     accepted_titles = {expected_title, legacy_title}
     with code_timing("publish.remote_list_jobs", job_id=job.id):
-        current = api.labeling_job.get_list(
-            config.team_id, dataset_id=remote_ds_id, show_disabled=True,
+        current = list_assigned_native_jobs(
+            api, config.team_id, remote_ds_id, roster_ids,
         )
     by_user = defaultdict(list)
     bound_ids = {x.native_job_id for x in db.scalars(select(NativeJobBinding).where(
@@ -521,8 +550,8 @@ def publish_job(db: Session, job: LabelingJob, api, config: SuperviselyConfig) -
                 ),
             )
         with code_timing("publish.remote_confirm_job", job_id=job.id):
-            current = api.labeling_job.get_list(
-                config.team_id, dataset_id=remote_ds_id, show_disabled=True,
+            current = list_assigned_native_jobs(
+                api, config.team_id, remote_ds_id, roster_ids,
             )
         by_user = defaultdict(list)
         for remote in current:
@@ -953,8 +982,14 @@ def sync_all(db: Session, api, config: SuperviselyConfig, *,
                             and native_identity_assignable(person)]
                 ready_for_next.extend((team_id, person.id) for person in eligible)
             db.commit()
+            # Avoid expensive plan locks for annotators with an open packet.
+            occupied = set(db.scalars(select(WorkPacket.person_id).where(
+                WorkPacket.event_id == plan.event_id,
+                WorkPacket.submitted_at.is_(None),
+            )))
+            db.commit()
             for team_id, person_id in dict.fromkeys(ready_for_next):
-                if person_id is None:
+                if person_id is None or person_id in occupied:
                     continue
                 try:
                     # Official event: unique source-frame coverage only.
@@ -966,6 +1001,8 @@ def sync_all(db: Session, api, config: SuperviselyConfig, *,
                         ) is not None
                     db.commit()
                     queued += int(claimed)
+                    if claimed:
+                        occupied.add(person_id)
                 except Exception:
                     db.rollback()
                     logger.exception("Shared queue claim failed for plan %s", plan.id)
@@ -1238,9 +1275,10 @@ def process_correction_once(db: Session, api, config: SuperviselyConfig) -> dict
         if job.assignee_person_id is None:
             # Preserve legacy two-person jobs: their original restart and
             # correction-review semantics predate per-frame validation.
-            remote = api.labeling_job.get_list(
-                config.team_id, dataset_id=job.native_dataset_id, show_disabled=True,
-            )
+            remote = list_assigned_native_jobs(
+                    api, config.team_id, job.native_dataset_id,
+                    [person.supervisely_user_id for person in people],
+                )
             updated = []
             for binding in bindings:
                 person = by_person[binding.person_id]
@@ -1268,10 +1306,10 @@ def process_correction_once(db: Session, api, config: SuperviselyConfig) -> dict
                         title=title, complete_existing=True,
                         only_rejected_entities=False,
                     )
-                    remote = api.labeling_job.get_list(
-                        config.team_id, dataset_id=job.native_dataset_id,
-                        show_disabled=True,
-                    )
+                    remote = list_assigned_native_jobs(
+                    api, config.team_id, job.native_dataset_id,
+                    [person.supervisely_user_id for person in people],
+                )
                     matches = [
                         row for row in remote
                         if row.name in accepted_titles
@@ -1327,9 +1365,10 @@ def process_correction_once(db: Session, api, config: SuperviselyConfig) -> dict
                    for mid in remaining):
                 raise NativeWorkerError("correction_source_mapping_missing")
             images_to_return = [mappings[mid].native_image_id for mid in remaining]
-            remote = api.labeling_job.get_list(
-                config.team_id, dataset_id=job.native_dataset_id, show_disabled=True,
-            )
+            remote = list_assigned_native_jobs(
+                    api, config.team_id, job.native_dataset_id,
+                    [person.supervisely_user_id for person in people],
+                )
             updated = []
             for binding in bindings:
                 person = by_person[binding.person_id]
@@ -1372,10 +1411,10 @@ def process_correction_once(db: Session, api, config: SuperviselyConfig) -> dict
                                 "Previously complete images are already accepted."
                             ),
                         )
-                    remote = api.labeling_job.get_list(
-                        config.team_id, dataset_id=job.native_dataset_id,
-                        show_disabled=True,
-                    )
+                    remote = list_assigned_native_jobs(
+                    api, config.team_id, job.native_dataset_id,
+                    [person.supervisely_user_id for person in people],
+                )
                     matches = [
                         row for row in remote
                         if row.name in accepted_titles
