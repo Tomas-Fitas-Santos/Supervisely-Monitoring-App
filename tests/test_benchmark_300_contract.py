@@ -138,3 +138,21 @@ def test_worker_sweep_scales_requested_role_and_verifies_all_replicas():
     for name in ("SweepRole", "SweepCount", "Publishers", "Validators",
                  "Correctors", "StatusWorkers"):
         assert f"{name} =" in script
+
+
+def test_failed_native_operations_are_not_silently_reported_as_capacity_success():
+    """Attention operations and simulated database failures invalidate a sweep row."""
+    root = Path(__file__).resolve().parents[1]
+    runner = (root / "scripts/run_worker_sweep.ps1").read_text(encoding="utf-8")
+    native = (root / "src/annotatiathon/native_worker.py").read_text(encoding="utf-8")
+    validation = (root / "src/annotatiathon/validation_tasks.py").read_text(encoding="utf-8")
+    assert "operation_states.attention" in runner
+    assert "operation_errors" in runner
+    assert "Valid = -not $integrityFailure" in runner
+    assert "AttentionOperations = $attentionCount" in runner
+    assert "OperationErrorKinds = $operationErrors.Count" in runner
+    assert 'os.environ.get("BENCHMARK_ANNOTATORS") == "300"' in native
+    assert 'os.environ.get("BENCHMARK_ANNOTATORS") == "300"' in validation
+    assert 'logger.exception("Synthetic publish operation' in native
+    assert 'logger.exception("Synthetic correction operation' in native
+    assert 'logger.exception("Synthetic validation task' in validation
