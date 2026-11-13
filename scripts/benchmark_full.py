@@ -781,13 +781,55 @@ def load(seconds, latency, fail_rate, profile_scale=1.0, timeout_rate=0.0,
             records.append(entry)
         return response
 
-    if seconds >= 300:
-        with httpx.Client(base_url="https://web", verify=context, trust_env=False, timeout=120) as organiser:
+    full_dataset_id = None
+    if PHASE == "full" or seconds >= 300:
+        with httpx.Client(base_url="https://web", verify=context, trust_env=False,
+                          timeout=600) as organiser:
             response = call(organiser, "POST", "/api/v1/auth/login", json={
                 "email": "organiser@example.test", "password": PASSWORD})
             response.raise_for_status()
             organiser.headers["X-CSRF-Token"] = response.json()["csrf_token"]
             phases["import"] = import_dataset(organiser, call)
+            if PHASE == "full":
+                full_dataset_id = phases["import"]["dataset"]["id"]
+                # Before publishing, require *real* mirroring of 9,000 JPEGs
+                # via the SDK upload worker. No pre-mirrored SQL records.
+                mirror_start = time.monotonic()
+                while time.monotonic() - mirror_start < 1800:
+                    status = call(organiser, "GET",
+                                  f"/api/v1/datasets/{full_dataset_id}/mirror-status")
+                    status.raise_for_status()
+                    state = status.json()
+                    if state["ready_for_automatic_jobs"]:
+                        phases["mirror"] = {
+                            "seconds": round(time.monotonic() - mirror_start, 3),
+                            "uploaded_frames": state["uploaded_frames"],
+                            "total_frames": state["total_frames"],
+                        }
+                        break
+                    if state["state"] in {"attention", "blocked", "failed"}:
+                        raise RuntimeError(
+                            f"Synthetic full dataset mirroring failed: {state['error_code']}")
+                    time.sleep(3)
+                else:
+                    raise RuntimeError("Synthetic 9000-frame mirroring timed out")
+                plan_start = time.monotonic()
+                response = call(organiser, "POST", "/api/v1/labeling/plans", json={
+                    "dataset_id": full_dataset_id, "mode": "shared_30_v1",
+                })
+                response.raise_for_status()
+                plan_data = response.json()
+                if plan_data["primary_blocks"] != ANNOTATORS or (
+                        plan_data["unique_frames"] != ANNOTATORS * FRAMES):
+                    raise RuntimeError("Full-flow plan did not allocate 300 unique 30-frame blocks")
+                full_plan_id = plan_data["plan_id"]
+                response = call(organiser, "POST",
+                                f"/api/v1/labeling/plans/{full_plan_id}/approve")
+                response.raise_for_status()
+                phases["plan"] = {
+                    "seconds": round(time.monotonic() - plan_start, 3),
+                    "id": full_plan_id, "blocks": plan_data["primary_blocks"],
+                }
     with httpx.Client(verify=context, trust_env=False, timeout=120) as control:
         for attempt in range(60):
             try:
@@ -801,6 +843,19 @@ def load(seconds, latency, fail_rate, profile_scale=1.0, timeout_rate=0.0,
                            "assumed_publish_ms": assumed_publish_ms,
                            "burst": os.environ.get("BENCHMARK_BURST") == "1"}).raise_for_status()
     deadline = time.monotonic() + seconds
+    if PHASE == "full":
+        with httpx.Client(base_url="https://web", verify=context,
+                          trust_env=False, timeout=120) as organiser:
+            response = call(organiser, "POST", "/api/v1/auth/login", json={
+                "email": "organiser@example.test", "password": PASSWORD})
+            response.raise_for_status()
+            organiser.headers["X-CSRF-Token"] = response.json()["csrf_token"]
+            launch_start = time.monotonic()
+            response = call(organiser, "POST", "/api/v1/native/launch",
+                            json={"plan_id": full_plan_id})
+            response.raise_for_status()
+            phases["launch"] = {"seconds": round(time.monotonic() - launch_start, 3),
+                                "status": response.json()["status"]}
     if PHASE == "initial":
         # Release 300 real worker operations at one deterministic instant,
         # after the load/controller clocks have started.
@@ -848,6 +903,32 @@ def load(seconds, latency, fail_rate, profile_scale=1.0, timeout_rate=0.0,
                 if PHASE == "initial":
                     time.sleep(max(0, min(5 - (time.monotonic() - tick), deadline - time.monotonic())))
                     continue
+                if PHASE == "full":
+                    # Exercise the REAL frame-review endpoints. Monitors never
+                    # score incomplete frames; only accepted annotation JSON
+                    # enters this fair event-wide queue.
+                    for _ in range(2):
+                        claimed = call(client, "POST", "/api/v1/review-queue/claim-next")
+                        if claimed is None or claimed.status_code != 200:
+                            break
+                        review = claimed.json().get("review")
+                        if not review:
+                            break
+                        annotation = review["annotation"]
+                        labels = annotation.get("objects", annotation.get("labels", []))
+                        submitted = call(
+                            client, "POST",
+                            f"/api/v1/review-queue/{review['review_id']}/complete",
+                            json={
+                                "claim_token": review["claim_token"],
+                                "verdicts": [{"object_index": j, "correct": True}
+                                             for j in range(len(labels))],
+                                "missing_classes": [], "action": "pause",
+                            })
+                        if submitted is None or submitted.status_code != 200:
+                            raise RuntimeError(
+                                "Synthetic monitor could not complete frame review")
+                        completed.add(review["review_id"])
                 if response is not None and response.status_code == 200:
                     owned = [job for job in response.json()["items"]
                              if int(job["team_id"].split("-")[-1]) % MONITORS == index]
@@ -870,7 +951,7 @@ def load(seconds, latency, fail_rate, profile_scale=1.0, timeout_rate=0.0,
     with httpx.Client(verify=context, trust_env=False, timeout=120) as control:
         simulator = control.get("https://supervisely-sim/control/stats").json()
     event_summary = database_summary()
-    if seconds >= 300:
+    if seconds >= 300 and PHASE != "full":
         with httpx.Client(base_url="https://web", verify=context, trust_env=False, timeout=120) as organiser:
             response = call(organiser, "POST", "/api/v1/auth/login", json={
                 "email": "organiser@example.test", "password": PASSWORD})
@@ -911,6 +992,7 @@ def load(seconds, latency, fail_rate, profile_scale=1.0, timeout_rate=0.0,
         "p99_ms": latencies[int(len(latencies) * .99)] if latencies else None,
         "transferred_bytes": sum(item["bytes"] for item in records),
         "monitors": monitors, "simulator": simulator, "database": event_summary, "phases": phases,
+        "full_dataset_id": full_dataset_id,
     }
     RESULTS.mkdir(exist_ok=True)
     (RESULTS / "requests.json").write_text(json.dumps(records, indent=2))
