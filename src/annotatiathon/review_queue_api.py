@@ -27,7 +27,7 @@ from .models import (
     epoch,
     identifier,
 )
-from .review_eligibility import eligible_frame_review
+from .review_eligibility import REVIEWABLE_ACCEPTED_STATUSES, eligible_frame_review
 from .scoring_api import (
     PRIZE_RELEASE_MODES,
     Weights,
@@ -185,8 +185,8 @@ def owned(db, event_id, review_id, reviewer_id, token=None, *, allow_expired=Fal
     job = db.get(LabelingJob, sample.job_id)
     if (job is None
             or (sample.validated_complete and (
-                job.status not in {"on_review", "completed"}
-                or job.annotation_snapshot_frames != job.frame_count))
+                job.status not in REVIEWABLE_ACCEPTED_STATUSES
+                or job.annotation_snapshot_frames is None))
             or (not sample.validated_complete and (
                 sample.correction_round != job.correction_round
                 or job.status not in {"on_review", "completed"}))):
