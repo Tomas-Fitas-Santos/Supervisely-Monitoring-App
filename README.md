@@ -39,25 +39,38 @@ bytes pass through the browser; local indexing and frame extraction run
 in the `indexer` service. A browser alone cannot add arbitrary Windows
 folders to a Docker bind mount; the source root is a one-time host setting.
 
-The live worker system uses three isolated services:
+The **final production worker distribution** for the 300-participant
+event uses independent roles. `worker` is retained as the Compose service
+name but now runs **only publishing**:
 
-* `indexer` performs source indexing / local FFmpeg extraction (bounded CPU)
-* `mirror-worker` uploads source frames to Supervisely (bounded CPU)
-* `worker` performs live native job publishing, completeness validation,
-  correction/reassignment, status reconciliation and export
+| Service | Replicas | Role |
+| --- | ---: | --- |
+| `worker` | 4 | Publish jobs to Supervisely |
+| `validation-worker` | 3 | Fetch and validate submitted annotation JSON |
+| `correction-worker` | 3 | Return only incomplete frames; process reassignment |
+| `status-worker` | 1 | Poll Supervisely statuses and enqueue validation |
+| `recovery-worker` | 1 | Reclaim expired validations and handle event resets |
+| `bulk-worker` | 1 | Dataset mirror backup lane and native export |
+| `mirror-worker` | 1 | Dedicated bounded Supervisely media upload |
+| `indexer` | 1 | Local source indexing and FFmpeg frame extraction |
 
-Both SDK workers must be running before and during job distribution.
-Start them together after Team/Workspace verification:
+After the organiser verifies Team/Workspace and the shared connection, use
+the **single existing-data-preserving deployment command**:
 
 ```powershell
-docker compose --env-file .env.live -f compose.live.yaml --profile native up -d worker mirror-worker
+.\scripts\deploy-live.ps1 -StartWorker
 ```
 
-The `deploy-live.ps1 -StartWorker` command will also start both workers
-and preserve the current PostgreSQL database and its secrets. A media
-upload may still contend for disk and internet capacity on the host:
-schedule the large import **before event opening**, and verify the 300-job
-load test before setting worker replica counts.
+The deployment script performs the PostgreSQL backup, updates the API and
+website, then starts the exact native replica counts above. It does not
+delete the existing Docker volume or remote Supervisely jobs. For a
+read-only operational check (not a synthetic benchmark), run
+`.\scripts\verify-live.ps1 -RequireWorkers`.
+
+The 300-person synthetic capacity simulations were not clean enough to
+prove a unique optimal mix; this is the chosen final operating configuration,
+not a claim of measured capacity certification. Import large datasets before
+opening the event to limit bandwidth contention.
 
 A dataset's Supervisely mirror status of `done` does not establish
 its **imported frame ordering**. Automatic 30-frame jobs support both
@@ -186,9 +199,9 @@ git switch main
 git pull --ff-only origin main
 # FIRST installation only: .\scripts\init-live-test.ps1
 # Existing installs: preserve the original .env.live, database and media.
-.\scripts\deploy-live.ps1
-# After verifying the shared Supervisely integration in Settings:
-docker compose --env-file .env.live -f compose.live.yaml --profile native up -d --build worker
+# After verifying the shared Supervisely integration in Settings,
+# upgrade the site and start the full production native worker fleet:
+.\scripts\deploy-live.ps1 -StartWorker
 ```
 
 Open a second PowerShell terminal:
