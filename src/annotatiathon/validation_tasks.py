@@ -22,7 +22,7 @@ from .models import (
     NativeOperation,
     epoch,
 )
-from .worker_timing import milestone
+from .worker_timing import code_timing, milestone
 
 logger = logging.getLogger(__name__)
 LEASE_SECONDS = 120
@@ -204,7 +204,8 @@ def process_validation_once(db: Session, api, config) -> dict | None:
     an expired owner is fenced out; immutable round manifests make retry
     idempotent even after a crash between file write and SQL commit.
     """
-    task = claim_validation(db)
+    with code_timing("validation.claim_task"):
+        task = claim_validation(db)
     if task is None:
         return None
     task_id, job_id, token = task
@@ -236,7 +237,8 @@ def process_validation_once(db: Session, api, config) -> dict | None:
             ))
             if binding is None or binding.native_job_id != payload.get("native_job_id"):
                 raise ValueError("validation_native_job_changed")
-        capture_job_annotations(db, api, job)
+        with code_timing("validation.capture_job_annotations", job_id=job_id):
+            capture_job_annotations(db, api, job)
         if lease_lost.is_set():
             raise RuntimeError("validation_lease_lost")
         # Finish validation and publish-queue insertion in ONE transaction.
@@ -248,10 +250,11 @@ def process_validation_once(db: Session, api, config) -> dict | None:
             plan = db.get(LabelingPlan, job.plan_id)
             if plan and plan.status == "running":
                 from .work_queue import claim_primary_block
-                next_job = claim_primary_block(
-                    db, plan.id, job.team_id, job.assignee_person_id,
-                    include_repeats=False,
-                )
+                with code_timing("validation.claim_next_primary_block", job_id=job_id):
+                    next_job = claim_primary_block(
+                        db, plan.id, job.team_id, job.assignee_person_id,
+                        include_repeats=False,
+                    )
                 if next_job is not None:
                     next_assignment_id = next_job.id
         completed = True
@@ -271,7 +274,9 @@ def process_validation_once(db: Session, api, config) -> dict | None:
         db.rollback()
         milestone("validation_lease_lost", job_id=job_id, operation_id=task_id)
         return {"operation_id": task_id, "status": "lease_lost"}
-    if not finish_validation(db, task_id, token, failure=problem):
+    with code_timing("validation.finalize_transaction", job_id=job_id):
+        succeeded = finish_validation(db, task_id, token, failure=problem)
+    if not succeeded:
         milestone("validation_lease_lost", job_id=job_id, operation_id=task_id)
         return {"operation_id": task_id, "status": "lease_lost"}
     if not completed:
