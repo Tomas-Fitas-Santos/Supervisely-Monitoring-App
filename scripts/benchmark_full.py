@@ -383,10 +383,25 @@ def simulate():
                     filter_images_by_tags=[], entities=[])
 
     def page(items, body):
-        page_number = body.get("page", 1)
-        page_size = body.get("perPage", 500)
-        return {"entities": items[(page_number - 1) * page_size:page_number * page_size],
-                "total": len(items), "perPage": page_size, "pagesCount": max(1, (len(items) + page_size - 1) // page_size)}
+        # The real Supervisely SDK supports both legacy numeric pagination
+        # and token-based get_list_generator(). Keep the isolated simulator
+        # compatible with both rather than making production fall back to
+        # materializing a whole remote image library.
+        page_size = int(body.get("per_page", body.get("perPage", 500)))
+        pages = max(1, (len(items) + page_size - 1) // page_size)
+        if body.get("pagination_mode") == "token" or "after" in body:
+            offset = int(body.get("after") or 0)
+            finish = offset + page_size
+            return {
+                "entities": items[offset:finish],
+                "total": len(items), "perPage": page_size, "pagesCount": pages,
+                "after": str(finish) if finish < len(items) else None,
+            }
+        page_number = int(body.get("page", 1))
+        return {
+            "entities": items[(page_number - 1) * page_size:page_number * page_size],
+            "total": len(items), "perPage": page_size, "pagesCount": pages,
+        }
 
     @app.post("/control/start")
     async def start(request: Request):
