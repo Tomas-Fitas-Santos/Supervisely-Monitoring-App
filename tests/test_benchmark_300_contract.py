@@ -59,7 +59,7 @@ def test_worker_sweep_caches_builds_without_reusing_test_databases():
     assert "Benchmark load altered worker scaling" in script
     assert "Benchmark worker count changed during load" in script
     assert "up -d --build" not in script
-    assert '"nightjar-bench-300-$stamp-$Phase-p$count-v$Validators-c$Correctors-s$StatusWorkers"' in script
+    assert '"nightjar-bench-300-$stamp-$Phase-p$publishers-v$validatorsRun-c$correctorsRun-s$statusRun"' in script
     assert "down --volumes --remove-orphans" in script
 
 
@@ -106,3 +106,29 @@ def test_automated_turnaround_metrics_link_original_and_next_native_job():
     assert report["stage_lags"]["validation_queue_wait"]["p95_ms"] == 400
     assert report["stage_lags"]["complete_validation_to_new_job"]["p95_ms"] == 800
     assert report["stage_lags"]["submission_detected_to_new_job"]["p95_ms"] == 1500
+
+
+def test_worker_sweep_scales_requested_role_and_verifies_all_replicas():
+    """All 1/2/3/4 role counts must map to Compose replicas and the report."""
+    root = Path(__file__).resolve().parents[1]
+    script = (root / "scripts" / "run_worker_sweep.ps1").read_text(encoding="utf-8")
+    assert '[ValidateSet("publisher", "validation", "correction", "status")]' in script
+    assert '[int[]]$Workers' in script
+    assert '[int]$PublisherBaseline = 2' in script
+    for role, actual, service in [
+        ("publisher", "publishers", "worker"),
+        ("validation", "validatorsRun", "validation-worker"),
+        ("correction", "correctorsRun", "correction-worker"),
+        ("status", "statusRun", "status-worker"),
+    ]:
+        assert f'$SweepRole -eq "{role}"' in script
+        assert f'--scale "{service}=${actual}"'.replace("\\$", "$") in script
+        assert f'Name = "{service}"; Expected = ${actual}'.replace("\\$", "$") in script
+    assert '"--no-deps"' not in script  # Use real Compose flags, not a literal array
+    assert "run -d --no-deps --name $loadName" in script
+    assert "Benchmark load altered worker scaling" in script
+    assert "Benchmark worker count changed during load" in script
+    assert "down --volumes --remove-orphans" in script
+    for name in ("SweepRole", "SweepCount", "Publishers", "Validators",
+                 "Correctors", "StatusWorkers"):
+        assert f"{name} =" in script
