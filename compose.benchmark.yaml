@@ -27,6 +27,7 @@ x-runtime: &runtime
     BENCHMARK_BURST: ${BENCHMARK_BURST:-0}
     BENCHMARK_UPLOAD: ${BENCHMARK_UPLOAD:-0}
     BENCHMARK_PHASE: ${BENCHMARK_PHASE:-turnaround}
+    BENCHMARK_SQL_TIMING: ${BENCHMARK_SQL_TIMING:-0}
     BENCHMARK_INCOMPLETE_RATE: ${BENCHMARK_INCOMPLETE_RATE:-0.20}
   volumes:
     - benchmark_media:/data
@@ -75,9 +76,9 @@ services:
       test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/ready')"]
       interval: 3s
       retries: 30
-  # Only the publisher role is scaled during the 300-person sweep.
-  # Validation/status/recovery remain independent; scaling full copies of
-  # the old worker duplicated polling and snapshot activity.
+  # Publishers, validators, correction and status lanes scale independently.
+  # The isolated bulk-worker handles the full dataset upload/mirror, without
+  # competing with native publisher/validation code paths.
   worker:
     <<: *runtime
     command: [python, -m, annotatiathon.native_worker, --loop, --role, publish, --poll-seconds, "12"]
