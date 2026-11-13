@@ -166,9 +166,10 @@ def seed(frames):
                 job.review_status = "unreviewed"
                 db.execute(delete(m.NativeJobBinding).where(
                     m.NativeJobBinding.job_id == job.id))
-        else:
-            # Exercise the official frame-completeness/auto-replacement path
-            # rather than the legacy monitor accept-whole-job endpoints.
+        elif PHASE == "turnaround":
+            # This pre-seeded turnaround fixture is NOT part of the full
+            # lifecycle: full starts with an empty original-job queue and
+            # creates its WorkPackets only through claim_primary_block().
             plan = db.get(m.LabelingPlan, "plan")
             plan.queue_seed = "synthetic-throughput-burst"
             dataset.native_dataset_id = 2000
