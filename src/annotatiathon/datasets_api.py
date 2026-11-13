@@ -13,7 +13,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import delete, func, select
+from sqlalchemy import case, delete, func, select
 from sqlalchemy.orm import Session
 
 from .auth import AuthContext, requires
@@ -149,28 +149,58 @@ def upload_status(
     dataset_id: str,
     relative_path: str | None = Query(default=None, max_length=1024),
     include_files: bool = Query(default=False),
+    limit: int = Query(default=1000, ge=1, le=1000),
+    after: str | None = Query(default=None, max_length=1024),
     ctx: AuthContext = Depends(requires("organiser")),
     db: Session = Depends(get_db),
 ):
     event = current_event(db, ctx)
     ds = get_dataset(db, event.id, dataset_id)
-    files = db.scalars(select(DatasetStagedFile).where(
-        DatasetStagedFile.dataset_id == ds.id,
-    )).all()
-    result = {"dataset": dataset_view(ds),
-              "files": len(files),
-              "received_bytes": sum(f.received_bytes for f in files),
-              "complete_files": sum(
-                  f.received_bytes == f.expected_bytes for f in files
-              )}
+    scope = DatasetStagedFile.dataset_id == ds.id
+    # Lost-chunk recovery is a single indexed lookup, not an aggregate over
+    # potentially hundreds of thousands of staged files.
+    if relative_path is not None and not include_files:
+        rel = str(safe_relative(relative_path))
+        found = db.scalar(select(DatasetStagedFile).where(
+            scope, DatasetStagedFile.relative_path == rel,
+        ))
+        return {"dataset": dataset_view(ds), "file": ({
+            "received_bytes": found.received_bytes,
+            "expected_bytes": found.expected_bytes,
+        } if found else None)}
+    result = {"dataset": dataset_view(ds)}
+    # One summary on the first page is enough. Subsequent resume pages need
+    # only the next 1,000 paths, never repeated full-inventory aggregates.
+    if not include_files or after is None:
+        count, received, complete = db.execute(select(
+            func.count(), func.coalesce(func.sum(DatasetStagedFile.received_bytes), 0),
+            func.coalesce(func.sum(case(
+                (DatasetStagedFile.received_bytes == DatasetStagedFile.expected_bytes, 1),
+                else_=0,
+            )), 0),
+        ).where(scope)).one()
+        result.update({
+            "files": count,
+            "received_bytes": received,
+            "complete_files": complete,
+        })
     if include_files:
+        query = select(DatasetStagedFile).where(scope)
+        if after is not None:
+            query = query.where(DatasetStagedFile.relative_path > after)
+        files = list(db.scalars(query.order_by(
+            DatasetStagedFile.relative_path,
+        ).limit(limit + 1)))
+        result["next_after"] = files[limit - 1].relative_path if len(files) > limit else None
         result["file_progress"] = [{
             "relative_path": f.relative_path,
             "received_bytes": f.received_bytes, "expected_bytes": f.expected_bytes,
-        } for f in files]
+        } for f in files[:limit]]
     if relative_path:
         rel = str(safe_relative(relative_path))
-        found = next((f for f in files if f.relative_path == rel), None)
+        found = db.scalar(select(DatasetStagedFile).where(
+            scope, DatasetStagedFile.relative_path == rel,
+        ))
         result["file"] = ({
             "received_bytes": found.received_bytes,
             "expected_bytes": found.expected_bytes,

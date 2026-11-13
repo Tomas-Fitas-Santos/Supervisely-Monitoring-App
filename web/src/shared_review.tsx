@@ -1,6 +1,7 @@
 import { RefreshButton } from "./refresh_button";
 import { useTableSort } from "./table_sort";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { singleFlight } from "./single_flight";
 import {
   CheckCircle2, ChevronRight, ClipboardCheck, PauseCircle, PlayCircle,
   RotateCcw, ZoomIn, ZoomOut
@@ -77,17 +78,17 @@ export function SharedReviewScreen({auth}:{auth:Auth}){
   const allGraded=Boolean(claim)&&graded===objects.length;
   const pointClasses=(claim?.classes||[]).filter(c=>c.shape==="point");
 
-  const refreshStatus=useCallback(async()=>{
+  const refreshStatus=useMemo(()=>singleFlight(async()=>{
     const result=await api<QueueStatus>("/review-queue/status");
     setStatus(result);
-  },[]);
-  const refreshRankings=useCallback(async()=>{
+  }),[]);
+  const refreshRankings=useMemo(()=>singleFlight(async()=>{
     const result=await api<{items:Ranking[]}>("/rankings/teams");
     setRankings(result.items);
-  },[]);
+  }),[]);
 
   useEffect(()=>{
-    void refreshStatus().catch(e=>setError((e as Error).message));
+    if(!document.hidden)void refreshStatus().catch(e=>setError((e as Error).message));
     const interval=window.setInterval(()=>{
       if(!document.hidden)void refreshStatus().catch(()=>undefined);
     },15000);
@@ -95,7 +96,7 @@ export function SharedReviewScreen({auth}:{auth:Auth}){
   },[refreshStatus]);
   useEffect(()=>{
     if(tab!=="rankings")return;
-    void refreshRankings().catch(e=>setError((e as Error).message));
+    if(!document.hidden)void refreshRankings().catch(e=>setError((e as Error).message));
     const interval=window.setInterval(()=>{
       if(!document.hidden)void refreshRankings().catch(()=>undefined);
     },15000);

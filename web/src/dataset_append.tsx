@@ -3,23 +3,15 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CloudUpload, FolderOpen, RefreshCw, Trash2 } from "lucide-react";
-import { api } from "./api";
+import { uploadApi as api, uploadFile, validateOffset } from "./upload_helpers";
 import { confirmAction } from "./dialogs";
 import { validateDatasetSources } from "./dataset_transfer";
 
 type UploadKind="zip"|"folder";
 type Batch={id:string;dataset_id:string;status:string;upload_kind:UploadKind;
   received_bytes:number;started_revision:number;error_code:string|null};
-type BatchDetails=Batch&{files:{path:string;received_bytes:number;expected_bytes:number}[]};
-const CHUNK=8*1024*1024;
-const pathFor=(file:File,kind:UploadKind)=>kind==="zip"?"source.zip":
-  (file.webkitRelativePath||file.name).replaceAll("\\","/");
-
-async function errorFrom(response:Response){
-  const body=await response.json().catch(()=>({}));
-  return new Error(typeof body.detail==="string"?body.detail:
-    "Upload rejected ("+response.status+")");
-}
+type Receipt={path:string;received_bytes:number;expected_bytes:number};
+type BatchDetails=Batch&{files:Receipt[];file?:Receipt|null;next_after?:string|null};
 
 export function AppendVideos({datasetId,csrf,onCommitted}:{
   datasetId:string;csrf:string;onCommitted:()=>Promise<unknown>|void;
@@ -32,6 +24,7 @@ export function AppendVideos({datasetId,csrf,onCommitted}:{
   const [progress,setProgress]=useState({done:0,total:0});
   const [error,setError]=useState("");
   const [notice,setNotice]=useState("");
+  const [stage,setStage]=useState("");
   const controller=useRef<AbortController|null>(null);
   const lastCommitted=useRef<string>("");
   const fileRef=useRef<HTMLInputElement|null>(null);
@@ -61,84 +54,60 @@ export function AppendVideos({datasetId,csrf,onCommitted}:{
   function selectedFiles(next:File[]){setFiles(next);setError("");}
 
   async function sendBatch(batch:Batch){
-    if(!files.length)throw new Error("Reselect the source ZIP or complete video folder.");
-    validateDatasetSources(files,batch.upload_kind);
-    const details=await api<BatchDetails>(
-      `/datasets/${datasetId}/append-batches/${batch.id}`);
-    const previous=new Map(details.files.map(row=>[row.path,row]));
-    const controllerValue=new AbortController();
-    controller.current=controllerValue;
-    let done=0;
-    for(const file of files){
-      const path=pathFor(file,batch.upload_kind);
-      const row=previous.get(path);
-      if(row&&row.expected_bytes!==file.size){
-        throw new Error("Reselected file differs from saved upload: "+path);
+    const signal=controller.current!.signal;
+    setStage("Checking selected file metadata…");
+    const {sources,total}=await validateDatasetSources(files,batch.upload_kind,signal,
+      count=>setStage(`Checking file metadata: ${count} / ${files.length}`));
+    setStage("Checking saved upload progress…");
+    const previous=new Map<string,Receipt>();
+    let after:string|null=null;
+    do {
+      const details:BatchDetails=await api<BatchDetails>(
+        `/datasets/${datasetId}/append-batches/${batch.id}?limit=1000`+
+        (after?"&after="+encodeURIComponent(after):""),"GET",undefined,undefined,signal);
+      for(const row of details.files){
+        const source=sources.get(row.path);
+        if(!source||source.size!==row.expected_bytes)throw new Error("Reselected files do not match the saved batch paths and sizes.");
+        validateOffset(row.received_bytes,source.size);previous.set(row.path,row);
       }
-      done+=row?.received_bytes||0;
+      if(details.next_after&&details.next_after===after)throw new Error("Upload progress paging did not advance.");
+      after=details.next_after||null;
+    }while(after);
+    let done=0;for(const row of previous.values())done+=row.received_bytes;
+    setProgress({done,total});let count=0;
+    for(const [path,file] of sources){
+      setStage(`Uploading files: ${count} / ${files.length}`);
+      await uploadFile({file,offset:previous.get(path)?.received_bytes||0,csrf,signal,
+        url:`/datasets/${datasetId}/append-batches/${batch.id}/chunk?relative_path=`+encodeURIComponent(path),
+        readOffset:async()=>{
+          const state=await api<BatchDetails>(`/datasets/${datasetId}/append-batches/${batch.id}?relative_path=`+encodeURIComponent(path),
+            "GET",undefined,undefined,signal);
+          return state.file?.received_bytes||0;
+        },onProgress:bytes=>{done+=bytes;setProgress({done,total});}});
+      count++;
     }
-    if(details.files.some(row=>!files.some(file=>
-      pathFor(file,batch.upload_kind)===row.path))){
-      throw new Error("The reselected folder omits a file in this saved batch.");
-    }
-    setProgress({done,total});
-    for(const file of files){
-      const path=pathFor(file,batch.upload_kind);
-      let offset=previous.get(path)?.received_bytes||0;
-      let retries=0;
-      while(offset<file.size){
-        if(controllerValue.signal.aborted)throw new Error("Upload paused. Reselect the same files to resume.");
-        const end=Math.min(offset+CHUNK,file.size);
-        try{
-          const response=await fetch(
-            `/api/v1/datasets/${datasetId}/append-batches/${batch.id}/chunk?`+
-              "relative_path="+encodeURIComponent(path)+"&offset="+offset+"&total="+file.size,{
-                method:"PUT",credentials:"same-origin",
-                headers:{"X-CSRF-Token":csrf,"Content-Type":"application/octet-stream"},
-                body:file.slice(offset,end),signal:controllerValue.signal,
-              }
-          );
-          if(!response.ok)throw await errorFrom(response);
-          const receipt=await response.json() as {received_bytes:number};
-          if(receipt.received_bytes<=offset||receipt.received_bytes>end)
-            throw new Error("Unexpected server upload offset.");
-          done+=receipt.received_bytes-offset;
-          offset=receipt.received_bytes;retries=0;
-          setProgress({done,total});
-        }catch(e){
-          if(controllerValue.signal.aborted)throw e;
-          // A successful chunk may have lost its HTTP response: the server
-          // offset is authoritative before we retry.
-          const state=await api<BatchDetails>(
-            `/datasets/${datasetId}/append-batches/${batch.id}`);
-          const saved=state.files.find(item=>item.path===path)?.received_bytes||0;
-          if(saved>offset&&saved<=end){
-            done+=saved-offset;offset=saved;retries=0;
-            setProgress({done,total});
-          }else if(++retries>=3)throw e;
-        }
-      }
-    }
+    setStage("Starting local indexing…");
     await api(`/datasets/${datasetId}/append-batches/${batch.id}/finish`,
-      "POST",undefined,csrf);
+      "POST",undefined,csrf,signal);
     setNotice("Batch uploaded. Local indexing will commit complete videos into the existing dataset.");
     setFiles([]);if(fileRef.current)fileRef.current.value="";
-    await refresh();
+    void refresh().catch(()=>undefined);
   }
 
   async function upload(){
     if(running||!files.length)return;
     setRunning(true);setError("");setNotice("");
+    controller.current=new AbortController();setStage("Preparing append upload…");
     try{
       const reuse=active?.status==="uploading"?active:null;
       if(reuse&&reuse.upload_kind!==kind)
         throw new Error("Choose the same upload format as the existing batch.");
       const target=reuse||await api<Batch>(
-        `/datasets/${datasetId}/append-batches`,"POST",{upload_kind:kind},csrf);
+        `/datasets/${datasetId}/append-batches`,"POST",{upload_kind:kind},csrf,controller.current.signal);
       setActiveId(target.id);
       await sendBatch(target);
     }catch(e){setError((e as Error).message);}
-    finally{controller.current=null;setRunning(false);await refresh().catch(()=>undefined);}
+    finally{controller.current=null;setRunning(false);void refresh().catch(()=>undefined);}
   }
 
   async function retry(){
@@ -173,7 +142,7 @@ export function AppendVideos({datasetId,csrf,onCommitted}:{
         species/video clips. New species may overlap existing batches, but
         existing video names and source frames cannot be replaced.</p>
     </div><button className="btn secondary" type="button" disabled={running}
-      onClick={()=>void refresh()}><RefreshCw size={14}/> Refresh</button></div>
+      onClick={()=>void refresh().catch(e=>setError((e as Error).message))}><RefreshCw size={14}/> Refresh</button></div>
     <label>Append upload format
       <select value={kind} disabled={running||Boolean(active&&active.status==="uploading")}
         onChange={e=>{setKind(e.target.value as UploadKind);setFiles([]);
@@ -198,6 +167,7 @@ export function AppendVideos({datasetId,csrf,onCommitted}:{
     {active&&<p className="muted small">Latest batch: {active.status}
       {" "}({active.upload_kind}, revision {active.started_revision})
       {active.error_code?" · "+active.error_code:""}</p>}
+    {running&&<p className="muted small" role="status">{stage}</p>}
     {running&&<progress max={progress.total||1} value={progress.done}/>}
     {running&&<p className="muted small">{Math.round(progress.done/1048576)}
       /{Math.round(progress.total/1048576)} MiB uploaded</p>}

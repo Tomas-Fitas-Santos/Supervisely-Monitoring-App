@@ -8,6 +8,7 @@ import {
   FolderOpen, HardDrive, Layers3, RotateCcw, Trash2, PauseCircle
 } from "lucide-react";
 import { api, type Auth } from "./api";
+import { uploadApi } from "./upload_helpers";
 import { beginDatasetTransfer, clearDatasetTransfer, getDatasetTransfer,
   validateDatasetSources,
   stopDatasetTransfer, watchDatasetTransfer, type DatasetTransferState } from "./dataset_transfer";
@@ -50,13 +51,16 @@ export function DatasetScreen({auth}:{auth:Auth}) {
     if(fileInputRef.current)fileInputRef.current.value="";
   }
   const [busy,setBusy]=useState(false);
+  const [preparing,setPreparing]=useState("");
+  const preparation=useRef<AbortController|null>(null);
+  const selectedBytes=useMemo(()=>files.reduce((sum,file)=>sum+file.size,0),[files]);
   const [transfer,setTransfer]=useState<DatasetTransferState|null>(getDatasetTransfer);
   useEffect(()=>watchDatasetTransfer(setTransfer),[]);
   const [error,setError]=useState("");
   const [notice,setNotice]=useState("");
   const refresh=useCallback(async()=>{
     try{
-      const result=await api<{items:Dataset[]}>("/datasets");
+      const result=await uploadApi<{items:Dataset[]}>("/datasets");
       setDatasets(result.items);
       setSelected(old=>result.items.some(d=>d.id===old)?old:(result.items[0]?.id||""));
     }catch(e){setError((e as Error).message);return false;}
@@ -117,25 +121,29 @@ export function DatasetScreen({auth}:{auth:Auth}) {
     setBusy(true);setError("");setNotice("");
     let created:Dataset|null=null;
     try {
-      validateDatasetSources(files,mode);
-      created=await api<Dataset>("/datasets/uploads","POST",{
+      preparation.current=new AbortController();
+      await validateDatasetSources(files,mode,preparation.current.signal,
+        count=>setPreparing(`Checking file metadata: ${count} / ${files.length}`));
+      setPreparing("Creating upload record…");
+      created=await uploadApi<Dataset>("/datasets/uploads","POST",{
         name:name.trim()||(mode==="folder"?
           (files[0].webkitRelativePath.split("/")[0]||files[0].name):
           files[0].name.replace(/\.zip$/i,"")),
         upload_kind:mode,extraction_policy:extractionPolicy
-      },auth.csrf_token);
+      },auth.csrf_token,preparation.current.signal);
       setSelected(created.id);
+      setDatasets(old=>[created!,...old.filter(d=>d.id!==created!.id)]);
       beginDatasetTransfer({
         datasetId:created.id,name:created.name,kind:mode,
         files,csrf:auth.csrf_token,resume:false
       });
       setNotice("Transfer started. When local validation completes, the native worker will replicate every frame to Supervisely before event launch.");
       clearFileSelection();setName("");
-      await refresh();
+      void refresh();
     }catch(e) {
       setError((e as Error).message+(created?" The unfinished record can be removed below.":""));
-      await refresh();
-    }finally{setBusy(false);}
+      void refresh();
+    }finally{setBusy(false);setPreparing("");preparation.current=null;}
   }
   async function resumeSelected() {
     if(!dataset||!files.length)return;
@@ -158,7 +166,7 @@ export function DatasetScreen({auth}:{auth:Auth}) {
     try {
       await stopDatasetTransfer(dataset.id,auth.csrf_token);
       setNotice("Upload stopped. Partial files can be resumed or deleted.");
-      await refresh();
+      void refresh();
     }catch(e){setError((e as Error).message);}
     finally{setBusy(false);}
   }
@@ -179,7 +187,7 @@ export function DatasetScreen({auth}:{auth:Auth}) {
       clearDatasetTransfer(dataset.id);
       setSelected("");
       setNotice("Incomplete dataset and its partial local files deleted.");
-      await refresh();
+      void refresh();
     }catch(e){setError((e as Error).message);}
     finally{setBusy(false);}
   }
@@ -226,10 +234,13 @@ export function DatasetScreen({auth}:{auth:Auth}) {
               disabled={busy} onChange={e=>setFiles(Array.from(e.target.files||[]))}/>
           </label>}
           <p className="muted small">{files.length} file(s) selected · {formatBytes(
-            files.reduce((sum,f)=>sum+f.size,0)
+            selectedBytes
           )}</p>
+          {preparing&&<p role="status" className="muted small">{preparing} <button type="button" className="btn secondary" onClick={()=>preparation.current?.abort()}>Cancel preparation</button></p>}
           {transfer?.running&&<div className="dataset-progress">
-            <strong className="small">{transfer.phase==="validating"?"Validating local media":
+            <strong className="small">{transfer.phase==="preparing"?"Checking selected file metadata":
+              transfer.phase==="reconciling"?"Checking saved upload progress":
+              transfer.phase==="validating"?"Validating local media":
               "Uploading "+transfer.name+" in this browser tab"}</strong>
             <progress max={transfer.total||1} value={transfer.done}/>
             <span>{formatBytes(transfer.done)} / {formatBytes(transfer.total)}
@@ -287,7 +298,7 @@ export function DatasetScreen({auth}:{auth:Auth}) {
                 onClick={()=>void retryMirror()}><RotateCcw size={15}/> Retry Supervisely upload</button>}
             {mirror?.ready_for_automatic_jobs&&<p className="muted small">
               All frames are mirrored. Before automatic 30-frame job distribution,
-              use Job Distribution → Automatic distribution → Check source frames
+              use Job Distribution â†’ Automatic distribution â†’ Check source frames
               to verify source-video identity and consecutive frame positions.
               Manual assignments can independently duplicate a video in their separate remote dataset.</p>}
           </div>}

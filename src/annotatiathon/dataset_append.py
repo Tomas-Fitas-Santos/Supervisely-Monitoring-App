@@ -146,18 +146,32 @@ def create_append_batch(
 @router.get("/{dataset_id}/append-batches/{batch_id}")
 def append_status(
     dataset_id: str, batch_id: str,
+    limit: int = Query(default=1000, ge=1, le=1000),
+    after: str | None = Query(default=None, max_length=1024),
+    relative_path: str | None = Query(default=None, max_length=1024),
     ctx: AuthContext = Depends(requires("organiser")),
     db: Session = Depends(get_db),
 ):
     ds = get_dataset(db, current_event(db, ctx).id, dataset_id)
     batch = _batch(db, ds, batch_id)
-    files = list(db.scalars(select(DatasetAppendFile).where(
-        DatasetAppendFile.batch_id == batch.id,
-    ).order_by(DatasetAppendFile.relative_path)))
-    return {**batch_view(batch), "files": [{
+    query = select(DatasetAppendFile).where(DatasetAppendFile.batch_id == batch.id)
+    if relative_path is not None:
+        file = db.scalar(query.where(
+            DatasetAppendFile.relative_path == str(safe_relative(relative_path)),
+        ))
+        return {**batch_view(batch), "file": None if file is None else {
+            "path": file.relative_path, "received_bytes": file.received_bytes,
+            "expected_bytes": file.expected_bytes,
+        }}
+    if after is not None:
+        query = query.where(DatasetAppendFile.relative_path > after)
+    files = list(db.scalars(query.order_by(DatasetAppendFile.relative_path).limit(limit + 1)))
+    return {**batch_view(batch),
+            "next_after": files[limit - 1].relative_path if len(files) > limit else None,
+            "files": [{
         "path": f.relative_path, "received_bytes": f.received_bytes,
         "expected_bytes": f.expected_bytes,
-    } for f in files]}
+    } for f in files[:limit]]}
 
 
 @router.put("/{dataset_id}/append-batches/{batch_id}/chunk")
