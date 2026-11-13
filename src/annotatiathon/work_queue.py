@@ -86,7 +86,7 @@ def claim_primary_block(
     plan = db.scalar(select(LabelingPlan).join(Event, Event.id == LabelingPlan.event_id).where(
         LabelingPlan.id == plan_id, LabelingPlan.queue_seed.is_not(None),
         LabelingPlan.status == "running", Event.status == "active",
-    ).with_for_update(of=(Event, LabelingPlan)))
+    ).with_for_update(of=LabelingPlan))
     if plan is None:
         return None
     team = db.scalar(select(CompetitionTeam).where(
@@ -107,7 +107,10 @@ def claim_primary_block(
         WorkPacket.submitted_at.is_(None),
     )) is not None:
         return None
-    # The exclusive plan lock serializes all annotator claims. New plans store
+    # The exclusive plan lock serializes claims. Event is only an eligibility
+    # check here: also locking it creates Event/Plan lock-order deadlocks
+    # against validation and status reconciliation transactions.
+    # New plans store
     # dataset-wide ordinals; sorting by anchor-video name also preserves the
     # order of pre-upgrade plans whose ordinals restarted for each video.
     block = db.scalar(select(WorkBlock).join(
