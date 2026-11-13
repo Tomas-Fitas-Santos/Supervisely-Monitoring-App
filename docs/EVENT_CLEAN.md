@@ -116,3 +116,10 @@ that unnecessary work. Its tests verify draft-plan deletion without any image
 scan, plus safe fallback for remote objects/tags, missing statistics, inventory
 mismatches and statistics request errors. All 46 focused cleanup, native dispatch
 and table-assignment tests passed after this correction.
+
+The correction (`cce37d8`) was deployed to the recovery worker without restarting
+the website or executing another clean. A read-only check using the deployed
+helper against the Official Event's mirrored project returned confirmed-empty
+remote annotations and no local jobs, verifying that this case selects the fast
+path. Datasets still being imported remain subject to the existing idle-import
+guard before any clean request can start.
