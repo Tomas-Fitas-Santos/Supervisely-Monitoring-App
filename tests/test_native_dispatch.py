@@ -436,6 +436,9 @@ def test_initial_release_and_next_after_both_submit(configured):
         assert len(db.scalars(select(NativeMediaInstance)).all()) == 2
         assert len(sdk.datasets) == 1
         assert len(sdk.jobs) == 2
+        assert all("[NJ:" in remote.name and " · " in remote.name
+                   for remote in sdk.jobs)
+        assert all(not remote.name.startswith("Job 00") for remote in sdk.jobs)
         assert sync_all(db, sdk, config)["changed_jobs"] == 0
         ops = list(db.scalars(select(NativeOperation).where(
             NativeOperation.kind == "publish_job",
@@ -566,8 +569,8 @@ def test_returned_pair_job_restarts_and_blocks_next_release(configured):
 
 
 
-@pytest.mark.parametrize("legacy_remote_title", [False, True])
-def test_uncertain_native_create_is_reconciled_without_duplicates(configured, legacy_remote_title):
+@pytest.mark.parametrize("numbered_remote_title", [False, True])
+def test_uncertain_native_create_is_reconciled_without_duplicates(configured, numbered_remote_title):
     http, maker, csrf, plan_id, sdk = configured
     launch(http, csrf, plan_id)
     sdk.fail_job_create_once = True
@@ -582,21 +585,20 @@ def test_uncertain_native_create_is_reconciled_without_duplicates(configured, le
         ))
         opid = op.id
         assert op.status == "attention"
-        if legacy_remote_title:
-            from annotatiathon.native_names import labeling_job_name
-            from annotatiathon.native_worker import job_video_group
-
-            job = db.get(LabelingJob, op.target_id)
-            team = db.get(CompetitionTeam, job.team_id)
+        if numbered_remote_title:
+            # Reconcile pre-rollback jobs already created as Job NNN.
+            # Retrying must never create another job just to rename it.
             for remote in sdk.jobs:
-                remote.name = labeling_job_name(job, team, job_video_group(db, job), "Team pair")
+                remote.name = "Job 001"
     retry = call(http, csrf, "/native/operations/"+opid+"/retry")
     assert retry.status_code == 200, retry.text
     with maker() as db:
         assert process_once(db, sdk, db.get(SuperviselyConfig, 1))["status"] == "done"
         assert len(sdk.jobs) == 2
-        if not legacy_remote_title:
+        if numbered_remote_title:
             assert {job.name for job in sdk.jobs} == {"Job 001"}
+        else:
+            assert all("[NJ:" in remote.name for remote in sdk.jobs)
         assert len(sdk.images[sdk.datasets[0].id]) == 3
         assert len(db.scalars(select(NativeJobBinding)).all()) == 2
 
@@ -1369,7 +1371,7 @@ def test_partial_submission_accepts_frames_once_and_reissues_only_missing(
         corrected_native = next(n for n in sdk.jobs if n.id == binding.native_job_id)
         assert corrected_native.images_count == 1
         assert corrected_native.image_ids == [mapped[source_ids[1]]]
-        assert corrected_native.name == original_native.name + " · Incomplete"
+        assert corrected_native.name == original_native.name + " (Incomplete #1)"
         assert _http.get("/api/v1/review-queue/status").json()["pending"] >= 1
 
     sdk.labeling_job.get_annotations = full_annotations
