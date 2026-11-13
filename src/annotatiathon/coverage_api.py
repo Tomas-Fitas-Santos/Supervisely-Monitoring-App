@@ -325,6 +325,19 @@ def classify_source_folder(
     item.species_name = (payload.species_name or "").strip() or None
     item.updated_by = ctx.staff.id
     item.updated_at = epoch()
+    # A prepared draft is scoped to the exact morphology mapping. Existing
+    # approved balanced plans retain their frozen scientific classification.
+    from .models import DatasetPreparedQueue, LabelingPlan
+    if db.scalar(select(LabelingPlan.id).where(
+        LabelingPlan.dataset_id == ds.id,
+        LabelingPlan.allocation_mode == "balanced_30_v1",
+        LabelingPlan.status.in_(["approved", "running", "paused"]),
+    ).limit(1)):
+        raise HTTPException(409, "Cannot change morphology while a balanced plan is active.")
+    ds.configuration_revision += 1
+    prepared = db.get(DatasetPreparedQueue, ds.id)
+    if prepared:
+        prepared.state = "stale"
     db.add(AuditEvent(
         staff_id=ctx.staff.id, event_id=event.id,
         action="coverage.classification.update", target_type="media_dataset",

@@ -165,14 +165,15 @@ async def append_chunk(
     if batch.upload_kind == "folder" and len(rel.parts) < 2:
         raise HTTPException(422, "Select species/video folders.")
     limits = get_settings()
-    if (total > limits.max_dataset_bytes or
-            ds.source_bytes + batch.source_bytes + total > limits.max_dataset_bytes + total):
+    if total > limits.max_dataset_bytes:
         raise HTTPException(413, "Dataset exceeds its configured byte limit.")
     row = db.scalar(select(DatasetAppendFile).where(
         DatasetAppendFile.batch_id == batch.id,
         DatasetAppendFile.relative_path == str(rel),
     ).with_for_update())
     if row is None:
+        if ds.source_bytes + batch.source_bytes + total > limits.max_dataset_bytes:
+            raise HTTPException(413, "Dataset exceeds its configured byte limit.")
         if offset:
             raise HTTPException(409, "New file must start at offset zero.")
         row = DatasetAppendFile(
@@ -409,8 +410,8 @@ def _index_batch(db: Session, ds: MediaDataset, batch: DatasetAppendBatch) -> di
             add_frame(dest, species, group, kind)
     db.add_all(asset_rows)
     db.flush()
-    if not kinds:
-        raise HTTPException(422, "Append batch contains no media.")
+    if not kinds or not videos:
+        raise HTTPException(422, "Append batch must contain at least one complete video.")
     for group, video in videos.items():
         if video.extraction_policy == "supplied_unknown":
             index_supplied_frames(db, video, media_root, manifests.get(group),

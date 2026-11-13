@@ -16,7 +16,7 @@ from .models import MediaAsset, MediaVideo
 
 class FrameDescription(BaseModel):
     file: str = Field(min_length=1, max_length=255)
-    ordinal: int = Field(ge=1)
+    ordinal: int = Field(ge=0)
     pts: int | None = Field(default=None, ge=-(2**63), le=2**63 - 1)
     width: int | None = Field(default=None, ge=1)
     height: int | None = Field(default=None, ge=1)
@@ -113,7 +113,7 @@ def index_supplied_frames(db: Session, video: MediaVideo, media_root: Path,
     parsed = [supplied_frame_number(Path(frame.relative_path).stem) for frame in frames]
     reliable_numbers = (
         bool(frames)
-        and all(number is not None and 1 <= number <= 2**31 - 1 for number in parsed)
+        and all(number is not None and 0 <= number <= 2**31 - 1 for number in parsed)
         and len(set(parsed)) == len(parsed)
     )
     if manifest_path is not None:
@@ -136,7 +136,10 @@ def index_supplied_frames(db: Session, video: MediaVideo, media_root: Path,
         for index, frame in enumerate(frames, start=1)
     ]
     if (declared_total is not None
-            and (min(ordinals, default=0) < 1 or max(ordinals, default=0) > declared_total)):
+            and (min(ordinals, default=0) < 0
+                 or max(ordinals, default=0) > declared_total
+                 or (min(ordinals, default=0) == 0
+                     and max(ordinals, default=0) >= declared_total))):
         raise HTTPException(
             status_code=422,
             detail=f"Manifest ordinals exceed the declared source frame count in {video.video_group}.",

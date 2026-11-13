@@ -67,6 +67,9 @@ def dataset_view(ds: MediaDataset) -> dict:
         "created_at": ds.created_at, "completed_at": ds.completed_at,
         "last_activity_at": ds.last_activity_at,
         "error_code": ds.error_code,
+        "inventory_revision": ds.inventory_revision,
+        "configuration_revision": ds.configuration_revision,
+        "mirrored_revision": ds.mirrored_revision,
     }
 
 
