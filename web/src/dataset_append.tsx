@@ -33,13 +33,18 @@ export function AppendVideos({datasetId,csrf,onCommitted}:{
   const [error,setError]=useState("");
   const [notice,setNotice]=useState("");
   const controller=useRef<AbortController|null>(null);
+  const lastCommitted=useRef<string>("");
   const fileRef=useRef<HTMLInputElement|null>(null);
   const refresh=useCallback(async()=>{
     const result=await api<{items:Batch[]}>(`/datasets/${datasetId}/append-batches`);
     setBatches(result.items);
     setActiveId(old=>old&&result.items.some(b=>b.id===old)?old:
       result.items.find(b=>["uploading","indexing","failed"].includes(b.status))?.id||null);
-    if(result.items.some(b=>b.status==="committed"))void onCommitted();
+    const latestCommitted=result.items.find(b=>b.status==="committed")?.id||"";
+    if(latestCommitted&&latestCommitted!==lastCommitted.current){
+      lastCommitted.current=latestCommitted;
+      void onCommitted();
+    }
   },[datasetId,onCommitted]);
   useEffect(()=>{
     let live=true;

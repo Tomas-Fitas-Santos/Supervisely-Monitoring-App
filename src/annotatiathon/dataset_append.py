@@ -11,7 +11,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from .auth import AuthContext, requires
@@ -122,7 +122,7 @@ def create_append_batch(
     ensure_append_allowed(db, ds)
     if db.scalar(select(DatasetAppendBatch.id).where(
         DatasetAppendBatch.dataset_id == ds.id,
-        DatasetAppendBatch.status.in_(OPEN),
+        DatasetAppendBatch.status.in_((*OPEN, "failed")),
     ).limit(1)):
         raise HTTPException(409, "Complete or discard the current append batch first.")
     batch = DatasetAppendBatch(
@@ -310,8 +310,19 @@ def _index_batch(db: Session, ds: MediaDataset, batch: DatasetAppendBatch) -> di
     staged = _append_root(ds, batch)
     media_root = root_dir(ds) / "media"
     media_batch = media_root / "batches" / batch.id
+    if media_batch.is_symlink():
+        raise HTTPException(409, "Unsafe append batch media path.")
     if media_batch.exists():
         shutil.rmtree(media_batch)
+    # A crash/failed import leaves no committed inventory. Remove only
+    # batch-private uncommitted derived files before retrying the same batch.
+    # Uploaded chunks live in 'stage' and are never removed by a retry.
+    for relative in ("source_videos", "provenance"):
+        derived = staged / relative
+        if derived.is_symlink():
+            raise HTTPException(409, "Unsafe append batch derived source.")
+        if derived.exists():
+            shutil.rmtree(derived)
     media_batch.mkdir(parents=True)
     files = list(db.scalars(select(DatasetAppendFile).where(
         DatasetAppendFile.batch_id == batch.id,
@@ -432,6 +443,29 @@ def _index_batch(db: Session, ds: MediaDataset, batch: DatasetAppendBatch) -> di
         if video.extraction_policy == "supplied_unknown":
             index_supplied_frames(db, video, media_root, manifests.get(group),
                                   strict=ds.extraction_policy == "all_frames")
+    # The identical original video or clips carrying one source checksum
+    # must not contribute overlapping canonical source-frame ordinals twice.
+    previous = list(db.scalars(select(MediaVideo).where(
+        MediaVideo.dataset_id == ds.id,
+        MediaVideo.source_sha256.is_not(None),
+    )))
+    for new_video in videos.values():
+        if not new_video.source_sha256:
+            continue
+        new_frames = list(db.scalars(select(MediaAsset.frame_index).where(
+            MediaAsset.video_id == new_video.id,
+        )))
+        for old_video in previous:
+            if old_video.source_sha256 != new_video.source_sha256:
+                continue
+            old_frames = set(db.scalars(select(MediaAsset.frame_index).where(
+                MediaAsset.video_id == old_video.id,
+            )))
+            if (not new_frames or None in new_frames or None in old_frames
+                    or not old_frames.isdisjoint(new_frames)):
+                raise HTTPException(
+                    409, "The appended clip overlaps an existing source-video range.",
+                )
     if ds.source_bytes + batch.source_bytes > settings.max_dataset_bytes:
         raise HTTPException(413, "Dataset would exceed its byte limit.")
     ds.source_bytes += batch.source_bytes
@@ -460,8 +494,17 @@ def _index_batch(db: Session, ds: MediaDataset, batch: DatasetAppendBatch) -> di
 
 def process_append_once(db: Session) -> dict | None:
     """Claim and commit one batch; local I/O only, no Supervisely credentials."""
+    # A host crash can strand 'running' after the SQL transaction rolled
+    # back. Reclaim only very old leases; large source extractions can run for
+    # hours and must not be claimed twice while still active.
+    cutoff = epoch() - 6 * 3600
     op = db.scalar(select(NativeOperation).where(
-        NativeOperation.kind == "append_dataset", NativeOperation.status == "pending",
+        NativeOperation.kind == "append_dataset",
+        or_(
+            NativeOperation.status == "pending",
+            (NativeOperation.status == "running") & (
+                NativeOperation.claimed_at < cutoff),
+        ),
     ).order_by(NativeOperation.created_at, NativeOperation.id)
         .with_for_update(skip_locked=True))
     if op is None:

@@ -8,7 +8,7 @@ import os
 from collections import Counter
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from .auth import AuthContext, requires
@@ -213,9 +213,14 @@ def _build_prepared_inventory(db: Session, ds: MediaDataset) -> tuple[list[dict]
 
 def process_preparation_once(db: Session) -> dict | None:
     """Credential-free local indexing lane. One fenced SQL transaction publishes draft."""
+    cutoff = epoch() - 3600
     op = db.scalar(select(NativeOperation).where(
         NativeOperation.kind == "prepare_balanced",
-        NativeOperation.status == "pending",
+        or_(
+            NativeOperation.status == "pending",
+            (NativeOperation.status == "running") & (
+                NativeOperation.claimed_at < cutoff),
+        ),
     ).order_by(NativeOperation.created_at, NativeOperation.id)
         .with_for_update(skip_locked=True))
     if op is None:
