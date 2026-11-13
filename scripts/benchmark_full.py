@@ -16,6 +16,7 @@ import json
 import os
 from pathlib import Path
 import random
+import re
 import ssl
 import shutil
 import threading
@@ -39,6 +40,14 @@ INCOMPLETE_RATE = float(os.environ.get("BENCHMARK_INCOMPLETE_RATE", "0.20"))
 if PHASE not in {"initial", "turnaround", "full"} or not 0 <= INCOMPLETE_RATE <= 1:
     raise ValueError("Invalid benchmark phase or incomplete rate")
 PROFILE_PATH = os.environ.get("BENCHMARK_PROFILE_PATH", "").strip()
+
+
+def is_correction_job_title(title: str) -> bool:
+    """Recognize Nightjar correction titles without matching video names."""
+    return bool(
+        re.fullmatch(r"Job \d+ · Incomplete(?: \(\d+\))?", title)
+        or re.search(r"\(Incomplete #\d+\)$", title)
+    )
 
 
 def certificates():
@@ -558,6 +567,15 @@ def simulate():
                      else [])
             items.extend(created_job(record) for record in created_jobs.values()
                          if index is None or record["dataset_id"] == 2000 + index)
+            # The SDK filters by assignedTo; keeping this filter avoids
+            # unstable global pagination during concurrent job creation.
+            assignee_id = next((
+                rule["value"] for rule in body.get("filter", [])
+                if rule.get("field") in {"assignedTo", "assignedToId", "userId"}
+            ), None)
+            if assignee_id is not None:
+                items = [row for row in items
+                         if (row.get("assignedTo") or {}).get("id") == assignee_id]
             return page(items, body)
         if method == "users.info":
             return {"teams": [{"id": 125980, "name": "Synthetic team", "role": "annotator", "roleId": 5}]}
@@ -575,7 +593,7 @@ def simulate():
             if selected is None:
                 selected = body.get("imagesIds") or body.get("images_ids") or []
             count = len(selected) if selected else FRAMES
-            if "(Incomplete #" in body.get("name", ""):
+            if is_correction_job_title(body.get("name", "")):
                 corrected_images.update(selected)
             result = []
             for uid in users:
