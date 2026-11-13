@@ -402,6 +402,50 @@ class MediaDataset(Base):
     last_activity_at: Mapped[int] = mapped_column(Integer, default=epoch)
     error_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
     extraction_policy: Mapped[str] = mapped_column(String(24), default="sample_1fps")
+    inventory_revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    configuration_revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    mirrored_revision: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+
+
+class DatasetAppendBatch(Base):
+    """Resumable isolated import; never replaces the dataset's prior videos."""
+    __tablename__ = "dataset_append_batches"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=identifier)
+    event_id: Mapped[str] = mapped_column(ForeignKey("events.id"), index=True)
+    dataset_id: Mapped[str] = mapped_column(ForeignKey("media_datasets.id"), index=True)
+    upload_kind: Mapped[str] = mapped_column(String(12))
+    status: Mapped[str] = mapped_column(String(24), default="uploading")
+    source_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
+    revision_at_start: Mapped[int] = mapped_column(Integer)
+    created_by: Mapped[str] = mapped_column(ForeignKey("staff_accounts.id"))
+    created_at: Mapped[int] = mapped_column(Integer, default=epoch)
+    last_activity_at: Mapped[int] = mapped_column(Integer, default=epoch)
+    committed_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(70), nullable=True)
+
+
+class DatasetAppendFile(Base):
+    __tablename__ = "dataset_append_files"
+    __table_args__ = (UniqueConstraint("batch_id", "relative_path", name="uq_append_batch_path"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=identifier)
+    batch_id: Mapped[str] = mapped_column(ForeignKey("dataset_append_batches.id"), index=True)
+    relative_path: Mapped[str] = mapped_column(Text)
+    expected_bytes: Mapped[int] = mapped_column(BigInteger)
+    received_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
+    created_at: Mapped[int] = mapped_column(Integer, default=epoch)
+
+
+class DatasetPreparedQueue(Base):
+    """Revision-bound advisory pool, built only on explicit organiser request."""
+    __tablename__ = "dataset_prepared_queues"
+    dataset_id: Mapped[str] = mapped_column(ForeignKey("media_datasets.id"), primary_key=True)
+    event_id: Mapped[str] = mapped_column(ForeignKey("events.id"), index=True)
+    inventory_revision: Mapped[int] = mapped_column(Integer)
+    configuration_revision: Mapped[int] = mapped_column(Integer)
+    state: Mapped[str] = mapped_column(String(24), default="pending")
+    summary: Mapped[dict] = mapped_column(JSON, default=dict)
+    runs: Mapped[list[dict]] = mapped_column(JSON, default=list)
+    updated_at: Mapped[int] = mapped_column(Integer, default=epoch, onupdate=epoch)
 
 
 class MediaVideo(Base):
@@ -519,6 +563,31 @@ class LabelingPlan(Base):
     created_at: Mapped[int] = mapped_column(Integer, default=epoch)
     approved_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
     queue_seed: Mapped[str | None] = mapped_column(String(64))
+    allocation_mode: Mapped[str] = mapped_column(String(24), default="legacy",
+                                                  server_default="legacy")
+    prepared_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
+class BalancedVideoRun(Base):
+    """Approved video/clip and monotone per-plan primary assignment cursor."""
+    __tablename__ = "balanced_video_runs"
+    __table_args__ = (
+        UniqueConstraint("plan_id", "video_id", name="uq_balanced_plan_video"),
+        Index("ix_balanced_run_open", "plan_id", "next_offset", "selection_order"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=identifier)
+    event_id: Mapped[str] = mapped_column(ForeignKey("events.id"), index=True)
+    dataset_id: Mapped[str] = mapped_column(ForeignKey("media_datasets.id"), index=True)
+    plan_id: Mapped[str] = mapped_column(ForeignKey("labeling_plans.id"), index=True)
+    video_id: Mapped[str] = mapped_column(ForeignKey("media_videos.id"))
+    video_group: Mapped[str] = mapped_column(String(500))
+    source_folder: Mapped[str] = mapped_column(String(200))
+    morphology_group: Mapped[str] = mapped_column(String(200), index=True)
+    first_ordinal: Mapped[int] = mapped_column(Integer)
+    frame_count: Mapped[int] = mapped_column(Integer)
+    next_offset: Mapped[int] = mapped_column(Integer, default=0)
+    accepted_count: Mapped[int] = mapped_column(Integer, default=0)
+    selection_order: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class LabelingJob(Base):
