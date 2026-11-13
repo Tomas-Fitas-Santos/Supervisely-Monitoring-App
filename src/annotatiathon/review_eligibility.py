@@ -5,6 +5,7 @@ Supervisely job contains ONLY missing/invalid frames while already validated
 frames remain in Nightjar's frame-review queue. Legacy samples keep their
 current-round and submission-state eligibility checks.
 """
+
 from sqlalchemy import and_, or_
 
 from .models import LabelingJob, ReviewSample
