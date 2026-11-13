@@ -173,6 +173,10 @@ def test_full_lifecycle_uses_real_import_mirror_queue_and_review_actions():
     assert 'person.native_verified_at = m.epoch()' in fixture
     assert 'select(m.WorkPacket).where(' in fixture
     assert 'packet.submitted_at = m.epoch()' in fixture
+    assert 'elif PHASE == "turnaround":' in fixture
+    assert "preexisting_open_packets" not in fixture
+    assert 'phases["launch"]["stale_open_packets"] = preexisting_packets' in fixture
+    assert 'm.LabelingJob.plan_id != full_plan_id' in fixture
     assert 'range(ANNOTATORS + FULL_FOLLOWUPS)' in fixture
     assert 'frame_{frame * 5 + 1:08d}.jpg' in fixture
     for endpoint in (
