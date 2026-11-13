@@ -48,6 +48,7 @@ type BalancedPreparation={dataset_id:string;status:string;current:boolean;
   inventory_ready:boolean;inventory_revision:number;configuration_revision:number;
   summary:null|{eligible_frames:number;eligible_videos:number;final_short_frames:number;
     exclusions:Record<string,number>;excluded_examples:{video:string;reason:string}[];
+    unverified_temporal_overlap_species:string[];unverified_temporal_overlap_extra:number;
     groups:{group:string;frames:number;videos:number;species:number}[]}};
 type BalancedProgress={groups:{group:string;planned:number;assigned:number;
   validated:number;usable:number;videos_complete:number}[];
@@ -675,6 +676,10 @@ export function CompetitionScreen({auth,view="progress"}:{
               <td>{g.group}</td><td>{g.frames.toLocaleString()}</td>
               <td>{g.videos}</td></tr>)}</tbody>
           </table></div>
+          {balanced.summary.unverified_temporal_overlap_species?.length>0&&
+            <p className="alert warning">Original-video identity is unavailable for
+              multiple clips of: {" "}{balanced.summary.unverified_temporal_overlap_species.join(", ")}.
+              Confirm that these source clips do not overlap in time before launch.</p>}
           {Object.keys(balanced.summary.exclusions).length>0&&
             <p className="alert warning">Excluded footage:
               {Object.entries(balanced.summary.exclusions).map(([k,v])=>

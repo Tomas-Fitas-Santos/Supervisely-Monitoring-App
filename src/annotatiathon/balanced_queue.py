@@ -159,12 +159,16 @@ def _build_prepared_inventory(db: Session, ds: MediaDataset) -> tuple[list[dict]
     supply["Unclassified"] = {"group": "Unclassified", "frames": 0,
                               "videos": 0, "species": set()}
     runs, excluded = [], Counter()
+    provenance = Counter()
+    uncertain = set()
     skipped = []
     for video in db.scalars(select(MediaVideo).where(
         MediaVideo.dataset_id == ds.id,
     ).order_by(MediaVideo.video_group, MediaVideo.id)):
         count, low, high = grouped.get(video.id, (0, None, None))
         species = video.video_group.split("/")[0]
+        if video.source_sha256 is None:
+            provenance[species] += 1
         override = overrides.get(species)
         proposed, _ = suggested_classification(species)
         group = (override.ecomorphology if override else proposed) or "Unclassified"
@@ -196,6 +200,9 @@ def _build_prepared_inventory(db: Session, ds: MediaDataset) -> tuple[list[dict]
         supply[group]["frames"] += count
         supply[group]["videos"] += 1
         supply[group]["species"].add(species)
+    # Multiple clips with no original-video identity may be disjoint,
+    # but their temporal overlap cannot be proven from names or hashes.
+    uncertain.update(species for species, clips in provenance.items() if clips > 1)
     # The approved payload has one row per video, not 100,000 frame IDs.
     summary = {
         "eligible_frames": sum(r["frame_count"] for r in runs),
@@ -206,6 +213,8 @@ def _build_prepared_inventory(db: Session, ds: MediaDataset) -> tuple[list[dict]
             for group, data in supply.items()
         ],
         "exclusions": dict(excluded), "excluded_examples": skipped,
+        "unverified_temporal_overlap_species": sorted(uncertain)[:40],
+        "unverified_temporal_overlap_extra": max(0, len(uncertain) - 40),
         "final_short_frames": sum(r["frame_count"] for r in runs) % 30,
     }
     return runs, summary
@@ -323,6 +332,11 @@ def allocate_balanced_claim(db: Session, plan: LabelingPlan, event: Event,
 
     # Started, unfinished tails have priority. Unopened groups are chosen by
     # projected COMPLETE-video supply so scarce groups get dispatched first.
+    soft_target = max(1, int(os.getenv("NIGHTJAR_BALANCED_UNFINISHED_SOFT_TARGET", "16")))
+    unfinished_before = sum(
+        0 < row.next_offset and row.accepted_count < row.frame_count
+        for row in runs
+    )
     projected = Counter()
     opened_species = Counter()
     for row in runs:
@@ -333,7 +347,8 @@ def allocate_balanced_claim(db: Session, plan: LabelingPlan, event: Event,
     slots = 30
     tails = sorted(
         (row for row in runs if 0 < row.next_offset < row.frame_count),
-        key=lambda row: (row.frame_count - row.next_offset,
+        key=lambda row: (row.frame_count - row.accepted_count,
+                         row.frame_count - row.next_offset,
                          row.selection_order, row.id),
     )
     for row in tails:
@@ -400,6 +415,17 @@ def allocate_balanced_claim(db: Session, plan: LabelingPlan, event: Event,
     db.add(job)
     db.flush()
     db.add(WorkPacket(job_id=job.id, event_id=plan.event_id, person_id=person_id))
+    unfinished_after = sum(
+        0 < row.next_offset and row.accepted_count < row.frame_count
+        for row in runs
+    )
+    if unfinished_after > soft_target and unfinished_after > unfinished_before:
+        db.add(AuditEvent(
+            event_id=plan.event_id, action="balanced.soft_target_exceeded",
+            target_type="labeling_job", target_id=job.id,
+            details={"target": soft_target, "active_videos": unfinished_after,
+                     "reason": "fill_30_frames_without_waiting_for_corrections"},
+        ))
     queue_publish(db, job)
     return job
 
@@ -418,7 +444,7 @@ def record_balanced_acceptance(db: Session, job: LabelingJob, accepted: list[str
     for row in db.scalars(select(BalancedVideoRun).where(
         BalancedVideoRun.plan_id == plan.id,
         BalancedVideoRun.video_id.in_(by_video),
-    ).with_for_update()):
+    ).order_by(BalancedVideoRun.id).with_for_update()):
         row.accepted_count += by_video.pop(row.video_id)
         if row.accepted_count > row.frame_count:
             raise ValueError("A balanced source video has been double-counted.")

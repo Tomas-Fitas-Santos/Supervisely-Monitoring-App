@@ -323,7 +323,6 @@ def create_plan(
         LabelingJob.event_id == event.id,
         LabelingJob.dataset_id == dataset.id,
     )))
-    reserved = {mid for job in prior_jobs for mid in job.media_ids}
     if payload.mode == "balanced_30_v1":
         # Preparation is explicit, local and revision-fenced. Rosters and
         # native credentials are only required at actual job distribution.
