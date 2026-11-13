@@ -127,7 +127,7 @@ model assumption until calibrated against bounded live tests.
 Compare dimensions independently rather than testing every combination:
 
 ```powershell
-# 300-job release: choose 1, then 2, then 3 publishing workers.
+# 300-job release: compare publishers, including higher-concurrency options.
 .\scripts\run_worker_sweep.ps1 -Phase initial -Workers 1,2,3 -Validators 2 -Seconds 900 -Scenario burst
 
 # Full turnaround, including 20% incomplete submissions.
@@ -146,12 +146,24 @@ Compare dimensions independently rather than testing every combination:
 The `-Workers` list is applied to the role selected with `-SweepRole`
 (`publisher` by default). Other roles use their baseline parameters
 (`-PublisherBaseline`, `-Validators`, `-Correctors`,
-`-StatusWorkers`). Every count is constrained to **1–4**.
+`-StatusWorkers`). Every count is constrained to **1–16**. Higher counts are benchmark-only and may oversubscribe the PC; the runner warns when combined container CPU/memory limits exceed available Docker resources.
 Each worker-count variant has its own Compose project and data volumes;
 the launcher verifies the requested replica counts before and after
 load startup, and periodically while the workload runs. If Compose
 silently reduces a role's replicas, the run fails rather than producing
 invalid worker-sizing data.
+
+For a focused higher-concurrency publishing sweep (no live data), use:
+
+```powershell
+.\scripts\run_worker_sweep.ps1 -Phase initial -SweepRole publisher -Workers 4,6,8 -Seconds 300 -Scenario burst
+```
+
+A 120-second cutoff may finish with queued jobs even when no errors occur.
+Treat that as *incomplete cohort coverage*, not a passing full 300-job
+distribution. Repeat with sufficient `-Seconds` to observe the 300th job
+before choosing the production publisher count. This is a synthetic latency
+profile until measured Supervisely timings are provided.
 
 Review `summary.json` for `publication_cohort`,
 `submission_detection`, and `worker_timing.stage_lags`. These
