@@ -83,7 +83,7 @@ from .native_operations_api import (
 from .pair_members import pair_members
 from .supervisely_client import NativeAPIError, require_connection
 from .worker_timing import enable as enable_worker_timing
-from .worker_timing import milestone
+from .worker_timing import code_timing, milestone
 
 logger = logging.getLogger(__name__)
 _checked_visual_projects: set[int] = set()
@@ -397,11 +397,13 @@ def publish_job(db: Session, job: LabelingJob, api, config: SuperviselyConfig) -
     team = db.get(CompetitionTeam, job.team_id)
     if team is None:
         raise NativeWorkerError("missing_competition_team")
-    project_id = remote_project(api, config, dataset, event)
+    with code_timing("publish.resolve_remote_project", job_id=job.id):
+        project_id = remote_project(api, config, dataset, event)
     # All image datasets/jobs in this Supervisely project share project metadata.
     # Make sure annotation tools exist *before* uploading frames or publishing jobs.
     try:
-        ensure_project_annotation_classes(api, project_id)
+        with code_timing("publish.ensure_annotation_schema", job_id=job.id):
+            ensure_project_annotation_classes(api, project_id)
     except AnnotationSchemaError as exc:
         raise NativeWorkerError(exc.code) from exc
     # Visuals settings are a project-level default, not an enforced personal
@@ -433,7 +435,8 @@ def publish_job(db: Session, job: LabelingJob, api, config: SuperviselyConfig) -
         except MirrorError as exc:
             raise NativeWorkerError(exc.code) from exc
         remote_ds_id = dataset.native_dataset_id
-        native_media = source_media_for_job(db, job, remote_ds_id)
+        with code_timing("publish.lookup_mirrored_frames", job_id=job.id):
+            native_media = source_media_for_job(db, job, remote_ds_id)
     else:
         remote_ds_id = manual_media_dataset(api, dataset, project_id)
         db.commit()
@@ -460,9 +463,10 @@ def publish_job(db: Session, job: LabelingJob, api, config: SuperviselyConfig) -
         people[0].name if job.assignee_person_id else "Team pair",
         source_parts=source_parts or None,
     )
-    current = api.labeling_job.get_list(
-        config.team_id, dataset_id=remote_ds_id, show_disabled=True,
-    )
+    with code_timing("publish.remote_list_jobs", job_id=job.id):
+        current = api.labeling_job.get_list(
+            config.team_id, dataset_id=remote_ds_id, show_disabled=True,
+        )
     by_user = defaultdict(list)
     bound_ids = {x.native_job_id for x in db.scalars(select(NativeJobBinding).where(
         NativeJobBinding.event_id == job.event_id,
@@ -478,23 +482,25 @@ def publish_job(db: Session, job: LabelingJob, api, config: SuperviselyConfig) -
         raise NativeWorkerError("unexpected_existing_native_job")
     missing = [uid for uid in roster_ids if uid not in by_user]
     if missing:
-        api.labeling_job.create(
-            name=expected_title,
-            dataset_id=remote_ds_id,
-            user_ids=missing,
-            images_ids=native_media,
-            classes_to_label=[name for name, _shape, _color, _meaning
-                              in ANNOTATION_CLASSES],
-            readme=(
-                "Annotate the bird with a bounding box (bird) and the head "
-                "landmarks as points: left_eye, right_eye, beak, crown. "
-                "Use the corresponding *_occ class when a landmark is "
-                "occluded. Visible and occluded points use matched color pairs."
-            ),
-        )
-        current = api.labeling_job.get_list(
-            config.team_id, dataset_id=remote_ds_id, show_disabled=True,
-        )
+        with code_timing("publish.remote_create_job", job_id=job.id):
+            api.labeling_job.create(
+                name=expected_title,
+                dataset_id=remote_ds_id,
+                user_ids=missing,
+                images_ids=native_media,
+                classes_to_label=[name for name, _shape, _color, _meaning
+                                  in ANNOTATION_CLASSES],
+                readme=(
+                    "Annotate the bird with a bounding box (bird) and the head "
+                    "landmarks as points: left_eye, right_eye, beak, crown. "
+                    "Use the corresponding *_occ class when a landmark is "
+                    "occluded. Visible and occluded points use matched color pairs."
+                ),
+            )
+        with code_timing("publish.remote_confirm_job", job_id=job.id):
+            current = api.labeling_job.get_list(
+                config.team_id, dataset_id=remote_ds_id, show_disabled=True,
+            )
         by_user = defaultdict(list)
         for remote in current:
             if remote.name == expected_title or remote.id in bound_ids:
@@ -529,7 +535,8 @@ def publish_job(db: Session, job: LabelingJob, api, config: SuperviselyConfig) -
                  "native_job_ids": [by_user[uid][0].id for uid in roster_ids],
                  "image_count": len(native_media)},
     ))
-    db.commit()
+    with code_timing("publish.persist_binding", job_id=job.id):
+        db.commit()
     return {"job_id": job.id, "native_jobs": len(by_user),
             "native_media": len(native_media)}
 
@@ -889,7 +896,8 @@ def sync_all(db: Session, api, config: SuperviselyConfig, *,
                 continue
             before = job.status
             try:
-                after = sync_one(db, api, job, queue_validation=not capture_snapshots)
+                with code_timing("status.sync_one", job_id=job.id):
+                    after = sync_one(db, api, job, queue_validation=not capture_snapshots)
             except Exception as exc:  # noqa: BLE001 - isolate failures by native job
                 db.rollback()
                 code = exc.code if isinstance(exc, (NativeWorkerError, NativeAPIError)) else type(exc).__name__
@@ -919,9 +927,10 @@ def sync_all(db: Session, api, config: SuperviselyConfig, *,
                     # Official event: unique source-frame coverage only.
                     # The optional repeat API remains available for explicit
                     # future use, but worker never silently schedules duplicates.
-                    claimed = claim_primary_block(
-                        db, plan.id, team_id, person_id, include_repeats=False,
-                    ) is not None
+                    with code_timing("status.claim_primary_block"):
+                        claimed = claim_primary_block(
+                            db, plan.id, team_id, person_id, include_repeats=False,
+                        ) is not None
                     db.commit()
                     queued += int(claimed)
                 except Exception:
@@ -1029,7 +1038,8 @@ def process_once(db: Session, api, config: SuperviselyConfig) -> dict | None:
     db.commit()
     milestone("publish_started", job_id=job.id, operation_id=opid)
     try:
-        details = publish_job(db, job, api, config)
+        with code_timing("publish.total", job_id=job.id):
+            details = publish_job(db, job, api, config)
     except Exception as exc:
         db.rollback()
         failed = db.get(NativeOperation, opid)
