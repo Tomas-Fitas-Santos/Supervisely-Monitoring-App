@@ -15,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .frame_completion import frame_completion_errors
+from .worker_timing import code_timing
 from .models import (
     LabelingJob,
     MediaAsset,
@@ -79,19 +80,21 @@ def capture_frame_submission(db: Session, api, job: LabelingJob, *,
         if not remaining:
             return {"accepted": [], "pending": []}
         expected_native = [mapping[mid].native_image_id for mid in remaining]
-        image_infos = api.image.get_list(
-            job.native_dataset_id,
-            filters=[{"field": "id", "operator": "in", "value": expected_native}],
-        )
+        with code_timing("validation.fetch_source_images", job_id=job.id):
+            image_infos = api.image.get_list(
+                job.native_dataset_id,
+                filters=[{"field": "id", "operator": "in", "value": expected_native}],
+            )
         by_id = {item.id: item for item in image_infos}
         if set(by_id) != set(expected_native):
             raise FrameSubmissionError("native_subset_images_missing")
-        project_meta = api.labeling_job.get_project_meta(native_job_id)
-        downloaded = api.labeling_job.get_annotations(
-            native_job_id,
-            image_infos=[by_id[image_id] for image_id in expected_native],
-            project_meta=project_meta,
-        )
+        with code_timing("validation.download_annotations", job_id=job.id):
+            project_meta = api.labeling_job.get_project_meta(native_job_id)
+            downloaded = api.labeling_job.get_annotations(
+                native_job_id,
+                image_infos=[by_id[image_id] for image_id in expected_native],
+                project_meta=project_meta,
+            )
         if len(downloaded) != len(remaining):
             raise FrameSubmissionError("native_subset_annotation_count_mismatch")
         rows, rejected = [], {}
@@ -102,7 +105,8 @@ def capture_frame_submission(db: Session, api, job: LabelingJob, *,
         try:
             for media_id, annotation in zip(remaining, downloaded):
                 value = annotation.to_json()
-                errors = frame_completion_errors(value)
+                with code_timing("validation.frame_completeness", job_id=job.id):
+                    errors = frame_completion_errors(value)
                 if errors:
                     rejected[media_id] = errors
                     continue
@@ -162,8 +166,9 @@ def capture_frame_submission(db: Session, api, job: LabelingJob, *,
             validated_complete=True, snapshot=snapshot,
         ))
         accepted.append(media_id)
-    db.flush()
-    pending = pending_ids(db, job)
+    with code_timing("validation.persist_accepted_frames", job_id=job.id):
+        db.flush()
+        pending = pending_ids(db, job)
     job.annotation_snapshot_round = round_number
     job.annotation_snapshot_frames = job.frame_count - len(pending)
     job.annotation_snapshot_annotated_frames = job.annotation_snapshot_frames
