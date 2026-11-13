@@ -672,8 +672,28 @@ def full_flow_summary(plan_id, dataset_id):
         work_blocks = list(db.scalars(select(m.WorkBlock).where(
             m.WorkBlock.plan_id == plan_id,
         )))
+        from annotatiathon.native_operations_api import native_identity_assignable
+        plan = db.get(m.LabelingPlan, plan_id)
+        people = list(db.scalars(select(m.Person).where(
+            m.Person.event_id == plan.event_id,
+            m.Person.kind == "participant",
+        )))
         return {
             "plan_id": plan_id, "dataset_id": dataset_id,
+            "plan_status": plan.status,
+            "queue_seed_set": bool(plan.queue_seed),
+            "event_status": db.get(m.Event, plan.event_id).status,
+            "participant_count": len(people),
+            "verified_participants": sum(native_identity_assignable(p) for p in people),
+            "checked_in_participants": sum(p.check_in_at is not None for p in people),
+            "active_teams": db.scalar(select(func.count(m.CompetitionTeam.id)).where(
+                m.CompetitionTeam.event_id == plan.event_id,
+                m.CompetitionTeam.active.is_(True),
+            )) or 0,
+            "open_work_packets": db.scalar(select(func.count(m.WorkPacket.job_id)).where(
+                m.WorkPacket.event_id == plan.event_id,
+                m.WorkPacket.submitted_at.is_(None),
+            )) or 0,
             "source_frames": source_count, "mirrored_frames": media_bound,
             "source_blocks": len(work_blocks),
             "source_blocks_allocated": sum(block.job_id is not None for block in work_blocks),
