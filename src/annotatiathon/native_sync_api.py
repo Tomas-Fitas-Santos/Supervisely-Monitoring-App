@@ -5,6 +5,7 @@ updates Nightjar's membership labels without inviting, removing or changing remo
 """
 import hashlib
 import json
+from collections import Counter, defaultdict
 from dataclasses import asdict
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -115,13 +116,22 @@ def association_proposal(
     manual: list[ManualMatch],
 ) -> tuple[list[dict], list[dict], list[dict], list[dict]]:
     by_id = {p.id: p for p in people}
-    by_email = {p.email.lower(): p for p in people}
+    by_email: dict[str, list[Person]] = defaultdict(list)
+    for person in people:
+        by_email[person.email.strip().casefold()].append(person)
+    remote_email_counts = Counter(
+        m.email.strip().casefold() for m in members if m.email
+    )
     existing_ids = {
         p.supervisely_user_id: p for p in people if p.supervisely_user_id is not None
     }
-    existing_logins = {
-        p.supervisely_login.casefold(): p for p in people if p.supervisely_login
-    }
+    # Supervisely permits case-distinct logins (for example rodri and Rodri).
+    # Email is the registration identity; a username is only a fallback when
+    # the provider does not disclose an email, and must match exactly.
+    existing_logins: dict[str, list[Person]] = defaultdict(list)
+    for person in people:
+        if person.supervisely_login:
+            existing_logins[person.supervisely_login].append(person)
     if (len({m.person_id for m in manual}) != len(manual)
             or len({m.native_user_id for m in manual}) != len(manual)):
         raise HTTPException(status_code=422, detail="Each manual mapping must be unique.")
@@ -151,12 +161,27 @@ def association_proposal(
         if person is None:
             person = existing_ids.get(member.id)
             method = "verified_id" if person else None
-        if person is None:
-            person = existing_logins.get(member.login.casefold())
-            method = "known_login" if person else None
         if person is None and member.email:
-            person = by_email.get(member.email)
+            email = member.email.strip().casefold()
+            candidates = by_email.get(email, [])
+            if candidates and (len(candidates) != 1 or remote_email_counts[email] != 1):
+                conflicts.append({
+                    "native_user_id": member.id, "login": member.login,
+                    "reason": "Email is not unique; review the identity manually",
+                })
+                continue
+            person = candidates[0] if candidates else None
             method = "exact_email" if person else None
+        if person is None and not member.email:
+            candidates = existing_logins.get(member.login, [])
+            if len(candidates) > 1:
+                conflicts.append({
+                    "native_user_id": member.id, "login": member.login,
+                    "reason": "Login is not unique; review the identity manually",
+                })
+                continue
+            person = candidates[0] if candidates else None
+            method = "known_login" if person else None
         if person is None:
             unmatched.append(asdict(member))
             continue
@@ -192,7 +217,8 @@ def refresh_native_membership(
 ):
     """Reconcile current native team members into this event's roster.
 
-    Existing registrations are matched by verified ID/login or exact email.
+    Existing registrations are matched by verified ID, then unique exact email.
+    An exact, case-sensitive login is a fallback only when email is unavailable.
     Native members without a roster record are added only when Supervisely
     provides a unique email and a recognisable member role. No app-login
     privileges, native invitations, remote roles, or teams are changed.

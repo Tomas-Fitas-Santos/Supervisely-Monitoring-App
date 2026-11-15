@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { Eye, EyeOff } from "lucide-react";
 import { api } from "./api";
+import { keypointSize } from "./annotation_marker_size";
 
 type Point={x:number;y:number};
 type VisualObject={index:number;title:string;shape:"rectangle"|"point";points:Point[];color:string};
@@ -83,7 +84,7 @@ export function AnnotationFrame({src,alt,annotation,zoom}:{
   const displayed=useMemo(()=>objects.filter(object=>!hiddenClasses.includes(object.title)),
     [objects,hiddenClasses]);
   useEffect(()=>setHiddenClasses([]),[src]);
-  const pointRadius=Math.max(3,Math.min(width,height)*0.008);
+  const overlayScale=Math.max(3,Math.min(width,height)*0.008);
   const magnification=zoom??1;
 
   // Fit the original image inside the fixed-size viewport. Pan limits are
@@ -179,30 +180,34 @@ export function AnnotationFrame({src,alt,annotation,zoom}:{
             return <g key={object.index} className="annotation-shape">
               <rect x={Math.min(a.x,b.x)} y={Math.min(a.y,b.y)}
                 width={Math.abs(b.x-a.x)} height={Math.abs(b.y-a.y)}
-                fill="none" stroke="#121827" strokeWidth={Math.max(4,pointRadius*.9)}/>
+                fill="none" stroke="#121827" strokeWidth={Math.max(4,overlayScale*.9)}/>
               <rect x={Math.min(a.x,b.x)} y={Math.min(a.y,b.y)}
                 width={Math.abs(b.x-a.x)} height={Math.abs(b.y-a.y)}
                 fill="none" stroke={object.color}
-                strokeWidth={Math.max(2,pointRadius*.55)}/>
+                strokeWidth={Math.max(2,overlayScale*.55)}/>
               <text x={Math.min(a.x,b.x)+3} y={Math.max(14,Math.min(a.y,b.y)-5)}
-                stroke="#15212D" strokeWidth={Math.max(3,pointRadius*.6)}
-                paintOrder="stroke" fill={object.color} fontSize={Math.max(12,pointRadius*2)}
+                stroke="#15212D" strokeWidth={Math.max(3,overlayScale*.6)}
+                paintOrder="stroke" fill={object.color} fontSize={Math.max(12,overlayScale*2)}
                 fontWeight="bold">{object.index+1}. {object.title}</text>
             </g>;
-          })():<g key={object.index} className="annotation-shape">
+          })():(()=>{
+            const {radius:pointRadius,strokeWidth}=keypointSize(
+              width,height,magnification);
+            return <g key={object.index} className="annotation-shape">
             <circle cx={object.points[0].x} cy={object.points[0].y}
-              r={pointRadius*1.4} fill="#141b28"/>
+              r={pointRadius*1.25} fill="#141b28"/>
             <circle cx={object.points[0].x} cy={object.points[0].y}
               r={pointRadius} fill={object.color} stroke="#fff"
-              strokeWidth={Math.max(1,pointRadius*.2)}/>
-            <text x={object.points[0].x+pointRadius*1.7}
-              y={object.points[0].y-pointRadius*.9}
-              stroke="#0E1822" strokeWidth={Math.max(3,pointRadius*.6)}
+              strokeWidth={strokeWidth}/>
+            <text x={object.points[0].x+overlayScale*1.7}
+              y={object.points[0].y-overlayScale*.9}
+              stroke="#0E1822" strokeWidth={Math.max(3,overlayScale*.6)}
               paintOrder="stroke" fill={object.color}
-              fontSize={Math.max(11,pointRadius*1.7)} fontWeight="bold">
+              fontSize={Math.max(11,overlayScale*1.7)} fontWeight="bold">
               {object.index+1}. {object.title}
             </text>
-          </g>)}
+          </g>;
+          })())}
         </svg>}
       </div>
     </div>

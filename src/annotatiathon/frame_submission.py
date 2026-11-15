@@ -160,6 +160,7 @@ def capture_frame_submission(db: Session, api, job: LabelingJob, *,
             raise FrameSubmissionError("snapshot_validation_failed")
         snapshot["sha256"] = hashlib.sha256(raw).hexdigest()
         snapshot["selection_reason"] = "structurally_complete_submitted_frame"
+        snapshot["validated_at"] = details["captured_at"]
         db.add(ReviewSample(
             event_id=job.event_id, job_id=job.id, team_id=job.team_id,
             media_id=media_id, correction_round=round_number,

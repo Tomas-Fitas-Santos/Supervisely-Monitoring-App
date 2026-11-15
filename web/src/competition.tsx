@@ -1,4 +1,6 @@
 import { RefreshButton } from "./refresh_button";
+import { AnnotationStatistics } from "./annotation_statistics";
+import { EventHealth } from "./event_health";
 import { confirmAction } from "./dialogs";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
@@ -62,7 +64,7 @@ export function CompetitionScreen({auth,view="progress"}:{
   auth:Auth;view?:"progress"|"setup"
 }) {
   const admin=auth.staff.roles.includes("organiser");
-  const [section,setSection]=useState<"overview"|"manual"|"automatic">(
+  const [section,setSection]=useState<"overview"|"manual"|"automatic"|"statistics"|"health">(
     view==="setup"?"manual":"overview"
   );
   const [datasets,setDatasets]=useState<Dataset[]>([]);
@@ -76,6 +78,7 @@ export function CompetitionScreen({auth,view="progress"}:{
   const [jobsPerTeam,setJobsPerTeam]=useState(4);
   const [planMode,setPlanMode]=useState<PlanMode>("shared_30_v1");
   const [afterPlan,setAfterPlan]=useState("");
+  const [confirmStandaloneImages,setConfirmStandaloneImages]=useState(false);
   const [videoLimit,setVideoLimit]=useState("");
   const [created,setCreated]=useState<Created|null>(null);
   const [native,setNative]=useState<NativeStatus|null>(null);
@@ -126,9 +129,10 @@ export function CompetitionScreen({auth,view="progress"}:{
   },[dataset]);
   useEffect(()=>{void refresh();},[refresh]);
   useEffect(()=>{
+    if(section==="statistics"||section==="health")return;
     const timer=window.setInterval(()=>{if(!document.hidden)void refresh();},5000);
     return ()=>window.clearInterval(timer);
-  },[refresh]);
+  },[refresh,section]);
   const syncAssignees=useCallback(async()=>{
     setBusy(true);setError("");
     try {
@@ -228,6 +232,7 @@ export function CompetitionScreen({auth,view="progress"}:{
   },[]);
   useEffect(()=>{setDrafts([]);void refreshOptions();},[refreshOptions]);
   useEffect(()=>setCreated(null),[dataset,planMode]);
+  useEffect(()=>setConfirmStandaloneImages(false),[dataset,planMode]);
   useEffect(()=>{
     if(!chosen){setMedia(null);return;}
     void api<MediaPage>("/labeling/jobs/"+chosen+"/media?page="+page+"&size=50")
@@ -260,7 +265,8 @@ export function CompetitionScreen({auth,view="progress"}:{
     try {
       const response=await api<Created>("/labeling/plans","POST",planMode!=="legacy"?{
         dataset_id:dataset,mode:planMode,
-        ...(planMode==="images_30_v1"?{after_plan_id:afterPlan||null}:{}),
+        ...(planMode==="images_30_v1"?{after_plan_id:afterPlan||null,
+          confirm_standalone_images:confirmStandaloneImages}:{}),
       }:{
         dataset_id:dataset,jobs_per_team:jobsPerTeam,redundancy:1,
         video_limit:videoLimit.trim()?Number(videoLimit):null,
@@ -374,21 +380,27 @@ export function CompetitionScreen({auth,view="progress"}:{
       <p className="muted">{view==="setup"?
         "Create and publish jobs using the manual or automatic distribution tools.":
         "Follow the publishing queue, annotation progress and submissions."}</p>
-    </div><RefreshButton refresh={async()=>{
+    </div>{section!=="statistics"&&section!=="health"&&<RefreshButton refresh={async()=>{
       setError("");
       const results=await Promise.all([refresh(),refreshOptions()]);
       return results.every(result=>result!==false);
-    }}>Refresh status</RefreshButton></div>
+    }}>Refresh status</RefreshButton>}</div>
     {error&&<div role="alert" className="alert danger">{error}</div>}
     {notice&&<div role="status" className="alert success">{notice}</div>}
     <nav className="workspace-subtabs" aria-label="Competition and jobs sections">
       <button className={section==="overview"?"active":""} onClick={()=>setSection("overview")}>
         Jobs & worker queue</button>
+      {view==="progress"&&<button className={section==="statistics"?"active":""}
+        onClick={()=>setSection("statistics")}>Frame & image statistics</button>}
+      {admin&&view==="progress"&&<button className={section==="health"?"active":""}
+        onClick={()=>setSection("health")}>Event health</button>}
       {admin&&view==="setup"&&<button className={section==="manual"?"active":""} onClick={()=>setSection("manual")}>
         Create video jobs</button>}
       {admin&&view==="setup"&&<button className={section==="automatic"?"active":""} onClick={()=>setSection("automatic")}>
         Automatic distribution</button>}
     </nav>
+    {section==="statistics"&&<AnnotationStatistics/>}
+    {section==="health"&&admin&&<EventHealth/>}
     {section==="overview"&&<div className="stat-grid compact">
       <div className="stat-card"><Layers3 size={19}/><span className="muted small">In queue / labeling</span><strong>{active}</strong></div>
       <div className="stat-card"><ClipboardCheck size={19}/><span className="muted small">Submitted / checking</span><strong>{awaiting}</strong></div>
@@ -524,7 +536,7 @@ export function CompetitionScreen({auth,view="progress"}:{
         <h3>{selectedJob?selectedJob.team_name+" · "+(selectedJob.assignee_name||"Historical pair job"):"Select a job"}</h3>
         {selectedJob&&<>
           <div className="job-detail-grid">
-            <div><span>Status</span><strong>{selectedJob.release_mode==="manual_hold"?"Saved, not published":selectedJob.status.replaceAll("_"," ")}</strong></div>
+            <div><span>Nightjar state</span><strong>{selectedJob.release_mode==="manual_hold"?"Saved, not published":selectedJob.status.replaceAll("_"," ")}</strong></div>
             <div><span>Media</span><strong>{selectedJob.video_count} video(s) · {selectedJob.frame_count} frames</strong></div>
             <div><span>Monitor decision</span><strong>{selectedJob.review_status.replaceAll("_"," ")}</strong></div>
             <div><span>Structurally complete</span><strong>
@@ -539,7 +551,9 @@ export function CompetitionScreen({auth,view="progress"}:{
               The worker sends only the remaining images to the original annotator,
               with “Incomplete” in the Supervisely title. All rounds share this same competition job.</p>}
           {selectedJob.native_submissions?.map(binding=><div className="job-plan-row" key={binding.native_job_id}>
-            <div><strong>{binding.person_name}</strong><span>Supervisely job #{binding.native_job_id}</span></div>
+            <div><strong>{binding.person_name}</strong><span>Supervisely job #{binding.native_job_id}
+              {" · Last checked "}{binding.last_synced_at?
+                new Date(binding.last_synced_at*1000).toLocaleString():"not yet"}</span></div>
             <span className={"dataset-status "+binding.native_status}>
               {binding.native_status.replaceAll("_"," ")}</span>
           </div>)}
@@ -579,7 +593,9 @@ export function CompetitionScreen({auth,view="progress"}:{
           </div>
           {native?.operations.filter(op=>["attention","blocked"].includes(op.status))
             .map(op=><div className="job-plan-row" key={op.id}>
-              <div><strong>Needs attention: {op.error_code||"Remote uncertainty"}</strong>
+              <div><strong>{op.error_code==="worker_interrupted_reconcile_required"?
+                "Worker interrupted — reconcile this job to continue":
+                "Needs attention: "+(op.error_code||"Remote uncertainty")}</strong>
                 <span>Job {op.target_id} · {op.attempts} attempts</span></div>
               {admin&&<button className="btn secondary" disabled={busy}
                 onClick={()=>void nativeAction("/native/operations/"+op.id+"/retry",
@@ -634,6 +650,18 @@ export function CompetitionScreen({auth,view="progress"}:{
             {datasets.find(d=>d.id===p.dataset_id)?.name||p.dataset_id} · {p.status}
           </option>)}
       </select></label>}
+      {planMode==="images_30_v1"&&Boolean(datasets.find(d=>d.id===dataset)?.frame_count)&&
+        <div className="settings-note">
+          <p>This dataset was imported as video frames. If these are independent photos,
+            confirm below to correct the classification when creating the image draft.</p>
+          <label className="manual-option-checkbox"><input type="checkbox"
+            checked={confirmStandaloneImages} disabled={busy}
+            onChange={e=>setConfirmStandaloneImages(e.target.checked)}/>
+            These folders contain standalone photos, not video sequences.</label>
+          <p className="muted small">Uploaded photo folders and ZIPs only. Existing plans,
+            assignments, original videos and video manifests prevent this correction.
+            Image files and Supervisely IDs are preserved; no re-upload is needed.</p>
+        </div>}
       <p className="muted small">{planMode==="images_30_v1"?
         "Use a separate standalone-image dataset, uploaded or mounted. Jobs contain up to 30 images. Once all video jobs are assigned, the next free annotator receives an image job. Video submissions, corrections and review continue independently. Approve and arm this plan to enable the automatic handoff.":
         planMode==="balanced_30_v1"?
@@ -706,8 +734,9 @@ export function CompetitionScreen({auth,view="progress"}:{
       </div>}
       <button className="btn secondary" disabled={busy||!dataset||
         plans.some(p=>p.status==="approved"&&!(planMode==="images_30_v1"&&p.id===afterPlan))||
-        (planMode==="images_30_v1"&&(!datasets.find(d=>d.id===dataset)?.image_count||
-          Boolean(datasets.find(d=>d.id===dataset)?.frame_count)))||
+        (planMode==="images_30_v1"&&!confirmStandaloneImages&&
+          (!datasets.find(d=>d.id===dataset)?.image_count||
+           Boolean(datasets.find(d=>d.id===dataset)?.frame_count)))||
         (planMode==="shared_30_v1"&&Boolean(readiness&&!readiness.source_ready))||
         (planMode==="balanced_30_v1"&&
          (!balanced?.current||balanced.status!=="prepared"||

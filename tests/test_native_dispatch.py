@@ -507,7 +507,8 @@ def test_initial_release_and_next_after_both_submit(configured):
                 if item["kind"] == "publish_job"]) == 2
 
 
-def test_returned_pair_job_restarts_and_blocks_next_release(configured):
+@pytest.mark.parametrize("crash_after_remote", [False, True])
+def test_returned_pair_job_restarts_and_blocks_next_release(configured, monkeypatch, crash_after_remote):
     http, maker, csrf, plan_id, sdk = configured
     launch(http, csrf, plan_id)
     with maker() as db:
@@ -533,6 +534,22 @@ def test_returned_pair_job_restarts_and_blocks_next_release(configured):
         config = db.get(SuperviselyConfig, 1)
         assert sync_all(db, sdk, config)["pending_operations"] == 0
         assert process_once(db, sdk, config) is None
+        if crash_after_remote:
+            from annotatiathon.native_recovery import recover_abandoned_job_writes
+            restart = sdk.labeling_job.restart
+
+            def interrupted_restart(*args, **kwargs):
+                restart(*args, **kwargs)
+                raise SystemExit("lost correction response and process")
+
+            monkeypatch.setattr(sdk.labeling_job, "restart", interrupted_restart)
+            with pytest.raises(SystemExit):
+                process_correction_once(db, sdk, config)
+            db.rollback()
+            monkeypatch.setattr(sdk.labeling_job, "restart", restart)
+            assert recover_abandoned_job_writes(db) == 1
+            opid = db.scalar(select(NativeOperation.id).where(NativeOperation.kind == "restart_job"))
+            assert call(http, csrf, "/native/operations/" + opid + "/retry").status_code == 200
         corrected = process_correction_once(db, sdk, config)
         assert corrected["status"] == "done", corrected
         assert len(db.scalars(select(NativeJobRevision)).all()) == 2
@@ -1017,6 +1034,58 @@ def test_crashed_mirror_reconciles_existing_images_before_uploading(configured):
     assert len(sdk.upload_history) == 1
 
 
+@pytest.mark.parametrize("already_uploaded", [False, True])
+def test_mirror_recovers_sdk_mime_suffix_without_reupload(configured, already_uploaded):
+    """PNG bytes in .jpg files keep their source identity and remote image ID."""
+    _http, maker, _csrf, _plan_id, sdk = configured
+    remote_id = sdk.datasets[0].id
+    original_upload = sdk.image.upload_paths
+
+    def upload_with_mime_suffix(*args, **kwargs):
+        result = original_upload(*args, **kwargs)
+        result[0].name += ".png"
+        result[0].mime = "image/png"
+        return result
+
+    sdk.image.upload_paths = upload_with_mime_suffix
+    if already_uploaded:
+        sdk.images[remote_id][0].name += ".png"
+        sdk.images[remote_id][0].mime = "image/png"
+    else:
+        sdk.images[remote_id] = []
+    with maker() as db:
+        for binding in db.scalars(select(NativeSourceMedia)):
+            db.delete(binding)
+        op = db.scalar(select(NativeOperation).where(NativeOperation.kind == "mirror_dataset"))
+        op.status = "pending"
+        db.commit()
+        assert process_mirror_once(db, sdk, db.get(SuperviselyConfig, 1))["status"] == "done"
+        bindings = {row.media_id: row.native_image_id
+                    for row in db.scalars(select(NativeSourceMedia))}
+        assert len(bindings) == 3
+        assert set(bindings.values()) == {image.id for image in sdk.images[remote_id]}
+        # The next inventory must accept the same names and preserve every ID.
+        op.status = "pending"
+        db.commit()
+        assert process_mirror_once(db, sdk, db.get(SuperviselyConfig, 1))["status"] == "done"
+        assert bindings == {row.media_id: row.native_image_id
+                            for row in db.scalars(select(NativeSourceMedia))}
+    assert len(sdk.upload_history) == (1 if already_uploaded else 2)
+
+
+def test_mirror_rejects_ambiguous_normalized_names(configured):
+    _http, maker, _csrf, _plan_id, sdk = configured
+    images = sdk.images[sdk.datasets[0].id]
+    images.append(Obj(id=sdk.new_id(), name=images[0].name + ".png", mime="image/png"))
+    with maker() as db:
+        op = db.scalar(select(NativeOperation).where(NativeOperation.kind == "mirror_dataset"))
+        op.status = "pending"
+        db.commit()
+        assert process_mirror_once(db, sdk, db.get(SuperviselyConfig, 1))["status"] == "attention"
+        assert op.error_code == "duplicate_mirrored_image_names"
+    assert len(sdk.upload_history) == 1
+
+
 def test_mirror_batches_respect_image_and_byte_limits(configured, monkeypatch):
     from annotatiathon import native_media_pool
 
@@ -1180,7 +1249,8 @@ def test_submitted_job_json_matches_source_frames_even_if_api_reorders(configure
         assert snapshot["annotation"]["objects"][0]["tags"][0]["image_id"] == mapping[media_id]
 
 
-def test_live_reassignment_updates_supervisely_before_local_team(configured):
+@pytest.mark.parametrize("crash_after_remote", [False, True])
+def test_live_reassignment_updates_supervisely_before_local_team(configured, monkeypatch, crash_after_remote):
     http, maker, csrf, _plan_id, sdk = configured
     with maker.begin() as db:
         origin = db.scalar(select(CompetitionTeam).where(
@@ -1232,6 +1302,23 @@ def test_live_reassignment_updates_supervisely_before_local_team(configured):
         job = db.get(LabelingJob, job_id)
         assert job.team_id == origin_id
         assert job.assignee_person_id == origin_member.id
+        if crash_after_remote:
+            from annotatiathon.native_recovery import recover_abandoned_job_writes
+            reassign = sdk.labeling_job.set_assignees
+
+            def interrupted_reassign(*args, **kwargs):
+                reassign(*args, **kwargs)
+                raise SystemExit("lost reassignment response and process")
+
+            monkeypatch.setattr(sdk.labeling_job, "set_assignees", interrupted_reassign)
+            with pytest.raises(SystemExit):
+                process_reassignment_once(db, sdk, db.get(SuperviselyConfig, 1))
+            db.rollback()
+            monkeypatch.setattr(sdk.labeling_job, "set_assignees", reassign)
+            assert recover_abandoned_job_writes(db) == 1
+            assert db.get(LabelingJob, job_id).assignee_person_id == origin_member.id
+            opid = db.scalar(select(NativeOperation.id).where(NativeOperation.kind == "reassign_job"))
+            assert call(http, csrf, "/native/operations/" + opid + "/retry").status_code == 200
         assert process_reassignment_once(
             db, sdk, db.get(SuperviselyConfig, 1),
         )["status"] == "done"

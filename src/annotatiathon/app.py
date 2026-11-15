@@ -2,6 +2,7 @@
 from fastapi import FastAPI, Response
 
 from .activities_api import router as activities_router
+from .annotation_statistics import router as annotation_statistics_router
 from .attendance_api import router as attendance_router
 from .auth import router as auth_router
 from .balanced_queue import router as balanced_queue_router
@@ -10,11 +11,13 @@ from .coverage_api import router as coverage_router
 from .database import database_is_ready
 from .dataset_append import router as dataset_append_router
 from .datasets_api import router as datasets_router
+from .event_health import router as event_health_router
 from .events_api import router as events_router
 from .full_reset_api import router as full_reset_router
 from .labeling_api import router as labeling_router
 from .manual_jobs_api import router as manual_jobs_router
 from .monitoring_api import router as monitoring_router
+from .monitor_rankings import router as monitor_rankings_router
 from .mounted_datasets import router as mounted_datasets_router
 from .mounted_sync import router as mounted_sync_router
 from .native_export_api import router as native_export_router
@@ -50,18 +53,21 @@ app.include_router(attendance_router)
 app.include_router(staff_router)
 app.include_router(tickets_router)
 app.include_router(events_router)
+app.include_router(event_health_router)
 app.include_router(full_reset_router)
 app.include_router(activities_router)
 app.include_router(native_router)
 app.include_router(native_operations_router)
 app.include_router(native_export_router)
 app.include_router(monitoring_router)
+app.include_router(monitor_rankings_router)
 app.include_router(datasets_router)
 app.include_router(dataset_append_router)
 app.include_router(balanced_queue_router)
 app.include_router(mounted_datasets_router)
 app.include_router(mounted_sync_router)
 app.include_router(labeling_router)
+app.include_router(annotation_statistics_router)
 app.include_router(manual_jobs_router)
 app.include_router(reviews_router)
 app.include_router(review_dashboard_router)

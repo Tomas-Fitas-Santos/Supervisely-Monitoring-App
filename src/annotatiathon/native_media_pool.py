@@ -39,6 +39,27 @@ def source_image_name(asset: MediaAsset) -> str:
     return asset.id + Path(asset.relative_path).suffix.lower()
 
 
+def _source_remote_name(image) -> str:
+    """Undo the SDK's MIME suffix for a source with a misleading extension.
+
+    ImageApi._convert_json_info exposes a PNG uploaded as ``id.jpg`` as
+    ``id.jpg.png``. The server still owns the original title; uploading it
+    again conflicts. Normalize both inventory and upload receipts identically.
+    Only strip a suffix corroborated by MIME, preserving the source extension.
+    """
+    name = image.name
+    mime = getattr(image, "mime", None)
+    if isinstance(mime, str) and mime.startswith("image/"):
+        suffix = "." + mime.split("/", 1)[1]
+        if name.endswith(suffix):
+            original = name[:-len(suffix)]
+            if Path(original).suffix.lower() in {
+                ".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff",
+            }:
+                return original
+    return name
+
+
 def enqueue_mirror(db: Session, ds: MediaDataset) -> NativeOperation:
     existing = db.scalar(select(NativeOperation).where(
         NativeOperation.kind == "mirror_dataset",
@@ -177,7 +198,7 @@ def mirror_dataset(db: Session, api, config: SuperviselyConfig,
                 try:
                     index.executemany(
                         "INSERT INTO remote_images(name, image_id) VALUES (?, ?)",
-                        ((im.name, im.id) for im in remote_page),
+                        ((_source_remote_name(im), im.id) for im in remote_page),
                     )
                 except sqlite3.IntegrityError as exc:
                     raise MirrorError("duplicate_mirrored_image_names") from exc
@@ -192,8 +213,10 @@ def mirror_dataset(db: Session, api, config: SuperviselyConfig,
                     remote_ds.id, names=[row[1] for row in pending],
                     paths=[row[2] for row in pending], conflict_resolution="skip",
                 )
-            results = {im.name: im.id for im in uploaded}
-            if len(results) != len(pending) or set(results) != {row[1] for row in pending}:
+            results = {_source_remote_name(im): im.id for im in uploaded}
+            if (len(uploaded) != len(pending)
+                    or len(set(results.values())) != len(pending)
+                    or set(results) != {row[1] for row in pending}):
                 raise MirrorError("mirror_batch_upload_incomplete")
             for source, remote_name, _ in pending:
                 db.add(NativeSourceMedia(

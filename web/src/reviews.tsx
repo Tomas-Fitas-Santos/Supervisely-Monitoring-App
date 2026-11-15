@@ -231,7 +231,7 @@ export function QualityScreen({auth}:{auth:Auth}) {
         {!filteredJobs.length&&<p className="muted small">No jobs in this category. Submitted jobs appear here after the worker synchronizes their native status.</p>}</div>
       </section>
       <section className="panel">
-        <span className="eyebrow">SELECTED JOB · LIVE SUPERVISELY STATUS</span>
+        <span className="eyebrow">SELECTED JOB · SYNCHRONIZED SUPERVISELY STATUS</span>
         <h3>{selected?selected.team_name+" · "+(selected.assignee_name||"Historical pair job"):"No job selected"}</h3>
         {selected&&<div className="submission-summary">
           <div className="review-status-strip">

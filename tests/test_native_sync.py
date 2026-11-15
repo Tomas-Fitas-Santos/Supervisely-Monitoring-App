@@ -2,6 +2,8 @@
 
 No live Supervisely account or event media is contacted by automated tests.
 """
+import json
+
 import httpx
 import pytest
 from fastapi.testclient import TestClient
@@ -12,7 +14,8 @@ from sqlalchemy.pool import StaticPool
 
 from annotatiathon.app import app
 from annotatiathon.db import get_db
-from annotatiathon.models import DEFAULT_EVENT_ID, Base, Event, StaffAccount, SuperviselyConfig
+from annotatiathon.models import DEFAULT_EVENT_ID, Base, Event, Person, StaffAccount, SuperviselyConfig
+from annotatiathon.native_sync_api import association_proposal
 from annotatiathon.security import password_hash
 from annotatiathon.supervisely_client import (
     NativeAPIError,
@@ -91,6 +94,72 @@ def add(http, csrf, name, email):
     })
     assert response.status_code == 201, response.text
     return response.json()["id"]
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_email_links_case_distinct_usernames_without_changing_registration(context, monkeypatch, reverse):
+    http, maker, csrf = context
+    first = add(http, csrf, "Rodrigo Sereno", "first@example.org")
+    second = add(http, csrf, "Rodrigo Santiago", "second@example.org")
+    with maker.begin() as db:
+        person = db.get(Person, second)
+        person.supervisely_user_id = 502
+        person.supervisely_login = "Rodri"
+    members = [
+        NativeMember(id=501, login="rodri", email=" FIRST@EXAMPLE.ORG ", role="annotator"),
+        NativeMember(id=502, login="Rodri", email="second@example.org", role="annotator"),
+    ]
+    if reverse:
+        members.reverse()
+    monkeypatch.setattr(
+        "annotatiathon.native_sync_api.read_team_snapshot",
+        lambda config: NativeTeamSnapshot(**{**native_snapshot().__dict__, "members": tuple(members)}),
+    )
+    result = call(http, csrf, "/people/supervisely/refresh")
+    assert result.status_code == 200, result.text
+    assert result.json()["status"] == "ok"
+    assert result.json()["matched"] == 2
+    assert result.json()["created"] == 0
+    with maker() as db:
+        person = db.get(Person, first)
+        assert (person.name, person.email, person.supervisely_user_id, person.supervisely_login) == (
+            "Rodrigo Sereno", "first@example.org", 501, "rodri",
+        )
+        assert db.get(Person, second).supervisely_user_id == 502
+    again = call(http, csrf, "/people/supervisely/refresh")
+    assert again.json()["updated"] == again.json()["created"] == 0
+
+
+def test_email_matching_rejects_ambiguous_roster_and_native_emails():
+    people = [Person(id="a", name="A", email="same@example.org", kind="participant"),
+              Person(id="b", name="B", email=" SAME@example.org ", kind="participant")]
+    member = NativeMember(id=501, login="unrelated", email="same@example.org", role="annotator")
+    matches, _, _, conflicts = association_proposal((member,), people, [])
+    assert not matches and len(conflicts) == 1
+    duplicate = NativeMember(id=502, login="another", email="SAME@example.org", role="annotator")
+    matches, _, _, conflicts = association_proposal((member, duplicate), people[:1], [])
+    assert not matches and len(conflicts) == 2
+
+
+def test_exact_email_does_not_replace_an_existing_verified_identity():
+    person = Person(id="a", name="A", email="same@example.org", kind="participant",
+                    supervisely_user_id=500, supervisely_login="old-login")
+    member = NativeMember(id=501, login="new-login", email="same@example.org", role="annotator")
+    matches, _, _, conflicts = association_proposal((member,), [person], [])
+    assert not matches and len(conflicts) == 1
+
+
+@pytest.mark.parametrize("login,email,matched", [
+    ("Rodri", None, True), ("rodri", None, False),
+    ("Rodri", "other@example.org", False),
+])
+def test_login_fallback_requires_exact_case_and_no_conflicting_email(login, email, matched):
+    person = Person(id="a", name="A", email="same@example.org", kind="participant",
+                    supervisely_login="Rodri")
+    member = NativeMember(id=501, login=login, email=email, role="annotator")
+    matches, _, _, conflicts = association_proposal((member,), [person], [])
+    assert bool(matches) is matched
+    assert not conflicts
 
 
 def test_verify_native_team_does_not_touch_roster_or_expose_token(context, monkeypatch):
@@ -199,8 +268,8 @@ def test_pagination_and_token_never_in_error(monkeypatch):
     def respond(request: httpx.Request) -> httpx.Response:
         seen.append(request)
         if request.url.path.endswith("members.list"):
-            page = request.read().decode()
-            if '"page":1' in page:
+            page = json.loads(request.read())["page"]
+            if page == 1:
                 return httpx.Response(200, json={
                     "total": 3, "perPage": 2, "pagesCount": 2,
                     "entities": [

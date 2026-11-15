@@ -92,7 +92,7 @@ export function NativeMembershipPanel({auth,onApplied}:{auth:Auth;onApplied:()=>
             </div>
           </div>
           <div><h4>Native members not linked ({preview.unmatched_native.length})</h4>
-            <p className="muted small">Choose a specific roster person if their native username differs from their registration email.</p>
+            <p className="muted small">Matching emails link automatically, even when names differ. Choose a roster person manually when their Supervisely email is missing or different.</p>
             <div className="native-scroll">{preview.unmatched_native.map(member=>
               <div className="native-line" key={member.id}>
                 <Cloud size={14}/>

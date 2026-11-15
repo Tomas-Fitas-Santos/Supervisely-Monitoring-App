@@ -4,6 +4,7 @@ import { confirmAction } from "./dialogs";
 import { useCallback, useEffect, useState } from "react";
 import { Archive, BarChart3, CheckCircle2, Download, RefreshCw, ShieldAlert } from "lucide-react";
 import { api, type Auth } from "./api";
+import { MonitorRankings } from "./monitor_rankings";
 
 type NativeExport={operation_id:string|null;status:string;error_code:string|null;
   attempts:number;ready_to_download:boolean;size_bytes:number|null};
@@ -141,6 +142,7 @@ export function CloseoutScreen({auth}:{auth:Auth}) {
         <p className="muted small">Completed reviews determine each team’s average score.
           The submitted frame count includes eligible frames still awaiting review.</p>
       </section>
+      <MonitorRankings currentStaffId={auth.staff.id}/>
       <div className="content-grid closeout-layout">
         <section className="panel">
           <span className="eyebrow">EVENT SUMMARY</span><h3>{report.event_name}</h3>

@@ -19,6 +19,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import shutil
 import time
 from collections import defaultdict
@@ -82,6 +83,7 @@ from .native_operations_api import (
     queue_publish,
     team_members,
 )
+from .native_recovery import guarded_native_write, recover_abandoned_job_writes
 from .pair_members import pair_members
 from .supervisely_client import NativeAPIError, require_connection
 from .worker_timing import code_timing, milestone
@@ -564,8 +566,27 @@ def publish_job(db: Session, job: LabelingJob, api, config: SuperviselyConfig) -
         NativeJobBinding.event_id == job.event_id,
         NativeJobBinding.job_id == job.id,
     ))}
+    def matches(remote):
+        if remote.id in bound_ids or remote.name in accepted_titles:
+            return True
+        # Supervisely may append a team-wide name collision suffix even when
+        # this project's job is unique. Confirm exact image identity before
+        # adopting that name; a title alone must never bind unrelated work.
+        unsuffixed = re.sub(r" \(#\d+\)$", "", remote.name)
+        if unsuffixed == remote.name or unsuffixed not in accepted_titles:
+            return False
+        info = api.labeling_job.get_info_by_id(remote.id)
+        entities = getattr(info, "entities", None)
+        image_ids = [entity["id"] for entity in entities] if entities is not None else []
+        if (info is None or info.dataset_id != remote_ds_id
+                or info.assigned_to_id != remote.assigned_to_id
+                or len(image_ids) != len(native_media)
+                or set(image_ids) != set(native_media)):
+            raise NativeWorkerError("native_job_media_mismatch")
+        return True
+
     for remote in current:
-        if remote.name not in accepted_titles and remote.id not in bound_ids:
+        if not matches(remote):
             continue
         if remote.dataset_id != remote_ds_id:
             raise NativeWorkerError("native_dataset_mismatch")
@@ -596,7 +617,7 @@ def publish_job(db: Session, job: LabelingJob, api, config: SuperviselyConfig) -
             )
         by_user = defaultdict(list)
         for remote in current:
-            if remote.name in accepted_titles or remote.id in bound_ids:
+            if matches(remote):
                 by_user[remote.assigned_to_id].append(remote)
     if set(by_user) != set(roster_ids) or any(len(rows) != 1 for rows in by_user.values()):
         raise NativeWorkerError("native_job_confirmation_failed")
@@ -629,7 +650,9 @@ def publish_job(db: Session, job: LabelingJob, api, config: SuperviselyConfig) -
                  "image_count": len(native_media)},
     ))
     with code_timing("publish.persist_binding", job_id=job.id):
-        db.commit()
+        # The caller commits bindings and the completed operation together.
+        # Status polling must not observe a published job with an unfinished task.
+        db.flush()
     return {"job_id": job.id, "native_jobs": len(by_user),
             "native_media": len(native_media)}
 
@@ -1094,6 +1117,10 @@ def sync_all(db: Session, api, config: SuperviselyConfig, *,
                 failures += 1
                 code = exc.code if isinstance(exc, (NativeWorkerError, NativeAPIError)) else type(exc).__name__
                 logger.warning("Annotation snapshot pending retry for job %s (%s)", candidate.id, code)
+    # Accepted/returned jobs stop participating in submission polling, but
+    # their displayed Supervisely status must not remain frozen indefinitely.
+    from .native_status_cache import refresh_idle_bindings
+    refresh_idle_bindings(db, api)
     return {
         "changed_jobs": changed, "pending_operations": queued,
         "annotation_snapshots": snapshots, "annotation_sync_errors": failures,
@@ -1140,6 +1167,11 @@ def process_once(db: Session, api, config: SuperviselyConfig) -> dict | None:
     if op is None:
         db.rollback()
         return None
+    return _publish_claimed_operation(db, api, config, op)
+
+
+@guarded_native_write
+def _publish_claimed_operation(db, api, config, op):
     event = db.get(Event, op.event_id)
     job = db.get(LabelingJob, op.target_id)
     plan = db.get(LabelingPlan, job.plan_id) if job else None
@@ -1204,6 +1236,11 @@ def process_reassignment_once(db: Session, api,
     if op is None:
         db.rollback()
         return None
+    return _reassign_claimed_operation(db, api, config, op)
+
+
+@guarded_native_write
+def _reassign_claimed_operation(db, api, config, op):
     op.status = "running"
     op.attempts += 1
     op.claimed_at = epoch()
@@ -1255,6 +1292,10 @@ def process_reassignment_once(db: Session, api,
             details={"previous": old, "person_id": person.id,
                      "team_id": team.id, "native_job_id": binding.native_job_id},
         ))
+        finished = db.get(NativeOperation, oid)
+        finished.status = "done"
+        finished.completed_at = epoch()
+        finished.error_code = None
         db.commit()
     except Exception as exc:  # noqa: BLE001 - idempotent retry
         db.rollback()
@@ -1266,11 +1307,6 @@ def process_reassignment_once(db: Session, api,
         )
         db.commit()
         return {"operation_id": oid, "status": "attention"}
-    finished = db.get(NativeOperation, oid)
-    finished.status = "done"
-    finished.completed_at = epoch()
-    finished.error_code = None
-    db.commit()
     return {"operation_id": oid, "status": "done", "job_id": jid}
 
 
@@ -1293,6 +1329,11 @@ def process_correction_once(db: Session, api, config: SuperviselyConfig) -> dict
         db.rollback()
         return None
     op = operations[0]
+    return _correct_claimed_operation(db, api, config, op)
+
+
+@guarded_native_write
+def _correct_claimed_operation(db, api, config, op):
     job = db.get(LabelingJob, op.target_id)
     if job is None or job.status != "needs_correction" or job.correction_round < 1:
         op.status = "attention"
@@ -1805,6 +1846,15 @@ _worker_clients = local()
 
 
 def worker_cycle(lane: str) -> bool:
+    from .worker_health import finish_cycle, report_cycle
+    report_cycle(lane, "working")
+    try:
+        return observed_worker_cycle(lane)
+    finally:
+        finish_cycle(lane)
+
+
+def observed_worker_cycle(lane: str) -> bool:
     """Drain in-flight SDK calls before reset; release automatically on crashes."""
     from .event_clean import worker_reset_barrier
     try:
@@ -1813,6 +1863,8 @@ def worker_cycle(lane: str) -> bool:
         with worker_reset_barrier(engine, reset=lane == "reset") as acquired:
             return _worker_cycle(lane) if acquired else False
     except Exception as exc:  # noqa: BLE001 - retry temporary lock/connection failures
+        from .worker_health import report_cycle
+        report_cycle(lane, "error")
         logger.warning("Supervisely %s worker barrier failed (%s).", lane, type(exc).__name__)
         return False
 
@@ -1826,6 +1878,16 @@ def _worker_cycle(lane: str) -> bool:
                 return False
             if lane == "reset" and not pending_reset:
                 return False
+            if lane == "recovery":
+                # Local recovery must also work while native credentials or
+                # Supervisely itself are unavailable.
+                from .validation_tasks import recover_expired_validations
+                validations = recover_expired_validations(db)
+                interrupted = recover_abandoned_job_writes(db)
+                if validations or interrupted:
+                    logger.info("Recovered %s validation tasks; %s interrupted job writes need reconciliation.",
+                                validations, interrupted)
+                return bool(validations or interrupted)
             # Live deployments have their own source indexer. Never let a
             # dedicated Supervisely upload worker run CPU-heavy frame extraction.
             # Preserve the legacy fallback for test/local single-worker setups.
@@ -1879,15 +1941,13 @@ def _worker_cycle(lane: str) -> bool:
                 first = process_reassignment_once(db, api, config)
                 with code_timing("correction.total"):
                     result = process_correction_once(db, api, config) or first
-            elif lane == "recovery":
-                from .validation_tasks import recover_expired_validations
-                result = {"reclaimed_validation_tasks": recover_expired_validations(db)}
             else:
                 process_reassignment_once(db, api, config)
                 process_correction_once(db, api, config)
                 from .validation_tasks import process_validation_once, recover_expired_validations
                 result = sync_all(db, api, config, capture_snapshots=False)
                 recover_expired_validations(db)
+                recover_abandoned_job_writes(db)
                 for _ in range(5):
                     if process_validation_once(db, api, config) is None:
                         break
@@ -1902,8 +1962,20 @@ def _worker_cycle(lane: str) -> bool:
         # Isolate SDK and database failures so the lane can retry next cycle.
         except Exception as exc:  # noqa: BLE001
             db.rollback()
+            from .worker_health import report_cycle
+            report_cycle(lane, "error")
             logger.warning("Supervisely %s worker cycle failed (%s).", lane, type(exc).__name__)
             return False
+
+
+def reset_status_for_poll():
+    """A database outage pauses the loop rather than killing its scheduler."""
+    try:
+        with session_factory()() as db:
+            return reset_pending(db)
+    except Exception as exc:  # noqa: BLE001 - fail closed until the next poll
+        logger.warning("Worker database check unavailable (%s).", type(exc).__name__)
+        return None
 
 
 def run_worker(*, once: bool, poll_seconds: int, role: str = "all") -> None:
@@ -1914,9 +1986,17 @@ def run_worker(*, once: bool, poll_seconds: int, role: str = "all") -> None:
                         "recovery", "mirror", "bulk"}:
             raise ValueError("Unknown worker role.")
         while True:
-            with session_factory()() as db:
-                resetting = reset_pending(db)
+            resetting = reset_status_for_poll()
+            if resetting is None:
+                from .worker_health import report_cycle
+                report_cycle(role, "error")
+                if once:
+                    return
+                time.sleep(poll_seconds)
+                continue
             if resetting:
+                from .worker_health import report_cycle
+                report_cycle(role, "paused")
                 if role == "recovery":
                     worker_cycle("reset")
                 if once:
@@ -1955,8 +2035,12 @@ def run_worker(*, once: bool, poll_seconds: int, role: str = "all") -> None:
             if mirror is not None and mirror.done():
                 mirror.result()
                 mirror = None
-            with session_factory()() as db:
-                resetting = reset_pending(db)
+            resetting = reset_status_for_poll()
+            if resetting is None:
+                if once:
+                    return
+                time.sleep(poll_seconds)
+                continue
             if resetting:
                 if background is None and mirror is None:
                     worker_cycle("reset")

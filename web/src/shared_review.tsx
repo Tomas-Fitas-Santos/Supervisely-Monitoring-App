@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import { api, type Auth } from "./api";
 import { AnnotationFrame } from "./annotation_overlay";
+import { MonitorRankings } from "./monitor_rankings";
 
 type Reason="wrong_class"|"wrong_placement"|"sabotage";
 type ObjectShape="rectangle"|"point";
@@ -44,7 +45,7 @@ const isLeaseConflict=(error:unknown)=>/claim expired|not owned by this claim|al
   .test((error as Error).message||"");
 
 export function SharedReviewScreen({auth}:{auth:Auth}){
-  const [tab,setTab]=useState<"review"|"rankings">("review");
+  const [tab,setTab]=useState<"review"|"rankings"|"monitors">("review");
   const [claim,setClaim]=useState<ReviewClaim|null>(null);
   const activeClaimRef=useRef<ReviewClaim|null>(null);
   const [status,setStatus]=useState<QueueStatus|null>(null);
@@ -223,6 +224,7 @@ export function SharedReviewScreen({auth}:{auth:Auth}){
     <nav className="workspace-subtabs" aria-label="Monitoring workspaces">
       <button className={tab==="review"?"active":""} onClick={()=>setTab("review")}>Review frames</button>
       <button className={tab==="rankings"?"active":""} onClick={()=>setTab("rankings")}>Team rankings</button>
+      <button className={tab==="monitors"?"active":""} onClick={()=>setTab("monitors")}>Monitor rankings</button>
     </nav>
 
     {error&&<div className="alert danger" role="alert">{error}</div>}
@@ -358,6 +360,7 @@ export function SharedReviewScreen({auth}:{auth:Auth}){
         </div>}
     </div>}
 
+    {tab==="monitors"&&<MonitorRankings currentStaffId={auth.staff.id}/>}
     {tab==="rankings"&&<section className="panel shared-review-rankings">
       <div className="shared-review-grade-heading"><div>
         <span className="eyebrow">EVENT RESULTS · ESTIMATED PRIZE POINTS</span>

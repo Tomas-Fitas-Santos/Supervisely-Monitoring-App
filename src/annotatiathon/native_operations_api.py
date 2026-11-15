@@ -7,7 +7,7 @@ from collections import Counter
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from .auth import AuthContext, requires
@@ -289,11 +289,16 @@ def native_overview(
     )))
     ops = list(db.scalars(select(NativeOperation).where(
         NativeOperation.event_id == event.id
-    ).order_by(NativeOperation.created_at.desc()).limit(1000)))
+    ).order_by(
+        case((NativeOperation.status.in_(["attention", "blocked"]), 0), else_=1),
+        NativeOperation.created_at.desc(), NativeOperation.id,
+    ).limit(1000)))
     bindings = list(db.scalars(select(NativeJobBinding).where(
         NativeJobBinding.event_id == event.id,
     )))
-    status_counts = Counter(o.status for o in ops)
+    status_counts = dict(db.execute(select(NativeOperation.status, func.count()).where(
+        NativeOperation.event_id == event.id,
+    ).group_by(NativeOperation.status)).all())
     return {
         "plans": [{
             "id": plan.id, "status": plan.status,
@@ -369,6 +374,8 @@ def retry_operation(
     op.status = "pending"
     op.error_code = None
     op.claimed_at = None
+    op.lease_owner = None
+    op.lease_until = None
     db.add(AuditEvent(
         staff_id=ctx.staff.id, event_id=event.id,
         action="native.operation.retry", target_type="native_operation",

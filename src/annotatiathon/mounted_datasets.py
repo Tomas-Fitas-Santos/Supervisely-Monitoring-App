@@ -534,7 +534,9 @@ def run_indexer(*, once: bool = False, poll_seconds: int = 8) -> None:
 
     if poll_seconds < 1:
         raise ValueError("poll_seconds_must_be_positive")
+    from .worker_health import finish_cycle, report_cycle
     while True:
+        report_cycle("indexer", "working")
         try:
             with session_factory()() as db:
                 # Preserve mounted indexing as the first local-only operation.
@@ -559,8 +561,11 @@ def run_indexer(*, once: bool = False, poll_seconds: int = 8) -> None:
                     result["status"],
                 )
         except Exception:
+            report_cycle("indexer", "error")
             logger.exception("Mounted indexer cycle failed; will retry")
             result = None
+        finally:
+            finish_cycle("indexer")
         if once:
             return
         if result is None:

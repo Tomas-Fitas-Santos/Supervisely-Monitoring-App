@@ -2,7 +2,8 @@
 # or Supervisely records. Run from any folder after pulling main.
 [CmdletBinding()]
 param(
-  [switch]$StartWorker
+  [switch]$StartWorker,
+  [switch]$PrepareOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -57,6 +58,49 @@ try {
     }
   }
 
+  # Build before pausing the event. Preparation never starts/stops containers,
+  # runs migrations, changes the tunnel or writes to the event database.
+  $buildServices = @("api", "web", "indexer", "migrate")
+  if ($StartWorker -or $nativeWasRunning) { $buildServices += $nativeServices }
+  $releaseId = Get-Date -Format "yyyyMMdd-HHmmss"
+  $previousImages = @()
+  foreach ($service in $buildServices) {
+    $containerId = (& docker compose @compose --profile native ps -q $service | Select-Object -First 1)
+    Check-LastExit "Finding previous $service image"
+    if ($containerId) {
+      $imageId = (& docker inspect --format '{{.Image}}' $containerId)
+      Check-LastExit "Recording previous $service image"
+      $rollbackTag = "nightjar-rollback/${service}:$releaseId"
+      & docker image inspect --format '{{.Id}}' $imageId 2>$null | Out-Null
+      if ($LASTEXITCODE -eq 0) {
+        & docker image tag $imageId $rollbackTag
+        Check-LastExit "Retaining rollback image for $service"
+      }
+      else {
+        # Docker can retain a running container after its image was removed.
+        # Preserve its filesystem before replacement; mounted data is excluded.
+        # Keep this snapshot local: its configuration includes runtime env vars.
+        Write-Host "Original $service image unavailable; retaining a local container snapshot."
+        & docker container commit --pause=false $containerId $rollbackTag | Out-Null
+        Check-LastExit "Snapshotting previous $service container"
+        $imageId = (& docker image inspect --format '{{.Id}}' $rollbackTag)
+        Check-LastExit "Recording rollback snapshot for $service"
+      }
+      $previousImages += @{ service = $service; image = $imageId; rollback_tag = $rollbackTag }
+    }
+  }
+  $releaseFolder = Join-Path $root "backups\deployments"
+  New-Item -ItemType Directory -Path $releaseFolder -Force | Out-Null
+  @{ release = $releaseId; previous_images = $previousImages; deployed = $false } |
+    ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $releaseFolder "$releaseId.json") -Encoding utf8
+  & docker compose @compose --profile native build @buildServices
+  Check-LastExit "Preparing application and worker images"
+  if ($PrepareOnly) {
+    Write-Host "Release images prepared. Live containers, database, datasets and tunnel are unchanged."
+    Write-Host "Rollback image inventory: backups/deployments/$releaseId.json"
+    return
+  }
+
   # Pause every SDK lane before the consistent PostgreSQL backup and upgrade.
   & docker compose @compose --profile native stop @nativeServices api web indexer
   Check-LastExit "Stopping web/API/native worker fleet"
@@ -87,7 +131,7 @@ try {
   Write-Host "Also keep a separate backup of NIGHTJAR_MEDIA_DIR and the original .env.live."
 
   # Compose migrate service applies Alembic HEAD before API startup.
-  & docker compose @compose up -d --build --force-recreate migrate api web indexer
+  & docker compose @compose up -d --no-build --force-recreate migrate api web indexer
   Check-LastExit "Building and starting Nightjar services"
 
   & docker compose @compose ps
@@ -105,7 +149,7 @@ try {
     $scales = @("--scale", "worker=4",
                 "--scale", "validation-worker=3",
                 "--scale", "correction-worker=3")
-    & docker compose @compose --profile native up -d --build --no-deps @scales @nativeServices
+    & docker compose @compose --profile native up -d --no-build --no-deps @scales @nativeServices
     Check-LastExit "Starting dedicated production SDK worker fleet"
     foreach ($service in $nativeServices) {
       $runningIds = @(& docker compose @compose --profile native ps --status running -q $service)
@@ -123,6 +167,9 @@ try {
     Write-Host "SDK workers remain stopped. Start after verifying shared Supervisely Team/Workspace credentials:"
     Write-Host ".\\scripts\\deploy-live.ps1 -StartWorker"
   }
+  @{ release = $releaseId; previous_images = $previousImages; deployed = $true;
+     database_backup = $backupFile; completed_utc = [DateTime]::UtcNow.ToString("o") } |
+    ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $releaseFolder "$releaseId.json") -Encoding utf8
 }
 finally {
   Pop-Location

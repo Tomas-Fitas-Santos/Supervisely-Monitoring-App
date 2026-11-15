@@ -1,0 +1,22 @@
+# Optional overlay. Merely deploying compose.live.yaml never enables this tunnel.
+# Configure a remotely managed hostname with origin http://web:80 in Cloudflare.
+services:
+  tunnel:
+    image: cloudflare/cloudflared:2026.10.7
+    profiles: ["tunnel"]
+    restart: unless-stopped
+    command: ["tunnel", "--no-autoupdate", "run", "--token-file", "/run/secrets/cloudflare_tunnel_token"]
+    secrets: [cloudflare_tunnel_token]
+    depends_on:
+      web:
+        condition: service_started
+    # No Docker socket, host ports or mounted media/credentials from the app.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+secrets:
+  cloudflare_tunnel_token:
+    file: ./secrets/cloudflare-tunnel-token.txt

@@ -49,6 +49,7 @@ class PlanInput(BaseModel):
     dataset_id: str
     mode: Literal["legacy", "shared_30_v1", "balanced_30_v1", "images_30_v1"] = "legacy"
     after_plan_id: str | None = None
+    confirm_standalone_images: bool = False
     jobs_per_team: int = Field(default=4, ge=1, le=100)
     redundancy: int = Field(default=1, ge=1, le=1)
     video_limit: int | None = Field(default=None, ge=0, le=100000)
@@ -282,11 +283,13 @@ def create_plan(
     db: Session = Depends(get_db),
 ):
     event = current_event(db, ctx, writable=True)
-    dataset = get_dataset(db, event.id, payload.dataset_id)
+    dataset = get_dataset(db, event.id, payload.dataset_id, lock=True)
     if dataset.status != "ready":
         raise HTTPException(status_code=409, detail="Finalize local dataset before planning.")
     if payload.after_plan_id and payload.mode != "images_30_v1":
         raise HTTPException(422, "Only a standalone-image queue can follow a video plan.")
+    if payload.confirm_standalone_images and payload.mode != "images_30_v1":
+        raise HTTPException(422, "Photo-folder correction is only available for standalone-image queues.")
     parent = None
     if payload.after_plan_id:
         from .plan_sequence import video_predecessor
@@ -377,6 +380,9 @@ def create_plan(
     if payload.mode == "images_30_v1":
         if reserved or payload.video_limit is not None:
             raise HTTPException(409, "Use an unassigned image dataset without a video limit.")
+        if payload.confirm_standalone_images and any(a.kind != "image" or a.video_id is not None for a in assets):
+            from .image_dataset import reclassify_supplied_images
+            reclassify_supplied_images(db, dataset, assets, ctx.staff.id)
         if not assets or any(a.kind != "image" or a.video_id is not None for a in assets):
             raise HTTPException(422, "Choose a separate dataset containing only standalone images.")
         plan = LabelingPlan(event_id=event.id, dataset_id=dataset.id, jobs_per_team=0,
